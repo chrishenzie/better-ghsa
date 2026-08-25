@@ -81,6 +81,25 @@ test('a published advisory carries its assigned CVE in the metadata form', () =>
   );
 });
 
+test('the reporter and the report time come from the description Box header', () => {
+  const triage = parse.parseDetail(fixture('triage-thread.html'));
+  if (triage === null) throw new Error('triage-thread.html did not parse');
+  assert.strictEqual(triage.reporter, 'prakleumas');
+  assert.strictEqual(triage.reportedAt, '2026-08-25T22:15:18Z');
+
+  const draft = parse.parseDetail(fixture('draft.html'));
+  if (draft === null) throw new Error('draft.html did not parse');
+  assert.strictEqual(draft.reporter, 'samuelkarp');
+  assert.strictEqual(draft.reportedAt, '2026-08-25T22:19:40Z');
+
+  // The published page's header meta reads `marlowe-tsu published ... Aug 3,
+  // 2026`, which is the publisher and the publication time.
+  const published = parse.parseDetail(fixture('published-containerd.html'));
+  if (published === null) throw new Error('published-containerd.html did not parse');
+  assert.strictEqual(published.reporter, 'pieter-vosk');
+  assert.strictEqual(published.reportedAt, '2026-04-07T18:05:12Z');
+});
+
 test('a description with no revision control is the reporter original', () => {
   const advisory = parse.parseDetail(fixture('triage-thread.html'));
   if (advisory === null) throw new Error('triage-thread.html did not parse');
@@ -104,6 +123,36 @@ test('a revised description reports who revised it and where the log lives', () 
     summary: 'edited by samuelkarp',
     historyUrl: '/containerd/containerd/security/advisories/GHSA-6r4h-2xvq-wm93/edit_history_log',
   });
+});
+
+test('a description Box carrying no revision control reports originality unknown', () => {
+  const root = document(
+    '<div class="gh-header-meta"><span class="State">Triage</span></div>' +
+      '<div class="Box"><div class="js-repository-advisory-details">' +
+      '<div class="Box-header timeline-comment-header">' +
+      '<a class="author" href="/prakleumas">prakleumas</a>' +
+      '<relative-time datetime="2026-08-25T22:15:18Z">Aug 25, 2026</relative-time>' +
+      '</div></div></div>'
+  );
+  const advisory = parse.parseDetail(root);
+  if (advisory === null) throw new Error('the constructed page did not parse');
+  assert.strictEqual(advisory.reporter, 'prakleumas');
+  assert.strictEqual(advisory.descriptionOriginal, null);
+  assert.strictEqual(advisory.descriptionRevision, null);
+});
+
+test('a page with no description Box reports the reporter and originality unknown', () => {
+  const root = document(
+    '<div class="gh-header-meta"><span class="State">Published</span>' +
+      '<a class="author" href="/samuelkarp">samuelkarp</a>' +
+      '<relative-time datetime="2026-08-03T22:11:52Z">Aug 3, 2026</relative-time>' +
+      '</div>'
+  );
+  const advisory = parse.parseDetail(root);
+  if (advisory === null) throw new Error('the constructed page did not parse');
+  assert.strictEqual(advisory.reporter, null);
+  assert.strictEqual(advisory.reportedAt, null);
+  assert.strictEqual(advisory.descriptionOriginal, null);
 });
 
 test('the comment thread reads one entry per comment identifier', () => {
@@ -132,6 +181,21 @@ test('a comment carrying two badges in two container shapes resolves to one role
   const comments = parse.parseComments(root);
   assert.strictEqual(comments.length, 1);
   assert.deepStrictEqual(comments[0]?.roles, ['Member', 'Author']);
+  assert.strictEqual(comments[0]?.role, 'Member');
+  assert.strictEqual(comments[0]?.trusted, true);
+});
+
+test('a comment whose badges run least privileged first still resolves to Member', () => {
+  const root = document(
+    '<div class="timeline-comment-group" id="advisory-comment-991">' +
+      '<div class="timeline-comment unminimized-comment">' +
+      '<a class="author" href="/samuelkarp">samuelkarp</a>' +
+      '<span class="Label">Author</span><span class="Label">Member</span>' +
+      '<div class="comment-body markdown-body js-comment-body">Reported by me.</div>' +
+      '</div></div>'
+  );
+  const comments = parse.parseComments(root);
+  assert.deepStrictEqual(comments[0]?.roles, ['Author', 'Member']);
   assert.strictEqual(comments[0]?.role, 'Member');
   assert.strictEqual(comments[0]?.trusted, true);
 });
@@ -308,6 +372,21 @@ test('a fork row whose modifier was renamed is read open off its label', () => {
   );
   const fork = parse.parseFork(root);
   assert.strictEqual(fork?.pullRequests[0]?.state, 'open');
+});
+
+test('a fork row whose icon names no known state reports no state', () => {
+  const root = document(
+    '<private-forks-git-clone-help><ul><li class="Box-row">' +
+      '<span class="tooltipped color-fg-muted" aria-label="Draft Pull Request"></span>' +
+      '<a class="h4 Link--primary" href="/o/r-ghsa-x/pull/7">Fix</a>' +
+      '<span class="commit-ref css-truncate base-ref">' +
+      '<span class="css-truncate-target">main</span></span>' +
+      '</li></ul></private-forks-git-clone-help>'
+  );
+  const fork = parse.parseFork(root);
+  assert.strictEqual(fork?.pullRequests.length, 1);
+  assert.strictEqual(fork?.pullRequests[0]?.number, 7);
+  assert.strictEqual(fork?.pullRequests[0]?.state, null);
 });
 
 test('an advisory with no private fork reports none', () => {

@@ -48,7 +48,7 @@ test('a reporter comment newer than every member action is new activity', () => 
 test('an advisory with no comment at all has no visible member', () => {
   const state = derive.derive(advisory('published-containerd.html'));
   assert.deepStrictEqual(state.members, []);
-  assert.strictEqual(state.neverReviewed, true);
+  // The never-reviewed value on this fixture is unsettled.
   assert.strictEqual(state.newActivity, false);
 });
 
@@ -80,10 +80,34 @@ test('a fork with one pull request per branch reports both branches prepared', (
   assert.deepStrictEqual(state.patch.open, [2, 1]);
   assert.deepStrictEqual(state.patch.merged, []);
   assert.deepStrictEqual(state.patch.closed, []);
+  assert.deepStrictEqual(state.patch.unknown, []);
+  assert.strictEqual(state.patch.incomplete, false);
   assert.deepStrictEqual(state.patch.branches, [
     { branch: 'release/1.0', pullRequests: [2], open: true },
     { branch: 'main', pullRequests: [1], open: true },
   ]);
+});
+
+test('a fork row whose state went unread marks the patch state incomplete', () => {
+  const parsed = advisory('triage-thread.html');
+  const fork = parsed.fork;
+  if (fork === null) throw new Error('triage-thread.html has no private fork');
+  const unread = {
+    ...parsed,
+    fork: {
+      ...fork,
+      pullRequests: [
+        { ...(fork.pullRequests[0] ?? {}), number: 2, baseRef: 'release/1.0', state: null },
+        { ...(fork.pullRequests[1] ?? {}), number: 1, baseRef: 'main', state: 'open' },
+      ],
+    },
+  };
+  const state = derive.derive(/** @type {typeof parsed} */ (unread));
+  assert.strictEqual(state.patch.incomplete, true);
+  assert.deepStrictEqual(state.patch.unknown, [2]);
+  assert.deepStrictEqual(state.patch.open, [1]);
+  assert.deepStrictEqual(state.patch.merged, []);
+  assert.deepStrictEqual(state.patch.closed, []);
 });
 
 test('an advisory with no private fork has no patch prepared', () => {

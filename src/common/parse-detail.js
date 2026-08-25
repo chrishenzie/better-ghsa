@@ -544,8 +544,9 @@ function parseFork(root) {
  * @property {string | null} state `Triage`, `Draft`, `Published`, or `Closed`.
  * @property {string | null} severity The severity, lowercased, or null when unset.
  * @property {string | null} severityLabel The severity as displayed.
- * @property {string | null} reportedAt
- * @property {string | null} reporter
+ * @property {string | null} reportedAt The time the report was opened, from the
+ *   description Box header.
+ * @property {string | null} reporter The login the description Box header names.
  * @property {string | null} title Source markdown from the metadata form.
  * @property {string | null} description Source markdown from the metadata form.
  * @property {string | null} severityField The stored severity selection, which
@@ -553,8 +554,9 @@ function parseFork(root) {
  * @property {string | null} cvssV3
  * @property {string | null} cveId
  * @property {string | null} cveSelection `requesting`, `existing`, or `not_applicable`.
- * @property {boolean} descriptionOriginal Whether the description on the page
- *   is the reporter's original text.
+ * @property {boolean | null} descriptionOriginal Whether the description on the
+ *   page is the reporter's original text, and null when the revision control
+ *   could not be located.
  * @property {DescriptionRevision | null} descriptionRevision
  * @property {ParsedComment[]} comments
  * @property {TimelineEvent[]} timeline
@@ -578,7 +580,9 @@ function parseDetail(root) {
   const severityTitle = /Severity:\s*(\S+)/.exec(severity?.getAttribute('title') ?? '');
 
   // Several regions carry `js-repository-advisory-details`. The description's
-  // is the one whose own child is a comment-style Box header.
+  // is the one whose own child is a comment-style Box header. That header names
+  // the reporter and the report time in every advisory state; the page header
+  // meta names the publisher and the publication time once published.
   const descriptionHeader = root.querySelector(
     'div.js-repository-advisory-details > div.Box-header.timeline-comment-header'
   );
@@ -605,15 +609,15 @@ function parseDetail(root) {
           ? null
           : orNull(collapse(severity.textContent).toLowerCase()),
     severityLabel: severity === null ? null : orNull(collapse(severity.textContent)),
-    reportedAt: datetimeOf(meta),
-    reporter: authorIn(meta),
+    reportedAt: datetimeOf(descriptionHeader),
+    reporter: descriptionHeader === null ? null : authorIn(descriptionHeader),
     title: metadataField(root, 'title'),
     description: metadataField(root, 'description'),
     severityField: metadataField(root, 'severity'),
     cvssV3: metadataField(root, 'cvss_v3'),
     cveId: metadataField(root, 'cve_id'),
     cveSelection: metadataField(root, 'cve_selection'),
-    descriptionOriginal: revision === null,
+    descriptionOriginal: history === null ? null : revision === null,
     descriptionRevision:
       revision === null
         ? null
