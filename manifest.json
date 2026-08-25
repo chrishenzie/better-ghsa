@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "Better GHSA",
+  "version": "0.0.1",
+  "description": "Triage state for GitHub security advisories, kept in a comment on the advisory.",
+  "permissions": ["storage"],
+  "host_permissions": ["https://github.com/*"],
+  "content_scripts": [
+    {
+      "matches": ["https://github.com/*/*/security/advisories*"],
+      "js": ["src/common/allowlist.js", "src/content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "better-ghsa@samuelkarp.com",
+      "strict_min_version": "115.0"
+    }
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "better-ghsa",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Browser extension that adds triage state to GitHub security advisories",
+  "license": "Apache-2.0",
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.43",
+    "linkedom": "^0.18.5",
+    "typescript": "^5.6.3"
+  }
+}
