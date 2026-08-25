@@ -1,0 +1,152 @@
+<div id="advisories">
+    <div data-view-component="true" class="Subhead border-bottom-0 mb-0 tmp-mb-0">
+  <h2 data-view-component="true" class="Subhead-heading Subhead-heading--large">Security Advisories</h2>
+  <div data-view-component="true" class="Subhead-description">Privately discuss, fix, and publish information about security vulnerabilities in your repository's code.</div>
+  <div data-view-component="true" class="Subhead-actions">            <a href="/git-utensils/Spoon-Knife/security/advisories/new" data-hotkey="c" data-pjax="true" data-view-component="true" class="Button--primary Button--medium Button">  <span class="Button-content">
+    <span class="Button-label">New draft security advisory</span>
+  </span>
+</a>
+
+</div>
+</div>
+    <div class="tmp-mb-3"></div>
+
+      <repository-advisories-filter data-view-component="true" class="mb-3 tmp-mb-3" data-catalyst="">
+  <!-- '"` --><!-- </textarea></xmp> --><form class="subnav-search flex-auto js-navigation-container ml-0 mt-0 mb-0" role="search" data-pjax="false" data-target="repository-advisories-filter.searchForm" data-turbo="true" data-turbo-frame="_self" data-action="
+        navigation:keydown:repository-advisories-filter#handleFormKeydownEvent
+        navigation:open:repository-advisories-filter#handleSelectedSuggestionResultEvent
+        submit:repository-advisories-filter#handleSubmitEvent
+      " action="?" accept-charset="UTF-8" method="get">
+    <div class="d-flex">
+      <div class="subnav-search flex-1 ml-0">
+        <input role="combobox" aria-expanded="false" aria-label="Filter advisories: severity:critical, ecosystem:npm" aria-controls="repository-advisories-filter-autocomplete-dropdown" autocomplete="off" class="form-control input-block input-contrast width-full js-navigation-enable subnav-search-input css-truncate css-truncate-overflow" spellcheck="false" name="query" placeholder="Filter advisories: severity:critical, ecosystem:npm" type="text" value="" data-target="repository-advisories-filter.searchInput" data-action="
+                input:repository-advisories-filter#updateFilterSuggestionResults
+                focusin:repository-advisories-filter#updateFilterSuggestionResults
+                focusout:delay:repository-advisories-filter#handleSearchBlur
+                keydown:repository-advisories-filter#inputKey
+              " data-initial-value="" data-default-value="" data-suggestable-qualifiers="[{&quot;value&quot;:&quot;severity:&quot;,&quot;description&quot;:&quot;critical, high, moderate, low&quot;},{&quot;value&quot;:&quot;ecosystem:&quot;,&quot;description&quot;:&quot;npm, pip, rubygems, maven, nuget, composer, go, rust, pub, swift, actions&quot;},{&quot;value&quot;:&quot;package:&quot;,&quot;description&quot;:&quot;filter by package name&quot;},{&quot;value&quot;:&quot;sort:&quot;,&quot;description&quot;:&quot;newest, oldest, severity&quot;}]" data-negatable-qualifiers="[]" data-suggestable-severity="[{&quot;value&quot;:&quot;critical&quot;},{&quot;value&quot;:&quot;high&quot;},{&quot;value&quot;:&quot;moderate&quot;},{&quot;value&quot;:&quot;low&quot;}]" data-suggestable-ecosystem="[{&quot;value&quot;:&quot;npm&quot;},{&quot;value&quot;:&quot;pip&quot;},{&quot;value&quot;:&quot;rubygems&quot;},{&quot;value&quot;:&quot;maven&quot;},{&quot;value&quot;:&quot;nuget&quot;},{&quot;value&quot;:&quot;composer&quot;},{&quot;value&quot;:&quot;go&quot;},{&quot;value&quot;:&quot;rust&quot;},{&quot;value&quot;:&quot;pub&quot;},{&quot;value&quot;:&quot;swift&quot;},{&quot;value&quot;:&quot;actions&quot;}]" data-suggestable-package="[]" data-suggestable-sort="[{&quot;value&quot;:&quot;newest&quot;},{&quot;value&quot;:&quot;oldest&quot;},{&quot;value&quot;:&quot;severity&quot;}]">
+          <svg aria-hidden="true" data-component="Octicon" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-search d-block color-fg-muted left-0 ml-2 tmp-ml-2 mt-2 tmp-mt-2 position-absolute top-0">
+    <path d="M10.68 11.74a6 6 0 0 1-7.922-8.982 6 6 0 0 1 8.982 7.922l3.04 3.04a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215ZM11.5 7a4.499 4.499 0 1 0-8.997 0A4.499 4.499 0 0 0 11.5 7Z"></path>
+</svg>
+        <div id="repository-advisories-filter-autocomplete-dropdown" data-target="repository-advisories-filter.autocompleteDropdown" aria-label="Available filters" hidden="hidden" tabindex="0" data-view-component="true" class="Box card-filter-autocomplete-dropdown overflow-auto color-bg-default rounded-2 color-shadow-large mt-1 tmp-mt-1 width-full position-absolute">
+  
+  <div data-view-component="true" class="Box-body px-2 tmp-px-2 py-1 tmp-py-1">
+            <div data-target="repository-advisories-filter.autocompleteResults" data-view-component="true"></div>
+</div>
+  
+</div>      </div>
+    </div>
+        <input type="hidden" name="state" id="state" value="draft" autocomplete="off">
+</form>
+      <button hidden="hidden" data-target="repository-advisories-filter.clearButton" data-action="click:repository-advisories-filter#clear" type="button" data-view-component="true" class="reset-btn-override tmp-mt-3 btn-link d-block position-relative mb-0 tmp-mb-0">    <svg aria-label="Clear filters" role="img" data-component="Octicon" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-x reset-btn-override-icon mr-2 tmp-mr-2">
+    <path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.749.749 0 0 1 1.275.326.749.749 0 0 1-.215.734L9.06 8l3.22 3.22a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215L8 9.06l-3.22 3.22a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z"></path>
+</svg>Clear current search query, filters, and sorts
+</button></repository-advisories-filter>
+
+    <div class="Box">
+    <div class="Box-header p-2 d-flex flex-items-center flex-justify-between">
+      <segmented-control data-catalyst="">
+  <ul aria-label="Sort advisories" role="list" data-view-component="true" class="SegmentedControl--medium SegmentedControl">
+      <li class="SegmentedControl-item" role="listitem" data-targets="segmented-control.items">
+  <a href="/git-utensils/Spoon-Knife/security/advisories?state=triage" aria-current="false" data-view-component="true" class="Button--invisible Button--medium Button">  <span class="Button-content">
+      <span class="Button-visual Button-leadingVisual">
+        <svg aria-hidden="true" data-component="Octicon" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-inbox">
+    <path d="M2.8 2.06A1.75 1.75 0 0 1 4.41 1h7.18c.7 0 1.333.417 1.61 1.06l2.74 6.395c.04.093.06.194.06.295v4.5A1.75 1.75 0 0 1 14.25 15H1.75A1.75 1.75 0 0 1 0 13.25v-4.5c0-.101.02-.202.06-.295Zm1.61.44a.25.25 0 0 0-.23.152L1.887 8H4.75a.75.75 0 0 1 .6.3L6.625 10h2.75l1.275-1.7a.75.75 0 0 1 .6-.3h2.863L11.82 2.652a.25.25 0 0 0-.23-.152Zm10.09 7h-2.875l-1.275 1.7a.75.75 0 0 1-.6.3h-3.5a.75.75 0 0 1-.6-.3L4.375 9.5H1.5v3.75c0 .138.112.25.25.25h12.5a.25.25 0 0 0 .25-.25Z"></path>
+</svg>
+      </span>
+    <span class="Button-label" data-content="1 Triage">1 Triage</span>
+  </span>
+</a>
+
+</li>
+
+      <li class="SegmentedControl-item SegmentedControl-item--selected" role="listitem" data-targets="segmented-control.items">
+  <a href="/git-utensils/Spoon-Knife/security/advisories?state=draft" aria-current="true" data-view-component="true" class="Button--invisible Button--medium Button">  <span class="Button-content">
+      <span class="Button-visual Button-leadingVisual">
+        <svg aria-hidden="true" data-component="Octicon" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-shield">
+    <path d="M7.467.133a1.748 1.748 0 0 1 1.066 0l5.25 1.68A1.75 1.75 0 0 1 15 3.48V7c0 1.566-.32 3.182-1.303 4.682-.983 1.498-2.585 2.813-5.032 3.855a1.697 1.697 0 0 1-1.33 0c-2.447-1.042-4.049-2.357-5.032-3.855C1.32 10.182 1 8.566 1 7V3.48a1.75 1.75 0 0 1 1.217-1.667Zm.61 1.429a.25.25 0 0 0-.153 0l-5.25 1.68a.25.25 0 0 0-.174.238V7c0 1.358.275 2.666 1.057 3.86.784 1.194 2.121 2.34 4.366 3.297a.196.196 0 0 0 .154 0c2.245-.956 3.582-2.104 4.366-3.298C13.225 9.666 13.5 8.36 13.5 7V3.48a.251.251 0 0 0-.174-.237l-5.25-1.68ZM8.75 4.75v3a.75.75 0 0 1-1.5 0v-3a.75.75 0 0 1 1.5 0ZM9 10.5a1 1 0 1 1-2 0 1 1 0 0 1 2 0Z"></path>
+</svg>
+      </span>
+    <span class="Button-label" data-content="1 Draft">1 Draft</span>
+  </span>
+</a>
+
+</li>
+
+      <li class="SegmentedControl-item" role="listitem" data-targets="segmented-control.items">
+  <a href="/git-utensils/Spoon-Knife/security/advisories?state=published" aria-current="false" data-view-component="true" class="Button--invisible Button--medium Button">  <span class="Button-content">
+      <span class="Button-visual Button-leadingVisual">
+        <svg aria-hidden="true" data-component="Octicon" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-check">
+    <path d="M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.751.751 0 0 1 .018-1.042.751.751 0 0 1 1.042-.018L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z"></path>
+</svg>
+      </span>
+    <span class="Button-label" data-content="0 Published">0 Published</span>
+  </span>
+</a>
+
+</li>
+
+      <li class="SegmentedControl-item" role="listitem" data-targets="segmented-control.items">
+  <a href="/git-utensils/Spoon-Knife/security/advisories?state=closed" aria-current="false" data-view-component="true" class="Button--invisible Button--medium Button">  <span class="Button-content">
+      <span class="Button-visual Button-leadingVisual">
+        <svg aria-hidden="true" data-component="Octicon" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-x">
+    <path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.749.749 0 0 1 1.275.326.749.749 0 0 1-.215.734L9.06 8l3.22 3.22a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215L8 9.06l-3.22 3.22a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z"></path>
+</svg>
+      </span>
+    <span class="Button-label" data-content="0 Closed">0 Closed</span>
+  </span>
+</a>
+
+</li>
+
+</ul></segmented-control>
+
+    </div>
+    <div class="hx_Box--firstRowRounded0">
+      <ul data-pjax="#repo-content-pjax-container" data-turbo-frame="repo-content-turbo-frame">
+          
+<li class="Box-row Box-row--focus-gray p-0 ">
+  <div class="d-flex Box-row--drag-hide position-relative">
+
+    <div class="flex-shrink-0 pt-2 tmp-pl-3">
+      <span class="tooltipped tooltipped-n" aria-label="Draft advisory">
+        <svg aria-hidden="true" data-component="Octicon" height="16" viewBox="0 0 16 16" version="1.1" width="16" data-view-component="true" class="octicon octicon-issue-draft color-fg-muted mr-0 tmp-mr-0">
+    <path d="M14.307 11.655a.75.75 0 0 1 .165 1.048 8.05 8.05 0 0 1-1.769 1.77.75.75 0 0 1-.883-1.214 6.552 6.552 0 0 0 1.44-1.439.75.75 0 0 1 1.047-.165Zm-2.652-9.962a.75.75 0 0 1 1.048-.165 8.05 8.05 0 0 1 1.77 1.769.75.75 0 0 1-1.214.883 6.552 6.552 0 0 0-1.439-1.44.75.75 0 0 1-.165-1.047ZM6.749.097a8.074 8.074 0 0 1 2.502 0 .75.75 0 1 1-.233 1.482 6.558 6.558 0 0 0-2.036 0A.751.751 0 0 1 6.749.097ZM.955 6.125a.75.75 0 0 1 .624.857 6.558 6.558 0 0 0 0 2.036.75.75 0 1 1-1.482.233 8.074 8.074 0 0 1 0-2.502.75.75 0 0 1 .858-.624Zm14.09 0a.75.75 0 0 1 .858.624c.13.829.13 1.673 0 2.502a.75.75 0 1 1-1.482-.233 6.558 6.558 0 0 0 0-2.036.75.75 0 0 1 .624-.857Zm-8.92 8.92a.75.75 0 0 1 .857-.624 6.558 6.558 0 0 0 2.036 0 .75.75 0 1 1 .233 1.482c-.829.13-1.673.13-2.502 0a.75.75 0 0 1-.624-.858Zm-4.432-3.39a.75.75 0 0 1 1.048.165 6.552 6.552 0 0 0 1.439 1.44.751.751 0 0 1-.883 1.212 8.05 8.05 0 0 1-1.77-1.769.75.75 0 0 1 .166-1.048Zm2.652-9.962A.75.75 0 0 1 4.18 2.74a6.556 6.556 0 0 0-1.44 1.44.751.751 0 0 1-1.212-.883 8.05 8.05 0 0 1 1.769-1.77.75.75 0 0 1 1.048.166Z"></path>
+</svg>
+      </span>
+    </div>
+
+    <div class="d-flex flex-auto flex-column flex-md-row p-2 tmp-pr-3">
+      <div class="lh-condensed flex-auto">
+        <a href="/git-utensils/Spoon-Knife/security/advisories/GHSA-5hg2-rfq2-8fm5" class="Link--primary v-align-middle no-underline h4" data-turbo-frame="repo-content-turbo-frame">
+          Command injection in the sharpening scheduler
+        </a>
+
+        <div class="mt-1 text-small color-fg-muted">
+          GHSA-5hg2-rfq2-8fm5
+
+          <span class="opened-by">
+              opened
+              <relative-time datetime="2026-08-25T22:19:40Z" class="no-wrap" title="Aug 25, 2026, 3:19 PM PDT">Aug 25, 2026</relative-time>
+              by
+              <a class="author Link--muted" data-hovercard-type="user" data-hovercard-url="/users/samuelkarp/hovercard" data-octo-click="hovercard-link-click" data-octo-dimensions="link_type:self" href="/samuelkarp" aria-keyshortcuts="Alt+ArrowUp" data-turbo-frame="repo-content-turbo-frame">samuelkarp</a>
+          </span>
+        </div>
+      </div>
+
+
+    </div>
+  </div>
+</li>
+
+      </ul>
+    </div>
+</div>
+
+<div class="paginate-container" data-pjax="#repo-content-pjax-container" data-turbo-frame="repo-content-turbo-frame">
+  
+</div>
+
+
+
+  </div>

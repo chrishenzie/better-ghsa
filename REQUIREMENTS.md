@@ -163,9 +163,13 @@ advisories that were closed before the extension existed. One of:
 Derived state is read from the advisory detail page and is never stored.
 
 **Patch.** Whether a private fork exists, which pull requests are open in it,
-which branches they target, and which are merged. Combined with the stored
-backport targets, this yields backport progress as a count of branches
-completed out of branches required.
+and which branches they target. Combined with the stored backport targets, this
+yields backport progress as a count of required branches that have a patch
+prepared.
+
+A private fork is deleted when its changes merge into the repository, so a
+merged pull request is never visible on an advisory the extension is tracking,
+and progress counts preparation.
 
 **CVE.** Whether a CVE has been requested and whether one has been assigned,
 from the notes on the detail page and the `cve_id` field.
@@ -316,6 +320,13 @@ extension's state, and their actions remain visible through derived state.
 
 - Private fork surfaces, including CSS styling. The purpose of that styling is
   an open question.
+- Review status of the pull requests in a private fork. The advisory page
+  carries none, so reading it costs one fetch per pull request. A set of
+  prepared patches that nobody has approved is still pending maintainer work,
+  which makes this worth revisiting.
+- Check status of those pull requests. A private fork does not run CI and still
+  displays an expected check state, so the value shown does not describe
+  anything that ran.
 - Field-level merge on a write conflict.
 - A cross-repository or org-wide view.
 - A configurable track vocabulary.
