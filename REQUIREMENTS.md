@@ -1,0 +1,304 @@
+# Better GHSA: requirements
+
+A browser extension for Chrome and Firefox that adds tracking to GitHub
+Security Advisories for the maintainers who handle them. The target user is a
+containerd maintainer working on `containerd/containerd`, and v1 is built for
+that one repository and that one workflow.
+
+## 1. Platform facts this design rests on
+
+Documented behavior:
+
+- The repository security advisories REST API
+  (https://docs.github.com/en/rest/security-advisories/repository-advisories)
+  covers list, get, create, update, CVE request, and private fork creation.
+  Writable fields are `summary`, `description`, `severity`,
+  `cvss_vector_string`, `cwe_ids`, `cve_id`, `vulnerabilities`, `credits`,
+  `state`, `collaborating_users`, `collaborating_teams`, and
+  `start_private_fork`. States are `triage`, `draft`, `published`, `closed`,
+  and `withdrawn`.
+- The API does not expose advisory comments or the advisory timeline.
+- Closing an advisory does not record a reason.
+- Advisory comments are visible to the reporter and to advisory collaborators
+  (https://docs.github.com/en/code-security/how-tos/report-and-fix-vulnerabilities/fix-reported-vulnerabilities/manage-vulnerability-reports).
+- Publishing an advisory makes the advisory data public and keeps the
+  conversation collaborator-only
+  (https://docs.github.com/en/code-security/concepts/vulnerability-reporting-and-management/about-repository-security-advisories).
+
+Observed behavior in the web UI:
+
+- The `description` field has a revision history dropdown. The title, severity,
+  CVSS vector, and CWE fields do not.
+- Comment authors in an advisory thread carry `Author` and `Member` badges.
+- Pull requests opened in the advisory's private fork are shown on the advisory
+  detail page.
+- CVE request and CVE assignment appear as notes on the advisory detail page.
+- Posting a comment notifies advisory participants, including the reporter.
+
+Load-bearing assumptions, to be verified during implementation:
+
+- Editing an existing comment does not notify participants. The write model in
+  section 3 depends on this.
+- The `Member` badge is present for every org member, including security
+  advisors. If it turns out to be unreliable, the fallback is to fetch the
+  `containerd` org member list with the user's session and cache it.
+
+## 2. Storage
+
+All shared state lives in the advisory it describes. The extension does not
+operate a server or a database.
+
+The extension keeps a local cache in the browser. The cache is never
+authoritative and is always rederivable from the advisories. Cache entries
+expire after 7 days, and the extension provides a control that clears the cache
+immediately.
+
+Every read is a poll. Other maintainers write through their own browsers, and
+GitHub changes derived state without notifying the extension.
+
+## 3. Write model
+
+Each maintainer has at most one state comment per advisory. The extension
+creates it on that maintainer's first write and edits it on every write after
+that. No maintainer edits another maintainer's comment. Each advisory therefore
+generates one notification per maintainer who uses the extension.
+
+The state comment body is a collapsed `<details>` block containing a JSON code
+fence. The JSON is the only representation, and it stays in the rendered DOM
+where a content script reads it.
+
+Each write records a complete snapshot of the extension-managed record, not a
+delta. Each snapshot carries a sequence number one higher than the highest the
+writer observed across all state comments on that advisory. Current state is
+the snapshot with the highest sequence number, with ties broken by the author's
+login in lexicographic order. History is the union of the snapshots in each
+maintainer's comment.
+
+A write is read-merge-write: the writer copies the current merged state
+forward, applies its own changes, and preserves any fields it does not
+recognize.
+
+Immediately before writing, the extension re-reads the advisory's state
+comments. If the highest sequence number has changed since the panel loaded,
+the write is refused and the panel reloads with the new state. The maintainer
+reapplies the change.
+
+Control changes accumulate in the panel and are written on an explicit save.
+Navigating away with unsaved changes produces a warning.
+
+Every snapshot carries a schema version. A reader that encounters a major
+version it does not understand goes read-only and reports that the extension
+needs an update.
+
+## 4. Trust
+
+A snapshot is honored only when its comment's author carries the `Member` or
+`Owner` badge. Security advisors are org members and are trusted.
+
+A well-formed snapshot in a comment from any other author is ignored for state
+purposes, and the extension displays a warning on that advisory.
+
+The extension labels every comment in the thread by author role, distinguishing
+org members from everyone else.
+
+## 5. Reporter visibility
+
+The reporter reads the whole thread, including every state comment. The
+vocabulary in section 6 is chosen so that every value is something a maintainer
+is willing to say to the reporter. The extension does not encode or obfuscate
+its payload.
+
+## 6. Tracked state
+
+### Stored tracks
+
+**Triage.** One of `evaluating`, `awaiting reporter`, `awaiting maintainer
+input`. An advisory that no org member has acted on is reported as unreviewed
+by derivation, and no stored value expresses that. Acceptance and rejection are
+expressed by GitHub's own state.
+
+**Owner.** Zero or more org members, matching how issues are assigned. Any
+maintainer can set any maintainer.
+
+**Advisory text confirmation.** A record that a named maintainer confirmed the
+title and a record that a named maintainer confirmed the description, each
+carrying a fingerprint of the value confirmed and the time of confirmation.
+
+**Scoring confirmation.** A record that a named maintainer confirmed the
+severity and CVSS vector, carrying a fingerprint of the value confirmed and the
+time of confirmation. The reporter's proposed score is not stored. The display
+distinguishes a score confirmed by a maintainer from a score supplied by the
+reporter and not yet confirmed.
+
+Every confirmation binds to what it confirmed. When the current value stops
+matching the fingerprint, the track reverts to unconfirmed and reports who
+confirmed a different value and when.
+
+**Backport targets.** The set of release branches this advisory requires a
+backport to. A maintainer sets it. The affected-version data GitHub stores can
+seed a suggestion, and the containerd branches in support are non-contiguous,
+so the suggestion is not authoritative.
+
+**Embargo.** Whether an embargo applies, and the lift date.
+
+**Closure reason.** Set once, at close, and settable retroactively on
+advisories that were closed before the extension existed. One of:
+
+- `duplicate`, carrying a pointer to the GHSA it duplicates
+- `not a vulnerability`
+- `not reproducible`
+- `working as intended`
+- `out of scope`
+- `no reporter response`
+- `withdrawn by reporter`
+
+### Derived state
+
+Derived state is read from the advisory detail page and is never stored.
+
+**Patch.** Whether a private fork exists, which pull requests are open in it,
+which branches they target, and which are merged. Combined with the stored
+backport targets, this yields backport progress as a count of branches
+completed out of branches required.
+
+**CVE.** Whether a CVE has been requested and whether one has been assigned,
+from the notes on the detail page and the `cve_id` field.
+
+**Never reviewed.** No org member has commented on or acted on the advisory.
+
+**New activity.** The most recent comment from a non-member is newer than the
+most recent member comment or member action. It clears when a maintainer
+responds or changes anything.
+
+**Waiting.** How long the advisory has been in its current triage value.
+
+**Overdue embargo.** The embargo lift date has passed and the advisory is not
+published.
+
+Every triage value is classified as blocked on us or blocked on the reporter,
+and that classification drives sorting and filtering.
+
+## 7. Preserving the original report
+
+The reporter's title and text are overwritten in place when maintainers rewrite
+them for publication. The description is recoverable from the revision history
+dropdown. The title, severity, CVSS, and CWE are not.
+
+On an explicit button press, the extension writes one comment per advisory
+holding the original report inside a collapsed `<details>` block, formatted for
+a human reader. The extension never reads this comment back.
+
+The comment holds the original description recovered from revision history. It
+holds the original title when the extension observed and cached it before the
+title was edited, and states that the original title was not captured
+otherwise.
+
+The filer of an advisory is its reporter whether or not they are an org member.
+Advisories a maintainer files are treated the same as any other.
+
+## 8. Advisory detail page
+
+The extension adds a panel that displays derived state, displays and edits
+stored state, and warns on unconfirmed scoring, on confirmation drift, and on
+snapshots from untrusted authors. It offers the button that preserves the
+original report.
+
+The extension writes nothing to GitHub beyond its two comment types. It does
+not change `summary`, `description`, severity, advisory state, or any other
+native field.
+
+## 9. Advisory list page
+
+The extension replaces the body of the repository's advisory list with its own
+table, and provides a toggle back to GitHub's native view.
+
+Each row shows the advisory title as a link, GitHub's state, and the owners as
+profile icons in the style of issue assignees. Below the title, chips carry the
+waiting state, the patch state including backport progress, the confirmation
+state of text and scoring, the CVE state, the severity marked as confirmed or
+unconfirmed, and the embargo. Each row shows the time its data was observed.
+
+Rows are sortable and filterable on every value the extension holds, including
+blocked on us, blocked on the reporter, waiting duration, owner, and severity.
+
+Default ordering is by tier, and within a tier by the stated rule:
+
+1. Never reviewed.
+2. New activity.
+3. Blocked on us. An advisory with an overdue embargo sorts at the top of this
+   tier. The rest sort by confirmed severity descending, then by unconfirmed
+   severity descending, then by longest waiting.
+4. Blocked on the reporter, longest waiting first.
+
+Published and closed advisories are excluded from this table and appear on the
+done page described in section 10.
+
+The list page renders from cache immediately and refreshes in the background,
+stalest first, at a throttled rate. Rows update as data arrives. Reading an
+advisory's state costs one fetch of its detail page, which also supplies every
+derived value.
+
+## 10. Done page and statistics
+
+A separate page lists published and closed advisories and carries the
+statistics for the whole corpus. Closure reasons can be set here retroactively.
+
+Counts and ratios: advisories by closure reason, by state, by severity, and by
+month.
+
+Timing, reconstructed from page-observable events:
+
+- Time to first response, measured to the first comment by an org member that
+  is not a state comment. First contact made by email is not visible and is not
+  counted.
+- Time from report to entering Draft.
+- Time from report to close.
+
+A metric is omitted when the event it needs is not observable. It is not
+estimated.
+
+The page exports to CSV.
+
+Every computation runs locally. Nothing is sent anywhere.
+
+## 11. Failure behavior
+
+The extension locates the elements it needs with targeted queries and does not
+validate the whole page structure.
+
+When it cannot read something, it displays what it can, marks the result
+incomplete, and shows a banner.
+
+When it cannot fully verify what it is looking at, it refuses to write and
+shows a banner. A wrong read shows a stale value that the observation time
+already qualifies. A wrong write puts a permanent claim on a real vulnerability
+report in front of the reporter, and no other maintainer can edit it out.
+
+## 12. Platform and distribution
+
+Chrome and Firefox from one codebase. The extension works from the logged-in
+`github.com` session. It does not ask for a token and does not
+store a credential. It contacts only `github.com`. It does not collect
+telemetry.
+
+This depends on undocumented endpoints and on GitHub's DOM, and GitHub's
+changes will break it.
+
+v1 loads in development mode. Distribution to other containerd maintainers is
+in scope at the level of a loadable build and install instructions they can
+follow. Store listings and signing are later work, and the constraints they
+impose are considerations throughout.
+
+The extension never requires another maintainer to have it installed. A
+maintainer acting through GitHub's native UI must not corrupt or confuse the
+extension's state, and their actions remain visible through derived state.
+
+## 13. Out of scope for v1
+
+- Private fork surfaces, including CSS styling. The purpose of that styling is
+  an open question.
+- Field-level merge on a write conflict.
+- A cross-repository or org-wide view.
+- A configurable track vocabulary.
+- Per-maintainer snooze.
+- Any write to GitHub outside the extension's two comment types.
