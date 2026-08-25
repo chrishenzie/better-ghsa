@@ -5,6 +5,9 @@
  */
 interface BghsaNamespace {
   allowlist: typeof import('../src/common/allowlist.js');
+  trust: typeof import('../src/common/trust.js');
+  parseDetail: typeof import('../src/common/parse-detail.js');
+  derive: typeof import('../src/common/derive.js');
   content: typeof import('../src/content.js');
 }
 
