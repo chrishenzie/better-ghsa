@@ -50,8 +50,9 @@ operate a server or a database.
 
 The extension keeps a local cache in the browser. The cache is never
 authoritative and is always rederivable from the advisories. Cache entries
-expire after 7 days, and the extension provides a control that clears the cache
-immediately.
+expire on a schedule that follows the advisory's state, and the extension
+provides a control that clears the cache immediately. An entry observed within
+the last five minutes is not refreshed.
 
 Every read is a poll. Other maintainers write through their own browsers, and
 GitHub changes derived state without notifying the extension.
@@ -97,6 +98,11 @@ A snapshot is honored only when its comment's author carries the `Member` or
 
 A well-formed snapshot in a comment from any other author is ignored for state
 purposes, and the extension displays a warning on that advisory.
+
+A snapshot from a trusted author that the extension cannot interpret is also
+ignored for state purposes and warned on. Where that snapshot still carries an
+ordering claim, changing state on that advisory takes one explicit
+confirmation, after which the new value supersedes it.
 
 The extension labels every comment in the thread by author role, distinguishing
 org members from everyone else.
@@ -170,7 +176,10 @@ from the notes on the detail page and the `cve_id` field.
 most recent member comment or member action. It clears when a maintainer
 responds or changes anything.
 
-**Waiting.** How long the advisory has been in its current triage value.
+**Waiting.** How long the advisory has been in its current triage value. For an
+advisory whose triage value is set for the first time, the duration is measured
+from the most recent maintainer action on the advisory, or from the report time
+when no maintainer has acted.
 
 **Overdue embargo.** The embargo lift date has passed and the advisory is not
 published.
@@ -181,17 +190,21 @@ and that classification drives sorting and filtering.
 ## 7. Preserving the original report
 
 The reporter's title and text are overwritten in place when maintainers rewrite
-them for publication. The description is recoverable from the revision history
-dropdown. The title, severity, CVSS, and CWE are not.
+them for publication.
 
 On an explicit button press, the extension writes one comment per advisory
-holding the original report inside a collapsed `<details>` block, formatted for
-a human reader. The extension never reads this comment back.
+holding the advisory's current title and description inside a collapsed
+`<details>` block, formatted for a human reader. The extension never reads this
+comment back, and offers the button only where no such comment exists on that
+advisory.
 
-The comment holds the original description recovered from revision history. It
-holds the original title when the extension observed and cached it before the
-title was edited, and states that the original title was not captured
-otherwise.
+A description that has never been revised is the reporter's original text, and
+the comment records it as such. Otherwise the comment records the description as
+it stood when the button was pressed. The comment records the title as the text
+at that moment, because no revision signal exists for the title.
+
+Pressing the button before a maintainer rewrites the report is what preserves
+the original. Nothing recovers it afterward.
 
 The filer of an advisory is its reporter whether or not they are an org member.
 Advisories a maintainer files are treated the same as any other.
@@ -210,7 +223,9 @@ native field.
 ## 9. Advisory list page
 
 The extension replaces the body of the repository's advisory list with its own
-table, and provides a toggle back to GitHub's native view.
+table, and provides a toggle back to GitHub's native view. While the table is
+showing, GitHub's own state tabs and query form are hidden, and the toggle
+restores them together with the native rows.
 
 Each row shows the advisory title as a link, GitHub's state, and the owners as
 profile icons in the style of issue assignees. Below the title, chips carry the
@@ -240,8 +255,9 @@ derived value.
 
 ## 10. Done page and statistics
 
-A separate page lists published and closed advisories and carries the
-statistics for the whole corpus. Closure reasons can be set here retroactively.
+A separate view, reached from the advisory list, lists published and closed
+advisories and carries the statistics for the whole corpus. Closure reasons can
+be set here retroactively.
 
 Counts and ratios: advisories by closure reason, by state, by severity, and by
 month.
@@ -280,6 +296,9 @@ Chrome and Firefox from one codebase. The extension works from the logged-in
 `github.com` session. It does not ask for a token and does not
 store a credential. It contacts only `github.com`. It does not collect
 telemetry.
+
+The extension writes only to repositories on a list carried in its source. A
+write anywhere else is refused.
 
 This depends on undocumented endpoints and on GitHub's DOM, and GitHub's
 changes will break it.
