@@ -397,7 +397,7 @@ test('an advisory with no private fork reports none', () => {
 
 test('a document that is not an advisory detail page yields null', () => {
   for (const name of ['edit-form.html', 'list-page-triage.html', 'list-page-draft.html']) {
-    assert.strictEqual(parse.parseDetail(fixture(name)), null, name);
+    assert.ok(parse.parseDetail(fixture(name)) === null, name);
   }
 });
 

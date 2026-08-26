@@ -21,6 +21,12 @@ const STYLE_TEXT = [
   '.bghsa-chips { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; }',
   '.bghsa-label { flex: 0 0 9rem; }',
   '.bghsa-missing { font-style: italic; }',
+  '.bghsa-tone-attention { color: var(--fgColor-default);' +
+    ' background-color: var(--bgColor-attention);' +
+    ' border-color: var(--bgColor-attention); }',
+  '.bghsa-tone-danger { color: var(--fgColor-default);' +
+    ' background-color: var(--bgColor-danger);' +
+    ' border-color: var(--bgColor-danger); }',
 ].join('\n');
 
 /** The text shown in place of a value that could not be read. */
@@ -38,34 +44,8 @@ function shown(value) {
 }
 
 /**
- * @param {unknown} value
- * @returns {value is Record<string, unknown>}
- */
-function isPlainObject(value) {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-/**
- * A snapshot field as one line of text. Anything this reader has no display for
- * is shown as its JSON source, so nothing the snapshot carries is hidden.
- *
- * @param {unknown} value
- * @returns {string | null} null when the field is absent.
- */
-function fieldText(value) {
-  if (value === undefined) return null;
-  if (typeof value === 'string') return value;
-  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-  if (Array.isArray(value)) {
-    if (value.length === 0) return 'none';
-    return value.map((entry) => fieldText(entry) ?? 'null').join(', ');
-  }
-  return JSON.stringify(value) ?? 'null';
-}
-
-/**
- * The names of the values the panel displays that could not be read. An empty
- * list means the panel shows everything it set out to show.
+ * The names of the values the extension could not read from the page. An empty
+ * list means every value it set out to read is in hand.
  *
  * @param {import('../common/parse-detail.js').ParsedDetail} advisory
  * @param {import('../common/derive.js').DerivedState} derived
@@ -85,13 +65,34 @@ function missingValues(advisory, derived) {
 }
 
 /**
+ * A chip. A tone names a Primer state token, and a chip with no tone is
+ * neutral.
+ *
  * @param {Document} doc
  * @param {string} text
- * @param {string} [tone] A Primer `Label--*` modifier.
+ * @param {'attention' | 'danger'} [tone]
  * @returns {Element}
  */
 function chip(doc, text, tone) {
-  return element(doc, 'span', `Label ${tone ?? 'Label--secondary'}`, text);
+  const classes = ['Label', 'Label--secondary'];
+  if (tone !== undefined) classes.push(`bghsa-tone-${tone}`);
+  return element(doc, 'span', classes.join(' '), text);
+}
+
+/**
+ * A chip carrying one named value. A value that could not be read is marked
+ * and toned, so it does not read as a value the page holds.
+ *
+ * @param {Document} doc
+ * @param {string} label
+ * @param {string | null} value
+ * @returns {Element}
+ */
+function valueChip(doc, label, value) {
+  const unread = value === null || value === '';
+  const node = chip(doc, `${label}: ${shown(value)}`, unread ? 'attention' : undefined);
+  if (unread) node.classList.add('bghsa-missing');
+  return node;
 }
 
 /**
@@ -118,7 +119,9 @@ function warning(doc, text) {
 }
 
 /**
- * The chip row, which is visible whatever else the panel shows.
+ * The chip row, which is visible whatever else the panel shows. A derived
+ * signal is a chip only while it is firing, because it is there to say that
+ * something needs attention.
  *
  * @param {Document} doc
  * @param {import('../common/parse-detail.js').ParsedDetail} advisory
@@ -128,178 +131,13 @@ function warning(doc, text) {
 function buildChips(doc, advisory, derived) {
   const header = element(doc, 'div', 'Box-header bghsa-chips');
   header.append(element(doc, 'strong', 'mr-2', 'Better GHSA'));
-  header.append(chip(doc, `State: ${shown(advisory.state)}`));
-  header.append(chip(doc, `Severity: ${shown(advisory.severityLabel)}`));
+  header.append(valueChip(doc, 'State', advisory.state));
+  header.append(valueChip(doc, 'Severity', advisory.severityLabel));
   const cve = derived.cve;
   header.append(chip(doc, `CVE: ${cve.id === null ? cve.state : cve.id}`));
-  header.append(
-    chip(
-      doc,
-      `Never reviewed: ${derived.neverReviewed ? 'yes' : 'no'}`,
-      derived.neverReviewed ? 'Label--danger' : 'Label--secondary'
-    )
-  );
-  header.append(
-    chip(
-      doc,
-      `New activity: ${derived.newActivity ? 'yes' : 'no'}`,
-      derived.newActivity ? 'Label--attention' : 'Label--secondary'
-    )
-  );
+  if (derived.neverReviewed) header.append(chip(doc, 'Never reviewed', 'danger'));
+  if (derived.newActivity) header.append(chip(doc, 'New activity', 'attention'));
   return header;
-}
-
-/**
- * The comment thread, one line per comment, carrying the role GitHub badged
- * that comment's author with and whether that author's snapshots count.
- *
- * @param {Document} doc
- * @param {import('../common/parse-detail.js').ParsedDetail} advisory
- * @returns {Element}
- */
-function buildComments(doc, advisory) {
-  const { row: container, body } = row(doc, 'Comments');
-  if (advisory.comments.length === 0) {
-    body.append(element(doc, 'div', 'color-fg-muted', 'No comments.'));
-    return container;
-  }
-  const list = element(doc, 'ul', 'list-style-none');
-  for (const comment of advisory.comments) {
-    const item = element(doc, 'li', 'bghsa-comment');
-    item.append(element(doc, 'span', 'text-bold', shown(comment.author)));
-    item.append(doc.createTextNode(' '));
-    item.append(chip(doc, shown(comment.role)));
-    item.append(
-      doc.createTextNode(
-        ` ${comment.trusted ? 'trusted' : 'not trusted'} · ${shown(comment.at)}`
-      )
-    );
-    list.append(item);
-  }
-  body.append(list);
-  return container;
-}
-
-/**
- * The private fork's pull requests, the branch each targets, and whether a
- * branch has a merged one.
- *
- * @param {Document} doc
- * @param {import('../common/derive.js').PatchState} patch
- * @returns {Element}
- */
-function buildPatches(doc, patch) {
-  const { row: container, body } = row(doc, 'Patches');
-  if (!patch.hasFork) {
-    body.append(element(doc, 'div', 'color-fg-muted', 'No private fork.'));
-    return container;
-  }
-  if (patch.pullRequests.length === 0) {
-    body.append(element(doc, 'div', 'color-fg-muted', 'The private fork has no pull request.'));
-  }
-  const list = element(doc, 'ul', 'list-style-none');
-  for (const pull of patch.pullRequests) {
-    const item = element(doc, 'li', 'bghsa-pull');
-    const number = pull.number === null ? MISSING : `#${pull.number}`;
-    if (pull.url === null) {
-      item.append(element(doc, 'span', 'text-bold', number));
-    } else {
-      const link = element(doc, 'a', 'text-bold', number);
-      link.setAttribute('href', pull.url);
-      item.append(link);
-    }
-    item.append(
-      doc.createTextNode(
-        ` ${pull.title} → ${shown(pull.baseRef)} (${shown(pull.state)})`
-      )
-    );
-    list.append(item);
-  }
-  body.append(list);
-  for (const branch of patch.branches) {
-    const numbers = branch.pullRequests.map((number) => `#${number}`).join(', ');
-    body.append(
-      element(
-        doc,
-        'div',
-        'bghsa-branch',
-        `${branch.branch}: ${numbers === '' ? MISSING : numbers}`
-      )
-    );
-  }
-  if (patch.incomplete) {
-    body.append(warning(doc, 'A pull request named a state this extension does not read.'));
-  }
-  return container;
-}
-
-/**
- * One state comment as the advisory carries it. Nothing here decides which
- * snapshot wins; every one present is shown.
- *
- * @param {Document} doc
- * @param {import('../common/parse-detail.js').ParsedComment} comment
- * @param {import('../common/parse-detail.js').SnapshotReport} snapshot
- * @returns {Element}
- */
-function buildStateComment(doc, comment, snapshot) {
-  const { row: container, body } = row(doc, 'State comment');
-  body.append(
-    element(
-      doc,
-      'div',
-      'text-bold bghsa-state-author',
-      `${shown(comment.author)} (${shown(comment.role)}) · ${shown(comment.at)}`
-    )
-  );
-
-  const fields = element(doc, 'ul', 'list-style-none');
-  /** @type {[string, unknown][]} */
-  const entries = [];
-  const payload = isPlainObject(snapshot.parsed) ? snapshot.parsed : {};
-  entries.push(['schema', snapshot.version]);
-  entries.push(['seq', snapshot.seq]);
-  entries.push(['written by', snapshot.by]);
-  for (const key of ['at', 'triage', 'triageSince', 'owners', 'backports']) {
-    entries.push([key, payload[key]]);
-  }
-  const embargo = payload['embargo'];
-  if (isPlainObject(embargo)) entries.push(['embargo lifts', embargo['lift']]);
-  const closure = payload['closure'];
-  if (isPlainObject(closure)) {
-    entries.push(['closure reason', closure['reason']]);
-    entries.push(['duplicate of', closure['duplicateOf']]);
-  }
-  const confirmed = payload['confirmed'];
-  if (isPlainObject(confirmed)) entries.push(['confirmed', Object.keys(confirmed)]);
-
-  for (const [name, value] of entries) {
-    const text = fieldText(value ?? undefined);
-    if (text === null) continue;
-    fields.append(element(doc, 'li', 'bghsa-field', `${name}: ${text}`));
-  }
-  body.append(fields);
-
-  if (!comment.trusted) {
-    body.append(
-      warning(
-        doc,
-        `${shown(comment.author)} carries no member or owner badge on this comment, so this state comment is not trusted.`
-      )
-    );
-  }
-  for (const problem of snapshot.problems) {
-    body.append(warning(doc, `This state comment failed validation: ${problem}.`));
-  }
-  if (snapshot.unrecognized.length > 0) {
-    body.append(
-      warning(
-        doc,
-        `This state comment holds a value this extension does not interpret: ${snapshot.unrecognized.join(', ')}.`
-      )
-    );
-  }
-  return container;
 }
 
 /**
@@ -329,40 +167,21 @@ function buildPanel(doc, advisory, derived) {
     panel.append(banner);
   }
 
-  const advisoryRow = row(doc, 'Advisory');
-  advisoryRow.body.textContent =
-    advisory.ref === null
-      ? shown(advisory.ghsaId)
-      : `${shown(advisory.ghsaId)} in ${advisory.ref.owner}/${advisory.ref.repo}`;
-  panel.append(advisoryRow.row);
-
-  const reporterRow = row(doc, 'Reporter');
-  reporterRow.body.textContent = `${shown(advisory.reporter)} reported ${shown(advisory.reportedAt)}`;
-  panel.append(reporterRow.row);
+  if (derived.patch.incomplete) {
+    panel.append(warning(doc, 'A pull request named a state this extension does not read.'));
+  }
 
   const descriptionRow = row(doc, 'Description');
-  descriptionRow.body.textContent =
-    advisory.descriptionOriginal === null
-      ? `Provenance ${MISSING}.`
-      : advisory.descriptionOriginal
-        ? "The reporter's original text."
-        : 'Edited since it was reported.';
-  panel.append(descriptionRow.row);
-
-  const cveRow = row(doc, 'CVE');
-  cveRow.body.textContent =
-    derived.cve.id === null
-      ? `${derived.cve.state} (selection: ${shown(derived.cve.selection)})`
-      : `${derived.cve.id} (${derived.cve.state})`;
-  panel.append(cveRow.row);
-
-  panel.append(buildComments(doc, advisory));
-  panel.append(buildPatches(doc, derived.patch));
-
-  for (const comment of advisory.comments) {
-    if (comment.stateComment === null) continue;
-    panel.append(buildStateComment(doc, comment, comment.stateComment));
+  if (advisory.descriptionOriginal === null) {
+    descriptionRow.body.append(doc.createTextNode('Provenance '));
+    descriptionRow.body.append(element(doc, 'span', 'bghsa-missing', MISSING));
+    descriptionRow.body.append(doc.createTextNode('.'));
+  } else {
+    descriptionRow.body.textContent = advisory.descriptionOriginal
+      ? "The reporter's original text."
+      : 'Edited since it was reported.';
   }
+  panel.append(descriptionRow.row);
 
   return panel;
 }

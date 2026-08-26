@@ -129,24 +129,40 @@ function rowText(root, label) {
   throw new Error(`no panel row labelled ${label}`);
 }
 
-test('the chip row reads state, severity, CVE, and the derived flags', () => {
+/**
+ * @param {Element} root
+ * @param {string} label the chip's own text.
+ * @returns {string} the class attribute of the chip reading `label`.
+ */
+function chipClass(root, label) {
+  for (const node of root.querySelectorAll('.Box-header .Label')) {
+    if (text(node) === label) return String(node.getAttribute('class') ?? '');
+  }
+  throw new Error(`no chip reading ${label}`);
+}
+
+test('the chip row reads state, severity, and CVE', () => {
   assert.deepStrictEqual(texts(build(triage), '.Box-header .Label'), [
     'State: Triage',
     'Severity: High',
     'CVE: none',
-    'Never reviewed: no',
-    'New activity: no',
   ]);
 });
 
-test('the panel names the advisory, its reporter, and the report time', () => {
-  const built = build(triage);
-  assert.strictEqual(
-    rowText(built, 'Advisory'),
-    'GHSA-jmvx-2wfw-xfgj in git-utensils/Spoon-Knife'
+test('a signal that is not firing carries no chip', () => {
+  const state = derive.derive(triage);
+  assert.strictEqual(state.neverReviewed, false);
+  assert.strictEqual(state.newActivity, false);
+  const chips = texts(build(triage), '.Box-header .Label');
+  assert.deepStrictEqual(
+    chips.filter((label) => label === 'Never reviewed' || label === 'New activity'),
+    []
   );
-  assert.strictEqual(rowText(built, 'Reporter'), 'prakleumas reported 2026-08-25T22:15:18Z');
-  assert.strictEqual(rowText(built, 'Description'), "The reporter's original text.");
+});
+
+test('the panel reports whether the description is the original text', () => {
+  assert.strictEqual(rowText(build(triage), 'Description'), "The reporter's original text.");
+  assert.strictEqual(rowText(build(draft), 'Description'), 'Edited since it was reported.');
 });
 
 test('the panel sits in the main column, above the description Box, outside both live regions', () => {
@@ -183,82 +199,6 @@ test('injecting twice leaves one panel', () => {
   assert.strictEqual(doc.querySelectorAll('#bghsa-style').length, 1);
 });
 
-test('every comment carries the role GitHub badged its author with', () => {
-  assert.deepStrictEqual(texts(build(triage), 'li.bghsa-comment'), [
-    'samuelkarp Member trusted · 2026-08-25T22:16:30Z',
-    'samuelkarp Member trusted · 2026-08-25T22:17:05Z',
-    'prakleumas Author not trusted · 2026-08-25T22:17:47Z',
-  ]);
-});
-
-test("the fork's pull requests carry base branches and merge state", () => {
-  const built = build(triage);
-  assert.deepStrictEqual(texts(built, 'li.bghsa-pull'), [
-    '#2 Normalize drawer paths before opening (1.0) → release/1.0 (open)',
-    '#1 Normalize drawer paths before opening → main (open)',
-  ]);
-  assert.deepStrictEqual(
-    Array.from(built.querySelectorAll('li.bghsa-pull a')).map((link) =>
-      link.getAttribute('href')
-    ),
-    [
-      '/git-utensils/Spoon-Knife-ghsa-jmvx-2wfw-xfgj/pull/2',
-      '/git-utensils/Spoon-Knife-ghsa-jmvx-2wfw-xfgj/pull/1',
-    ]
-  );
-  assert.deepStrictEqual(texts(built, '.bghsa-branch'), [
-    'release/1.0: #2',
-    'main: #1',
-  ]);
-});
-
-test('both state comments are displayed, and the untrusted one is warned about', () => {
-  const built = build(triage);
-  const rows = Array.from(built.querySelectorAll('.Box-row')).filter(
-    (row) => text(row.querySelector('.bghsa-label')) === 'State comment'
-  );
-  assert.strictEqual(rows.length, 2);
-
-  const member = /** @type {Element} */ (rows[0]);
-  assert.strictEqual(
-    text(member.querySelector('.bghsa-state-author')),
-    'samuelkarp (Member) · 2026-08-25T22:17:05Z'
-  );
-  assert.deepStrictEqual(texts(member, 'li.bghsa-field'), [
-    'schema: 1.0',
-    'seq: 3',
-    'written by: samuelkarp',
-    'at: 2026-08-25T18:04:11Z',
-    'triage: awaiting reporter',
-    'triageSince: 2026-08-25T18:04:11Z',
-    'owners: samuelkarp',
-    'backports: release/1.0',
-    'embargo lifts: 2026-09-30',
-    'confirmed: title',
-  ]);
-  assert.deepStrictEqual(texts(member, '.bghsa-warning'), []);
-
-  const reporter = /** @type {Element} */ (rows[1]);
-  assert.strictEqual(
-    text(reporter.querySelector('.bghsa-state-author')),
-    'prakleumas (Author) · 2026-08-25T22:17:47Z'
-  );
-  assert.deepStrictEqual(texts(reporter, 'li.bghsa-field'), [
-    'schema: 1.0',
-    'seq: 7',
-    'written by: prakleumas',
-    'at: 2026-08-25T19:00:00Z',
-    'triage: evaluating',
-    'triageSince: 2026-08-25T19:00:00Z',
-    'owners: prakleumas',
-    'backports: none',
-    'confirmed: none',
-  ]);
-  assert.deepStrictEqual(texts(reporter, '.bghsa-warning'), [
-    'prakleumas carries no member or owner badge on this comment, so this state comment is not trusted.',
-  ]);
-});
-
 test('an advisory whose every displayed value reads carries no banner', () => {
   assert.deepStrictEqual(texts(build(triage), '.bghsa-banner'), []);
 });
@@ -269,9 +209,11 @@ test('a severity that cannot be read is shown as missing and raises the banner',
     'State: Draft',
     'Severity: missing',
     'CVE: none',
-    'Never reviewed: no',
-    'New activity: no',
   ]);
+  assert.strictEqual(
+    chipClass(built, 'Severity: missing'),
+    'Label Label--secondary bghsa-tone-attention bghsa-missing'
+  );
   assert.deepStrictEqual(texts(built, '.bghsa-banner'), [
     'Incomplete: this extension could not read severity.',
   ]);
@@ -280,36 +222,29 @@ test('a severity that cannot be read is shown as missing and raises the banner',
 test('a description whose provenance cannot be read is shown as missing', () => {
   const built = build({ ...draft, descriptionOriginal: null });
   assert.strictEqual(rowText(built, 'Description'), 'Provenance missing.');
+  assert.deepStrictEqual(texts(built, '.Box-row .bghsa-missing'), ['missing']);
   assert.deepStrictEqual(texts(built, '.bghsa-banner'), [
     'Incomplete: this extension could not read severity, description provenance.',
   ]);
 });
 
-test('a state comment that failed validation names the problem', () => {
-  assert.deepStrictEqual(texts(build(draft), '.Box-row .bghsa-warning'), [
-    'This state comment failed validation: owners is not an array of strings.',
+test('a pull request state that went unread raises the banner and a warning', () => {
+  const built = build(withUnreadPullState());
+  assert.deepStrictEqual(texts(built, '.bghsa-banner'), [
+    'Incomplete: this extension could not read pull request state.',
+  ]);
+  assert.deepStrictEqual(texts(built, '.bghsa-warning:not(.bghsa-banner)'), [
+    'A pull request named a state this extension does not read.',
   ]);
 });
 
-test('a draft with no private fork says so', () => {
-  const built = build(draft);
-  assert.strictEqual(rowText(built, 'Patches'), 'No private fork.');
-  assert.strictEqual(rowText(built, 'Description'), 'Edited since it was reported.');
-});
-
-test('a published advisory shows its assigned CVE and an empty thread', () => {
+test('a published advisory shows its assigned CVE and reads everything', () => {
   const built = build(published);
   assert.deepStrictEqual(texts(built, '.Box-header .Label'), [
     'State: Published',
     'Severity: Moderate',
     'CVE: CVE-2026-31984',
-    'Never reviewed: no',
-    'New activity: no',
   ]);
-  assert.strictEqual(rowText(built, 'CVE'), 'CVE-2026-31984 (assigned)');
-  assert.strictEqual(rowText(built, 'Reporter'), 'pieter-vosk reported 2026-04-07T18:05:12Z');
-  assert.strictEqual(rowText(built, 'Comments'), 'No comments.');
-  assert.strictEqual(rowText(built, 'Patches'), 'No private fork.');
   assert.deepStrictEqual(texts(built, '.bghsa-banner'), []);
   assert.deepStrictEqual(texts(built, '.bghsa-warning'), []);
 });
@@ -325,6 +260,10 @@ test('a document that is not an advisory detail page gets no panel', () => {
 test('the values the panel could not read are named once each', () => {
   assert.deepStrictEqual(panel.missingValues(draft, derive.derive(draft)), ['severity']);
   assert.deepStrictEqual(panel.missingValues(published, derive.derive(published)), []);
+  const unread = withUnreadPullState();
+  assert.deepStrictEqual(panel.missingValues(unread, derive.derive(unread)), [
+    'pull request state',
+  ]);
 });
 
 test('a panel no longer sitting at its anchor is put back there', () => {
@@ -365,7 +304,7 @@ test('advisory content swapped in after load gets a panel with no reload', () =>
   assert.strictEqual(triageDoc.querySelectorAll('#bghsa-detail-panel').length, 1);
   assert.deepStrictEqual(
     texts(/** @type {Element} */ (injected), '.Box-header .Label'),
-    ['State: Triage', 'Severity: High', 'CVE: none', 'Never reviewed: no', 'New activity: no']
+    ['State: Triage', 'Severity: High', 'CVE: none']
   );
   assert.strictEqual(panel.outOfPlace(triageDoc), false);
 });
