@@ -222,10 +222,11 @@ function nowStamp() {
 
 /**
  * How long an advisory has been waiting is measured from `triageSince`, and
- * the first write to an advisory is where that measurement starts. It starts
- * at the most recent member action the page carries, and at the report time
- * where no member has acted, so an advisory a maintainer has been working on
- * does not read as having arrived at the moment its triage value was set.
+ * the triage value an advisory carries for the first time is where that
+ * measurement starts. It starts at the most recent member action the page
+ * carries, and at the report time where no member has acted, so an advisory a
+ * maintainer has been working on does not read as having arrived at the moment
+ * its triage value was set.
  *
  * @param {ParsedDetail} advisory The advisory as the write's own fetch read it.
  * @returns {string | null}
@@ -239,23 +240,34 @@ function seedTriageSince(advisory) {
  * value, and leaves it as the merged state carried it when it does not. A
  * write that names `triageSince` itself is left alone.
  *
- * The first write to an advisory carries no state forward, and its
- * `triageSince` is `seed` rather than the write time. The write time stands in
- * where the page offered nothing to seed from.
+ * A write that gives an advisory a triage value where the state it builds on
+ * carries none stamps `seed`, whatever else has been written to that advisory.
+ * REQUIREMENTS.md section 6 measures a first triage value from the most recent
+ * maintainer action, and a maintainer who replied three weeks ago and saved an
+ * owner yesterday has been waiting three weeks. The write time stands in where
+ * the page offered nothing to seed from.
+ *
+ * A write that takes the triage value away takes the time with it. What
+ * `triageSince` measures is how long the advisory has stood in its triage
+ * value, and a snapshot with no triage value stands in none.
  *
  * @param {Record<string, unknown>} snapshot
  * @param {Record<string, unknown> | null} current
  * @param {Record<string, unknown>} changes
  * @param {string} at
- * @param {string | null} [seed] Where the first write on an advisory measures
- *   from.
+ * @param {string | null} seed Where a first triage value measures from, and
+ *   null where the page offered nothing to seed from.
  * @returns {void}
  */
-function stampTriageSince(snapshot, current, changes, at, seed = null) {
+function stampTriageSince(snapshot, current, changes, at, seed) {
   if (Object.hasOwn(changes, 'triageSince')) return;
   const before = current === null ? undefined : current['triage'];
   if (snapshot['triage'] === before) return;
-  snapshot['triageSince'] = current === null ? (seed ?? at) : at;
+  if (snapshot['triage'] === undefined) {
+    delete snapshot['triageSince'];
+    return;
+  }
+  snapshot['triageSince'] = before === undefined ? (seed ?? at) : at;
 }
 
 /**
@@ -369,6 +381,21 @@ async function writeState(options) {
         merged
       );
     }
+    // Before the holder gate, because a maintainer holding two state comments
+    // is told to delete one and can act on that. Reading the advisory again
+    // would find the same two, and the write model in REQUIREMENTS.md section 3
+    // puts one comment per maintainer on an advisory.
+    const own = ownStateComments(fresh.comments, viewer);
+    if (own.length > 1) {
+      return refused(
+        'ambiguous',
+        null,
+        `Nothing was written: ${viewer} has ${own.length} state comments on this advisory,` +
+          ' and this extension writes one. Delete the ones that do not belong.',
+        merged
+      );
+    }
+
     const expected = options.loadedHolder;
     if (expected !== undefined && !sameHolder(expected, holderOf(merged))) {
       const found = holderOf(merged).by;
@@ -396,17 +423,6 @@ async function writeState(options) {
         null,
         'Nothing was written: this advisory carries a snapshot this extension could not' +
           ' interpret, and superseding it takes a confirmation.',
-        merged
-      );
-    }
-
-    const own = ownStateComments(fresh.comments, viewer);
-    if (own.length > 1) {
-      return refused(
-        'ambiguous',
-        null,
-        `Nothing was written: ${viewer} has ${own.length} state comments on this advisory,` +
-          ' and this extension writes one. Delete the ones that do not belong.',
         merged
       );
     }

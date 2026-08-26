@@ -47,6 +47,15 @@ const OWN_ID = '282847';
 /** The comment the reporter wrote their own state comment in. */
 const OTHER_ID = '282848';
 
+/** The comment the draft fixture's own state comment sits in. */
+const DRAFT_COMMENT = 'advisory-comment-282849';
+
+/** The most recent member action the draft fixture carries. */
+const MEMBER_ACTION = '2026-08-25T22:20:26Z';
+
+/** A seed a unit test hands the stamp, far enough from `AT` to tell apart. */
+const SEED = '2026-08-05T09:30:00Z';
+
 /** What the fetch stand-in answers the page request with. */
 const PAGE_HTML = '<<the advisory page>>';
 
@@ -93,6 +102,28 @@ function postedBody(params) {
 
 /** GitHub answering with the comment the request wrote. @type {Answer} */
 const echo = (params) => ({ status: 200, html: renderStateComment(postedBody(params)) });
+
+/**
+ * GitHub answering with the comment the request wrote and putting it into the
+ * page the next fetch reads, which is where an edited comment stands from then
+ * on. Every fence in the comment moves, because GitHub renders the body once
+ * per responsive shape.
+ *
+ * @param {Document} page
+ * @param {string} elementId The comment the write edits.
+ * @returns {Answer}
+ */
+function landing(page, elementId) {
+  return (params) => {
+    const written = /```json\n([\s\S]*?)\n```/.exec(postedBody(params))?.[1];
+    if (written !== undefined) {
+      for (const fence of page.querySelectorAll(`#${elementId} .highlight-source-json pre`)) {
+        fence.textContent = written;
+      }
+    }
+    return echo(params);
+  };
+}
 
 /**
  * A stand-in for `fetch` that hands the page request one document and the
@@ -318,6 +349,27 @@ test('a maintainer with two state comments is not written for', async () => {
   assert.strictEqual(calls.length, 1, 'a comment request went out');
 });
 
+test('two state comments of one maintainer are named before the holder', async () => {
+  // The maintainer can delete a comment. They cannot reload their way out of
+  // holding two, so that is what the refusal has to say.
+  const page = triagePage();
+  const other = page.querySelector(`#advisory-comment-${OTHER_ID}`);
+  if (other === null) throw new Error('the fixture carries one state comment');
+  for (const link of other.querySelectorAll('a.author')) link.setAttribute('href', '/samuelkarp');
+
+  const { outcome, calls } = await run(page, {
+    loadedHolder: { commentId: '10101', by: 'samuelkarp' },
+  });
+  assert.ok(outcome.ok === false, 'a write went out on an advisory with two own comments');
+  assert.ok(outcome.reason === 'ambiguous', `the write was refused as ${outcome.reason}`);
+  assert.strictEqual(calls.length, 1, 'a comment request went out');
+  assert.strictEqual(
+    outcome.message,
+    'Nothing was written: samuelkarp has 2 state comments on this advisory, and this' +
+      ' extension writes one. Delete the ones that do not belong.'
+  );
+});
+
 test('a page that moved past the sequence the panel loaded refuses the write', async () => {
   for (const loadedSeq of [3, 6, 8]) {
     const { outcome, calls } = await run(triagePage(), { loadedSeq });
@@ -500,6 +552,52 @@ test('a page offering nothing to measure from falls back to the write time', () 
   const snapshot = { triage: 'evaluating' };
   state.stampTriageSince(snapshot, null, {}, AT, null);
   assert.strictEqual(snapshot['triageSince'], AT);
+});
+
+test('clearing the triage value takes the time it was set with it', async () => {
+  const { outcome } = await run(triagePage(), { changes: { triage: null } });
+  assert.ok(outcome.ok === true, `the write failed: ${outcome.message}`);
+  const snapshot = /** @type {Record<string, unknown>} */ (outcome.snapshot);
+  assert.ok(!Object.hasOwn(snapshot, 'triage'), 'the snapshot still carries a triage value');
+  assert.ok(
+    !Object.hasOwn(snapshot, 'triageSince'),
+    'the snapshot carries a time for a triage value it does not have'
+  );
+  assert.strictEqual(
+    schema.readSnapshot(JSON.stringify(snapshot)).valid,
+    true,
+    'the snapshot this write built does not pass validation'
+  );
+});
+
+test('a triage value set after a write that set none measures from the member action', async () => {
+  const page = fixture('draft.html');
+  const first = await run(
+    page,
+    { ref: DRAFT_REF, loadedSeq: 2, confirmed: true, changes: { owners: ['samuelkarp'] } },
+    landing(page, DRAFT_COMMENT)
+  );
+  assert.ok(first.outcome.ok === true, `the first write failed: ${first.outcome.message}`);
+  const opening = /** @type {Record<string, unknown>} */ (first.outcome.snapshot);
+  assert.ok(!Object.hasOwn(opening, 'triage'), 'the first write set a triage value');
+  assert.ok(!Object.hasOwn(opening, 'triageSince'), 'a write with no triage value timed one');
+
+  const second = await run(page, {
+    ref: DRAFT_REF,
+    loadedSeq: 3,
+    changes: { triage: 'awaiting reporter' },
+  });
+  assert.ok(second.outcome.ok === true, `the second write failed: ${second.outcome.message}`);
+  assert.deepStrictEqual(
+    second.outcome.merged?.state?.['owners'],
+    ['samuelkarp'],
+    'the second write did not build on the first'
+  );
+  const snapshot = /** @type {Record<string, unknown>} */ (second.outcome.snapshot);
+  assert.ok(
+    snapshot['triageSince'] === MEMBER_ACTION,
+    `the first triage value was timed from ${String(snapshot['triageSince'])}`
+  );
 });
 
 test('a write that names triageSince itself keeps the value it names', () => {
