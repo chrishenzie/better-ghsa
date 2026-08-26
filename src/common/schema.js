@@ -56,6 +56,15 @@ const MAX_SEQ = Number.MAX_SAFE_INTEGER - 1;
 const FINGERPRINT_LENGTH = 12;
 
 /**
+ * The shape a fingerprint takes. A string of another length, or one carrying a
+ * character no digest produces, is no fingerprint this reader wrote, and it
+ * cannot match the value on the page. Reading it as a fingerprint would report
+ * the value as changed and name a maintainer for a change nobody made, so the
+ * validator rejects it and the snapshot carrying it is excluded from state.
+ */
+const FINGERPRINT_PATTERN = new RegExp(`^[0-9a-f]{${FINGERPRINT_LENGTH}}$`);
+
+/**
  * @typedef {object} SnapshotReport
  * @property {string} raw The JSON source recovered from the fenced block.
  * @property {unknown} parsed The parsed payload, or null when it did not parse.
@@ -153,6 +162,10 @@ function validateSnapshot(payload) {
         }
         for (const key of ['by', 'at', 'fp']) {
           requireString(record, key, problems, `confirmed.${track}`);
+        }
+        const fp = record['fp'];
+        if (typeof fp === 'string' && !FINGERPRINT_PATTERN.test(fp)) {
+          problems.push(`confirmed.${track}.fp is not a fingerprint`);
         }
       }
     }
@@ -317,16 +330,13 @@ function scoringFingerprint(severity, vector) {
 
 globalThis.bghsa.schema = {
   SCHEMA_VERSION,
-  SCHEMA_MAJOR,
-  VERSION_PATTERN,
   STATE_COMMENT_MARKER,
   STATE_COMMENT_SUMMARY,
   TRIAGE_VALUES,
   CLOSURE_REASONS,
   MAX_SEQ,
-  FINGERPRINT_LENGTH,
+  FINGERPRINT_PATTERN,
   isPlainObject,
-  validateSnapshot,
   readSnapshot,
   normalize,
   fingerprint,

@@ -120,12 +120,36 @@ test('a payload naming no readable version fails validation and is not a version
   }
 });
 
-test('a confirmation record with a non-string fingerprint fails validation', () => {
+test('a confirmation fingerprint is validated on its shape, and an absent one passes', () => {
+  /** @type {[string, string | null, string[]][]} */
+  const cases = [
+    ['a number', '12', ['confirmed.title.fp is not a string']],
+    ['too few hex characters', '"3f9a1c2e8b4"', ['confirmed.title.fp is not a fingerprint']],
+    ['too many', '"3f9a1c2e8b4d0"', ['confirmed.title.fp is not a fingerprint']],
+    ['a character that is not hex', '"3f9a1c2e8b4z"', ['confirmed.title.fp is not a fingerprint']],
+    ['upper case hex', '"3F9A1C2E8B4D"', ['confirmed.title.fp is not a fingerprint']],
+    ['the empty string', '""', ['confirmed.title.fp is not a fingerprint']],
+    ['no fingerprint at all', null, []],
+  ];
+  for (const [name, fp, problems] of cases) {
+    const record =
+      fp === null ? '{"by":"dmcgowan","at":"x"}' : `{"by":"dmcgowan","at":"x","fp":${fp}}`;
+    const report = schema.readSnapshot(
+      `{"betterGhsa":"1.0","seq":1,"confirmed":{"title":${record}}}`
+    );
+    assert.deepStrictEqual(report.problems, problems, `${name} reported the wrong problem`);
+    assert.strictEqual(report.valid, problems.length === 0, `${name} was judged wrong`);
+  }
+});
+
+test('a fingerprint this writer produces passes validation', async () => {
+  const fp = await schema.fingerprint('the advisory title');
+  assert.match(fp, schema.FINGERPRINT_PATTERN);
   const report = schema.readSnapshot(
-    '{"betterGhsa":"1.0","seq":1,"confirmed":{"title":{"by":"dmcgowan","at":"x","fp":12}}}'
+    `{"betterGhsa":"1.0","seq":1,"confirmed":{"title":{"by":"dmcgowan","fp":"${fp}"}}}`
   );
-  assert.strictEqual(report.valid, false);
-  assert.deepStrictEqual(report.problems, ['confirmed.title.fp is not a string']);
+  assert.deepStrictEqual(report.problems, []);
+  assert.strictEqual(report.valid, true);
 });
 
 test('normalization settles line endings, trailing space, outer blanks, and NFC', () => {
