@@ -13,6 +13,7 @@ const derive = require('../src/common/derive.js');
 const write = require('../src/common/write.js');
 const tracking = require('../src/detail/tracking.js');
 const edit = require('../src/detail/edit.js');
+const members = require('../src/common/members.js');
 const panel = require('../src/detail/panel.js');
 
 /** The write time every save below stamps, so the snapshot it writes is exact. */
@@ -180,6 +181,7 @@ function forget() {
   edit.opened.clear();
   edit.drafts.clear();
   edit.saving.clear();
+  members.clear();
 }
 
 /**
@@ -722,18 +724,53 @@ test('a schema this extension does not read leaves the panel read-only', async (
   assert.strictEqual(text(control(editor, '.bghsa-read-only')), edit.READ_ONLY_MESSAGE);
 });
 
-test('the owner candidates are the collaborators and the members the page shows', async () => {
+/**
+ * @param {Element} editor
+ * @returns {(string | null)[]} the logins the owner control offers.
+ */
+function candidates(editor) {
+  return Array.from(editor.querySelectorAll('datalist option')).map((option) =>
+    option.getAttribute('value')
+  );
+}
+
+test('the owner candidates are the members, and the reporter is not one', async () => {
   forget();
   const page = fixture('triage-thread.html');
   const { editor, context } = await editorFor(page);
   assert.deepStrictEqual(context.advisory.collaborators, ['prakleumas']);
+  assert.strictEqual(context.advisory.reporter, 'prakleumas');
   assert.deepStrictEqual(context.derived.members, ['samuelkarp']);
-  assert.deepStrictEqual(
-    Array.from(editor.querySelectorAll('datalist option')).map((option) =>
-      option.getAttribute('value')
-    ),
-    ['prakleumas', 'samuelkarp']
-  );
+  assert.deepStrictEqual(candidates(editor), ['samuelkarp']);
+});
+
+test('a member seen on another advisory is offered on this one', async () => {
+  forget();
+  const other = fixture('draft.html');
+  for (const link of other.querySelectorAll('div.timeline-comment-group a.author')) {
+    link.setAttribute('href', '/dmcgowan');
+  }
+  const drawn = await panel.render(other);
+  assert.ok(drawn !== null, 'the draft fixture offered no anchor');
+  assert.deepStrictEqual(members.known(), ['dmcgowan'], 'the other advisory taught nothing');
+
+  const { editor } = await editorFor(fixture('triage-thread.html'));
+  assert.deepStrictEqual(candidates(editor), ['samuelkarp', 'dmcgowan']);
+  forget();
+});
+
+test('an advisory with no member seen offers the collaborators, not the reporter', async () => {
+  forget();
+  const page = fixture('published-containerd.html');
+  const { editor, context } = await editorFor(page);
+  assert.deepStrictEqual(context.derived.members, [], 'the fixture shows a member badge');
+  assert.strictEqual(context.advisory.reporter, 'pieter-vosk');
+  assert.deepStrictEqual(candidates(editor), [
+    'vanBruggen',
+    'devon-quist',
+    'yaroslavk',
+    'rowan-hale-ext',
+  ]);
 });
 
 test('a typed login matching no candidate is taken and flagged', async () => {

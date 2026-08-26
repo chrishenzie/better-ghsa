@@ -10,6 +10,7 @@ if (typeof require === 'function') {
   require('../common/merge.js');
   require('../common/parse-detail.js');
   require('../common/derive.js');
+  require('../common/members.js');
   require('./tracking.js');
   require('./comments.js');
   require('./preserve.js');
@@ -581,6 +582,10 @@ async function render(doc) {
   const fingerprints = await globalThis.bghsa.tracking.fingerprints(advisory);
   const tracking = globalThis.bghsa.tracking.read(merged.state, fingerprints);
   const derived = globalThis.bghsa.derive.derive(advisory);
+  // A member badge is what says a login is an org member, and this page is one
+  // place it appears. Holding the logins is synchronous, so the panel draws
+  // with the members this advisory shows however slow storage is.
+  globalThis.bghsa.members.remember(derived.members);
   const placed = injectPanel(doc, advisory, derived, tracking, {
     advisory,
     derived,
@@ -593,6 +598,12 @@ async function render(doc) {
   // panel no anchor still gets them.
   ensureStyle(doc);
   globalThis.bghsa.comments.markComments(doc, merged);
+  // The stored logins reach the panel through a pass of its own, because a
+  // member seen on another advisory is worth drawing again and is not worth
+  // holding this pass up for.
+  void globalThis.bghsa.members.sync().then((grew) => {
+    if (grew) void passFor(doc)();
+  });
   return placed;
 }
 

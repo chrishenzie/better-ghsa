@@ -10,6 +10,7 @@ if (typeof require === 'function') {
   require('../common/merge.js');
   require('../common/parse-detail.js');
   require('../common/derive.js');
+  require('../common/members.js');
   require('./tracking.js');
   require('./state.js');
 }
@@ -1072,20 +1073,33 @@ function textControl(doc, className, type, value, placeholder) {
 }
 
 /**
+ * The logins the panel offers as owners: the org members this page shows,
+ * followed by the members this extension has seen on the advisories it read
+ * before. REQUIREMENTS.md section 6 has owners be org members, and a member
+ * badge is what says a login is one. A login outside the set is accepted when
+ * it is typed, and is flagged where it is shown.
+ *
+ * Where no member has been seen anywhere, the advisory's collaborators other
+ * than its reporter stand in, so the control is usable before anything has
+ * been observed. GitHub counts the reporter as a collaborator on the advisory
+ * they reported, which is why the reporter is left out of that fallback.
+ *
  * @param {EditorContext} context
- * @returns {string[]} the logins the panel offers as owners: the advisory's
- *   collaborators and the members this page shows. A login outside both is
- *   accepted when it is typed, and is flagged where it is shown.
+ * @returns {string[]}
  */
 function ownerCandidates(context) {
   /** @type {string[]} */
   const candidates = [];
-  for (const login of [...context.advisory.collaborators, ...context.derived.members]) {
+  for (const login of [...context.derived.members, ...globalThis.bghsa.members.known()]) {
     if (!candidates.some((known) => known.toLowerCase() === login.toLowerCase())) {
       candidates.push(login);
     }
   }
-  return candidates;
+  if (candidates.length > 0) return candidates;
+  const reporter = context.advisory.reporter;
+  return context.advisory.collaborators.filter(
+    (login) => reporter === null || login.toLowerCase() !== reporter.toLowerCase()
+  );
 }
 
 /**

@@ -17,6 +17,7 @@
         "src/common/merge.js",
         "src/common/parse-detail.js",
         "src/common/derive.js",
+        "src/common/members.js",
         "src/common/write.js",
         "src/detail/tracking.js",
         "src/detail/comments.js",
