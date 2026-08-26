@@ -174,7 +174,10 @@ and progress counts preparation.
 **CVE.** Whether a CVE has been requested and whether one has been assigned,
 from the notes on the detail page and the `cve_id` field.
 
-**Never reviewed.** No org member has commented on or acted on the advisory.
+**Never reviewed.** No org member has commented on or acted on the advisory. An
+advisory in `draft` or `published` has been reviewed, because a maintainer moved
+it there. A `closed` advisory has not, on its own, been reviewed, because the
+reporter can withdraw a report.
 
 **New activity.** The most recent comment from a non-member is newer than the
 most recent member comment or member action. It clears when a maintainer

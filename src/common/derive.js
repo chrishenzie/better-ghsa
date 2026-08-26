@@ -40,6 +40,19 @@ function memberLogins(advisory) {
 }
 
 /**
+ * Whether the advisory's state carries a review. A `draft` or `published`
+ * advisory is there because a maintainer moved it there. A `closed` advisory
+ * can have been withdrawn by its reporter, so its state carries nothing.
+ *
+ * @param {import('./parse-detail.js').ParsedDetail} advisory
+ * @returns {boolean}
+ */
+function reviewedByState(advisory) {
+  const state = advisory.state === null ? null : advisory.state.toLowerCase();
+  return state === 'draft' || state === 'published';
+}
+
+/**
  * @typedef {object} CveState
  * @property {string | null} id The assigned CVE.
  * @property {boolean} assigned
@@ -142,7 +155,7 @@ function patchState(advisory) {
  * @typedef {object} DerivedState
  * @property {string[]} members The logins the page shows to be org members.
  * @property {boolean} neverReviewed No member has commented on or acted on the
- *   advisory.
+ *   advisory, and its state does not carry a review.
  * @property {boolean} newActivity The newest comment from a non-member is newer
  *   than the newest member comment or member action.
  * @property {string | null} lastMemberActivityAt
@@ -178,7 +191,7 @@ function derive(advisory) {
 
   return {
     members,
-    neverReviewed: memberActivity.length === 0,
+    neverReviewed: memberActivity.length === 0 && !reviewedByState(advisory),
     newActivity:
       lastNonMemberCommentAt !== null &&
       (lastMemberActivityAt === null || lastNonMemberCommentAt > lastMemberActivityAt),

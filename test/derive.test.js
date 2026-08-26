@@ -48,8 +48,30 @@ test('a reporter comment newer than every member action is new activity', () => 
 test('an advisory with no comment at all has no visible member', () => {
   const state = derive.derive(advisory('published-containerd.html'));
   assert.deepStrictEqual(state.members, []);
-  // The never-reviewed value on this fixture is unsettled.
   assert.strictEqual(state.newActivity, false);
+});
+
+test('a published advisory is reviewed with no member comment on it', () => {
+  const state = derive.derive(advisory('published-containerd.html'));
+  assert.deepStrictEqual(state.members, []);
+  assert.strictEqual(state.neverReviewed, false);
+});
+
+test('a draft advisory is reviewed', () => {
+  const parsed = advisory('draft.html');
+  assert.strictEqual(parsed.state, 'Draft');
+  const bare = { ...parsed, comments: [], timeline: [] };
+  const state = derive.derive(bare);
+  assert.deepStrictEqual(state.members, []);
+  assert.strictEqual(state.neverReviewed, false);
+});
+
+test('a closed advisory with no member activity is never reviewed', () => {
+  const parsed = advisory('published-containerd.html');
+  const closed = { ...parsed, state: 'Closed' };
+  const state = derive.derive(closed);
+  assert.deepStrictEqual(state.members, []);
+  assert.strictEqual(state.neverReviewed, true);
 });
 
 test('a CVE named on the advisory reads as assigned', () => {
