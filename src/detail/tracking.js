@@ -38,8 +38,9 @@ if (typeof require === 'function') {
  * its track cannot be judged.
  *
  * The scoring halves are labelled inside the fingerprinted source, so an unset
- * severity and an unset vector are a scoring state like any other and always
- * fingerprint to something.
+ * severity and an unset vector are a scoring state like any other. A form
+ * field the parser did not find is not a scoring state: nothing on the page
+ * says what the score is, so the scoring fingerprint is null there.
  *
  * @typedef {object} Fingerprints
  * @property {string | null} title
@@ -161,7 +162,9 @@ async function fingerprints(advisory) {
   const [title, description, scoring] = await Promise.all([
     advisory.title === null ? null : schema.fingerprint(advisory.title),
     advisory.description === null ? null : schema.fingerprint(advisory.description),
-    schema.scoringFingerprint(advisory.severityField, advisory.cvssV3),
+    advisory.severityFieldPresent && advisory.cvssV3Present
+      ? schema.scoringFingerprint(advisory.severityField, advisory.cvssV3)
+      : null,
   ]);
   return { title, description, scoring };
 }

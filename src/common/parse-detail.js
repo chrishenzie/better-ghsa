@@ -144,23 +144,37 @@ function parseViewer(root) {
 }
 
 /**
+ * @typedef {object} MetadataField
+ * @property {boolean} present Whether the metadata form carries the field.
+ * @property {string | null} value The source value, and null where the field is
+ *   there and holds nothing.
+ */
+
+/**
  * The source value of one advisory metadata form field. A `select` reads from
  * the option the server marked selected, which is the stored value whether or
  * not the maintainer has since touched the control.
  *
+ * A field the form does not carry is a value this extension could not read. A
+ * field that is there and holds nothing is a value the advisory does not set.
+ * Both leave `value` null, and `present` is what tells them apart.
+ *
  * @param {Document} root
  * @param {string} name The field name inside `repository_advisory[...]`.
- * @returns {string | null}
+ * @returns {MetadataField}
  */
 function metadataField(root, name) {
   const field = root.querySelector(`[name="repository_advisory[${name}]"]`);
-  if (field === null) return null;
+  if (field === null) return { present: false, value: null };
   if (field.tagName === 'SELECT') {
     const selected = field.querySelector('option[selected]');
-    return selected === null ? null : orNull(selected.getAttribute('value') ?? '');
+    return {
+      present: true,
+      value: selected === null ? null : orNull(selected.getAttribute('value') ?? ''),
+    };
   }
-  if (field.tagName === 'TEXTAREA') return orNull(field.textContent ?? '');
-  return orNull(field.getAttribute('value') ?? '');
+  if (field.tagName === 'TEXTAREA') return { present: true, value: orNull(field.textContent ?? '') };
+  return { present: true, value: orNull(field.getAttribute('value') ?? '') };
 }
 
 /**
@@ -439,7 +453,14 @@ function parseFork(root) {
  * @property {string | null} description Source markdown from the metadata form.
  * @property {string | null} severityField The stored severity selection, which
  *   is `cvss_v3` or `cvss_v4` when the severity comes from a vector.
+ * @property {boolean} severityFieldPresent Whether the metadata form carries
+ *   the severity selection. A form this extension cannot find the field in
+ *   states no severity, and the scoring confirmation cannot be judged against
+ *   a value that was not read.
  * @property {string | null} cvssV3
+ * @property {boolean} cvssV3Present Whether the metadata form carries the CVSS
+ *   v3 vector field, which the scoring confirmation binds to alongside the
+ *   severity selection.
  * @property {string | null} cveId
  * @property {string | null} cveSelection `requesting`, `existing`, or `not_applicable`.
  * @property {boolean | null} descriptionOriginal Whether the description on the
@@ -480,6 +501,9 @@ function parseDetail(root) {
     if (login !== null && !collaborators.includes(login)) collaborators.push(login);
   }
 
+  const severityField = metadataField(root, 'severity');
+  const cvssV3 = metadataField(root, 'cvss_v3');
+
   return {
     ref: parseRef(root),
     viewer: parseViewer(root),
@@ -494,12 +518,14 @@ function parseDetail(root) {
     severityLabel: severity === null ? null : orNull(collapse(severity.textContent)),
     reportedAt: datetimeOf(descriptionHeader),
     reporter: descriptionHeader === null ? null : authorIn(descriptionHeader),
-    title: metadataField(root, 'title'),
-    description: metadataField(root, 'description'),
-    severityField: metadataField(root, 'severity'),
-    cvssV3: metadataField(root, 'cvss_v3'),
-    cveId: metadataField(root, 'cve_id'),
-    cveSelection: metadataField(root, 'cve_selection'),
+    title: metadataField(root, 'title').value,
+    description: metadataField(root, 'description').value,
+    severityField: severityField.value,
+    severityFieldPresent: severityField.present,
+    cvssV3: cvssV3.value,
+    cvssV3Present: cvssV3.present,
+    cveId: metadataField(root, 'cve_id').value,
+    cveSelection: metadataField(root, 'cve_selection').value,
     descriptionOriginal: history === null ? null : revision === null,
     descriptionRevision:
       revision === null

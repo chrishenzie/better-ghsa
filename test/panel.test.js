@@ -10,6 +10,7 @@ const parse = require('../src/common/parse-detail.js');
 const derive = require('../src/common/derive.js');
 const merge = require('../src/common/merge.js');
 const schema = require('../src/common/schema.js');
+const dom = require('../src/common/dom.js');
 const panel = require('../src/detail/panel.js');
 const tracking = require('../src/detail/tracking.js');
 const preserve = require('../src/detail/preserve.js');
@@ -197,6 +198,26 @@ function rowLabels(root) {
   return texts(root, '.Box-row .bghsa-label');
 }
 
+/**
+ * The advisory the triage fixture reads to with one metadata field renamed,
+ * which is what a GitHub change to the form looks like to the parser.
+ *
+ * @param {string} name The field name inside `repository_advisory[...]`.
+ * @returns {import('../src/common/parse-detail.js').ParsedDetail}
+ */
+function withRenamedField(name) {
+  const field = triageDoc.querySelector(`[name="repository_advisory[${name}]"]`);
+  if (field === null) throw new Error(`the triage fixture carries no ${name} field`);
+  field.setAttribute('name', `repository_advisory[${name}-renamed]`);
+  try {
+    const parsed = parse.parseDetail(triageDoc);
+    if (parsed === null) throw new Error('the triage fixture stopped parsing');
+    return parsed;
+  } finally {
+    field.setAttribute('name', `repository_advisory[${name}]`);
+  }
+}
+
 test('the chip row reads state and severity', () => {
   assert.deepStrictEqual(texts(build(triage), '.Box-header .Label'), [
     'State: Triage',
@@ -318,6 +339,52 @@ test('a confirmation whose current value went unread is not checked', async () =
         ' could not be read.',
     `the note reads ${title.note}`
   );
+});
+
+test('a scoring source the form does not carry reads as unread, not as drift', async () => {
+  const unread = withRenamedField('severity');
+  assert.strictEqual(unread.severityFieldPresent, false);
+  assert.strictEqual(unread.cvssV3Present, true);
+
+  const built = await buildWith(unread, {
+    confirmed: {
+      scoring: {
+        by: 'dmcgowan',
+        at: '2026-08-21T14:02:00Z',
+        fp: await schema.scoringFingerprint(triage.severityField, triage.cvssV3),
+      },
+    },
+  });
+  const scoring = confirmation(built, 'Severity and CVSS vector');
+  assert.ok(scoring.chip === 'Not checked', `the scoring chip reads ${scoring.chip}`);
+  assert.ok(
+    scoring.classes === 'Label Label--secondary bghsa-tone-attention',
+    `the scoring chip reads ${scoring.classes}`
+  );
+  assert.ok(
+    scoring.note ===
+      'dmcgowan confirmed a value on 2026-08-21 14:02 UTC. The value on the page' +
+        ' could not be read.',
+    `the note reads ${scoring.note}`
+  );
+  assert.deepStrictEqual(texts(built, '.bghsa-banner'), [
+    'Incomplete: this extension could not read severity selection.',
+  ]);
+});
+
+test('a CVSS vector field the form does not carry raises the banner', async () => {
+  const unread = withRenamedField('cvss_v3');
+  assert.strictEqual(unread.cvssV3Present, false);
+  assert.deepStrictEqual(panel.missingValues(unread, derive.derive(unread)), ['CVSS vector']);
+  assert.strictEqual(
+    (await tracking.fingerprints(unread)).scoring,
+    null,
+    'a vector that was not read still fingerprinted'
+  );
+  const built = build(unread);
+  assert.deepStrictEqual(texts(built, '.bghsa-banner'), [
+    'Incomplete: this extension could not read CVSS vector.',
+  ]);
 });
 
 test('the stored tracks the triage advisory carries are shown', async () => {
@@ -507,6 +574,171 @@ test('advisory content swapped in after load gets a panel with no reload', async
     ['State: Triage', 'Severity: High']
   );
   assert.strictEqual(panel.outOfPlace(triageDoc), false);
+});
+
+/**
+ * @param {number} ms
+ * @returns {Promise<void>}
+ */
+function delay(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+/**
+ * Runs the event loop until `ready` holds, or until the wait runs out, so an
+ * assertion made afterwards reads a settled document.
+ *
+ * @param {() => boolean} ready
+ * @returns {Promise<void>}
+ */
+async function until(ready) {
+  const deadline = Date.now() + 2000;
+  while (!ready() && Date.now() < deadline) await delay(5);
+}
+
+/**
+ * @param {string} suffix The end of the region's `data-url`.
+ * @returns {Element} the live region the triage fixture carries under it.
+ */
+function region(suffix) {
+  const found = triageDoc.querySelector(`div.js-socket-channel[data-url$="${suffix}"]`);
+  if (found === null) throw new Error(`the triage fixture carries no ${suffix} region`);
+  return found;
+}
+
+/**
+ * @returns {number} how many snapshot chips the document carries.
+ */
+function chipCount() {
+  return triageDoc.querySelectorAll(`[${parse.EXTENSION_CHIP_ATTRIBUTE}]`).length;
+}
+
+/**
+ * A copy of `source` as GitHub would send it: the extension's chips are not in
+ * the markup GitHub renders.
+ *
+ * @param {Element} source
+ * @returns {Element}
+ */
+function refreshedCopy(source) {
+  const copy = /** @type {Element} */ (source.cloneNode(true));
+  for (const chip of copy.querySelectorAll(`[${parse.EXTENSION_CHIP_ATTRIBUTE}]`)) chip.remove();
+  return copy;
+}
+
+test('a live region whose content is replaced marks its snapshots again', async () => {
+  reset(triageDoc);
+  const timeline = region('timeline');
+  const refreshed = refreshedCopy(timeline);
+  await panel.render(triageDoc);
+  const marked = chipCount();
+  assert.ok(marked > 0, 'the triage fixture marked no snapshot');
+
+  const observer = panel.observe(triageDoc);
+  assert.ok(observer !== null, 'the document offered no observer');
+  try {
+    timeline.replaceWith(refreshed);
+    assert.strictEqual(chipCount(), 0, 'the refreshed region arrived carrying chips');
+    assert.strictEqual(panel.outOfPlace(triageDoc), false, 'the refresh moved the panel');
+    await until(() => chipCount() > 0);
+    assert.strictEqual(chipCount(), marked);
+  } finally {
+    observer?.disconnect();
+  }
+});
+
+test('a value replaced in a live region reaches the panel', async () => {
+  reset(triageDoc);
+  const title = region('title');
+  const refreshed = refreshedCopy(title);
+  const severity = refreshed.querySelector('.Label--large');
+  if (severity === null) throw new Error('the title region carries no severity label');
+  severity.setAttribute('title', 'Severity: Critical');
+  severity.textContent = 'Critical';
+
+  const injected = await panel.render(triageDoc);
+  assert.ok(injected !== null, 'render placed no panel');
+  const chips = () => texts(/** @type {Element} */ (triageDoc.getElementById(panel.PANEL_ID)), '.Box-header .Label');
+  assert.deepStrictEqual(chips(), ['State: Triage', 'Severity: High']);
+
+  const observer = panel.observe(triageDoc);
+  try {
+    title.replaceWith(refreshed);
+    await until(() => chips().includes('Severity: Critical'));
+    assert.deepStrictEqual(chips(), ['State: Triage', 'Severity: Critical']);
+    assert.strictEqual(triageDoc.querySelectorAll(`#${panel.PANEL_ID}`).length, 1);
+  } finally {
+    observer?.disconnect();
+    refreshed.replaceWith(title);
+  }
+});
+
+test("the extension's own writing schedules no pass", async () => {
+  reset(triageDoc);
+  const readAdvisory = tracking.readAdvisory;
+  let passes = 0;
+  globalThis.bghsa.tracking.readAdvisory = (advisory, merged) => {
+    passes += 1;
+    return readAdvisory(advisory, merged);
+  };
+  const observer = panel.observe(triageDoc);
+  try {
+    await panel.render(triageDoc);
+    assert.strictEqual(passes, 1);
+    await delay(dom.RENDER_DELAY_MS + 50);
+    assert.strictEqual(passes, 1, `the extension's own writing ran ${passes - 1} more passes`);
+    assert.strictEqual(triageDoc.querySelectorAll(`#${panel.PANEL_ID}`).length, 1);
+  } finally {
+    observer?.disconnect();
+    globalThis.bghsa.tracking.readAdvisory = readAdvisory;
+  }
+});
+
+test('the observer runs its passes through the loop it is given', async () => {
+  const doc = page();
+  let passes = 0;
+  const observer = panel.observe(doc, async () => {
+    passes += 1;
+  });
+  assert.ok(observer !== null, 'the document offered no observer');
+  try {
+    doc.body?.append(doc.createElement('div'));
+    await until(() => passes > 0);
+    assert.strictEqual(passes, 1);
+  } finally {
+    observer?.disconnect();
+  }
+});
+
+test('a pass reads the document alone, and a request during one folds into one more', async () => {
+  reset(triageDoc);
+  const readAdvisory = tracking.readAdvisory;
+  let reading = 0;
+  let overlaps = 0;
+  let passes = 0;
+  globalThis.bghsa.tracking.readAdvisory = async (advisory, merged) => {
+    passes += 1;
+    reading += 1;
+    if (reading > 1) overlaps += 1;
+    await delay(5);
+    const view = await readAdvisory(advisory, merged);
+    reading -= 1;
+    return view;
+  };
+  try {
+    const pass = panel.renderLoop(triageDoc);
+    await Promise.all([pass(), pass(), pass()]);
+    await until(() => reading === 0 && passes >= 2);
+    assert.strictEqual(overlaps, 0, 'two passes read the document together');
+    assert.strictEqual(passes, 2, `three requests ran ${passes} passes`);
+    assert.strictEqual(triageDoc.querySelectorAll(`#${panel.PANEL_ID}`).length, 1);
+    assert.strictEqual(triageDoc.querySelectorAll(`#${panel.STYLE_ID}`).length, 1);
+    assert.strictEqual(chipCount(), 1);
+  } finally {
+    globalThis.bghsa.tracking.readAdvisory = readAdvisory;
+  }
 });
 
 /** The advisory the fixtures come from, which is on the allowlist. */

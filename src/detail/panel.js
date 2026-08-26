@@ -66,10 +66,14 @@ function missingValues(advisory, derived) {
   if (advisory.ghsaId === null) missing.push('advisory id');
   if (advisory.state === null) missing.push('state');
   if (advisory.severity === null) missing.push('severity');
-  // The confirmations bind to these two, so a track cannot be judged without
-  // them.
+  // The confirmations bind to these, so a track cannot be judged without them.
+  // The scoring sources are named by whether the form carries them: a severity
+  // nobody has set and a vector nobody has filled in are a scoring state, and
+  // a field this extension cannot find is a value it did not read.
   if (advisory.title === null) missing.push('advisory title');
   if (advisory.description === null) missing.push('advisory description');
+  if (!advisory.severityFieldPresent) missing.push('severity selection');
+  if (!advisory.cvssV3Present) missing.push('CVSS vector');
   if (advisory.reporter === null) missing.push('reporter');
   if (advisory.reportedAt === null) missing.push('report time');
   if (advisory.descriptionOriginal === null) missing.push('description provenance');
@@ -581,44 +585,77 @@ async function render(doc) {
 }
 
 /**
- * Watches for GitHub replacing the subtree the panel sits in and places the
- * panel again when the sentinel is gone or has been left behind.
- *
- * The target is the document element. `#repo-content-turbo-frame` is the
- * subtree GitHub swaps when a link is followed with no document load, and the
- * document element contains it, so a swap of the frame's contents and a swap
- * of the frame element itself are both seen. A content script runs once per
- * document, so this observer is also what puts the panel on an advisory
- * reached from the advisory list without a reload.
- *
- * Each batch of mutations schedules at most one pass, and a pass that finds
- * the panel in place reads two elements and stops.
- *
- * @param {Document} doc
- * @returns {MutationObserver | null}
+ * @returns {string} what the nodes the extension owns match: the panel, the
+ *   stylesheet, and the chips it puts on comments.
  */
-function observe(doc) {
-  const target = doc.documentElement ?? doc.body;
-  if (target === null) return null;
-  let scheduled = false;
-  const observer = new MutationObserver(() => {
-    if (scheduled) return;
-    scheduled = true;
-    setTimeout(() => {
-      scheduled = false;
-      if (outOfPlace(doc)) void render(doc);
-    }, 0);
-  });
-  observer.observe(target, { childList: true, subtree: true });
-  return observer;
+function ownedSelector() {
+  const attribute = globalThis.bghsa.parseDetail.EXTENSION_CHIP_ATTRIBUTE;
+  return `#${PANEL_ID}, #${STYLE_ID}, [${attribute}]`;
 }
 
 /**
- * @returns {void} renders the panel into this page and keeps it there.
+ * A render loop for one document, running one pass at a time. A pass is
+ * asynchronous because a confirmation is judged against a digest, and two
+ * running together would each read the document and then write the panel, so
+ * the one that finished last would put back what it read first. A request
+ * arriving while a pass runs takes a pass of its own after it, because the
+ * document may have changed while that pass was reading, and further requests
+ * during the same pass fold into that one.
+ *
+ * @param {Document} doc
+ * @returns {() => Promise<void>}
+ */
+function renderLoop(doc) {
+  let running = false;
+  let again = false;
+  return async function pass() {
+    if (running) {
+      again = true;
+      return;
+    }
+    running = true;
+    try {
+      do {
+        again = false;
+        await render(doc);
+      } while (again);
+    } finally {
+      running = false;
+    }
+  };
+}
+
+/**
+ * Watches the document and runs a pass when what the panel describes changes,
+ * or when the panel is gone or has been left behind.
+ *
+ * The panel reads the live regions and describes what they hold, so a region
+ * whose contents are replaced leaves the panel describing a document that is
+ * no longer there: a comment chip is gone with its snapshot unmarked, and a
+ * title or a severity that moved leaves a confirmation claiming a value the
+ * page no longer carries.
+ *
+ * @param {Document} doc
+ * @param {() => Promise<void>} [pass] The loop the observer runs its passes
+ *   through, which is what keeps them from overlapping a pass started
+ *   elsewhere.
+ * @returns {MutationObserver | null} null where the document offers nothing to
+ *   watch or no observer to watch it with.
+ */
+function observe(doc, pass = renderLoop(doc)) {
+  return globalThis.bghsa.dom.watch(doc, { ownedSelector, outOfPlace, pass });
+}
+
+/**
+ * @returns {void} renders the panel into this page and keeps it there. The
+ *   first pass and every pass the observer asks for run through one loop, so
+ *   no two of them read and write the document together.
  */
 function start() {
-  void render(globalThis.document);
-  observe(globalThis.document);
+  const doc = globalThis.document;
+  const pass = renderLoop(doc);
+  void pass();
+  observe(doc, pass);
 }
 
 globalThis.bghsa.panel = {
@@ -639,6 +676,9 @@ globalThis.bghsa.panel = {
   outOfPlace,
   injectPanel,
   render,
+  ownWrite,
+  needsRender,
+  renderLoop,
   observe,
   start,
 };

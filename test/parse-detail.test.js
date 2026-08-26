@@ -64,7 +64,32 @@ test('a severity the maintainer has not set reads as absent', () => {
   assert.strictEqual(advisory.severity, null);
   assert.strictEqual(advisory.severityLabel, null);
   assert.strictEqual(advisory.severityField, null);
+  assert.strictEqual(advisory.severityFieldPresent, true);
   assert.strictEqual(advisory.cvssV3, null);
+  assert.strictEqual(advisory.cvssV3Present, true);
+});
+
+test('a scoring field that is there and empty is told from one that is absent', () => {
+  const carried = parse.parseDetail(
+    document(
+      '<div class="gh-header-meta"></div><form>' +
+        '<select name="repository_advisory[severity]"><option value="" selected></option></select>' +
+        '<input name="repository_advisory[cvss_v3]" value="">' +
+        '</form>'
+    )
+  );
+  if (carried === null) throw new Error('the page with the scoring fields did not parse');
+  assert.strictEqual(carried.severityField, null);
+  assert.strictEqual(carried.severityFieldPresent, true);
+  assert.strictEqual(carried.cvssV3, null);
+  assert.strictEqual(carried.cvssV3Present, true);
+
+  const absent = parse.parseDetail(document('<div class="gh-header-meta"></div><form></form>'));
+  if (absent === null) throw new Error('the page without the scoring fields did not parse');
+  assert.strictEqual(absent.severityField, null);
+  assert.strictEqual(absent.severityFieldPresent, false);
+  assert.strictEqual(absent.cvssV3, null);
+  assert.strictEqual(absent.cvssV3Present, false);
 });
 
 test('a published advisory carries its assigned CVE in the metadata form', () => {
