@@ -25,9 +25,9 @@ if (typeof require === 'function') {
  * @typedef {object} StateWriteResult
  * @property {boolean} ok
  * @property {string | null} reason One of `allowlist`, `in-flight`, `fetch`,
- *   `mismatch`, `unreadable`, `stale`, `read-only`, `confirmation`,
- *   `ambiguous`, the reasons a write of the comment itself carries, and null
- *   on success.
+ *   `mismatch`, `unreadable`, `stale`, `superseded`, `read-only`,
+ *   `confirmation`, `ambiguous`, `invalid`, the reasons a write of the comment
+ *   itself carries, and null on success.
  * @property {number | null} status
  * @property {string} message What happened, in the words the panel shows.
  * @property {Record<string, unknown> | null} snapshot The snapshot this write
@@ -42,10 +42,26 @@ if (typeof require === 'function') {
  */
 
 /**
+ * Which snapshot holds current state, as far as anything outside the merge can
+ * tell: the comment it sits in, and the account it belongs to. A state the
+ * panel remembers from a write of its own names no comment in this document,
+ * and the login it was written under stands for it.
+ *
+ * @typedef {object} SnapshotHolder
+ * @property {string | null} commentId
+ * @property {string | null} by
+ */
+
+/**
  * @typedef {object} StateWriteOptions
  * @property {AdvisoryRef} ref The advisory to write on, read from the page.
  * @property {number} loadedSeq The highest ordering claim the panel loaded
  *   with. A page that has moved past it refuses the write.
+ * @property {SnapshotHolder} [loadedHolder] Which snapshot held state when the
+ *   panel loaded. A sequence number is not on its own an identity: two
+ *   maintainers writing at once claim the same one, and the tie sends state to
+ *   one of them. A holder that is not the one the panel loaded with refuses
+ *   the write, whatever the sequence says.
  * @property {Record<string, unknown> | ChangesBuilder} changes The panel's
  *   changes, as snapshot fields. A field named null is removed, and a field
  *   not named is carried forward whether or not this reader knows it. A
@@ -105,6 +121,36 @@ function sameRef(left, right) {
 function sameLogin(left, right) {
   if (typeof left !== 'string' || typeof right !== 'string') return false;
   return left.toLowerCase() === right.toLowerCase();
+}
+
+/**
+ * @param {MergedState} merged
+ * @returns {SnapshotHolder} which snapshot this state came from.
+ */
+function holderOf(merged) {
+  const by = merged.state === null ? undefined : merged.state['by'];
+  return {
+    commentId: merged.source?.id ?? null,
+    by: merged.source?.author ?? (typeof by === 'string' ? by : null),
+  };
+}
+
+/**
+ * Whether two readings name one snapshot. The comment id settles it where both
+ * readings have one; a state remembered from a write of this panel's own names
+ * no comment, and there the login it went out under is what there is to
+ * compare.
+ *
+ * @param {SnapshotHolder} left
+ * @param {SnapshotHolder} right
+ * @returns {boolean}
+ */
+function sameHolder(left, right) {
+  if (left.commentId !== null && right.commentId !== null) {
+    return left.commentId === right.commentId;
+  }
+  if (left.by === null || right.by === null) return left.by === right.by;
+  return sameLogin(left.by, right.by);
 }
 
 /**
@@ -240,8 +286,9 @@ function settled(outcome, snapshot, merged) {
  * The whole write runs against a document fetched at the moment it was asked
  * for: the snapshots it merges, the form it clones, and the comment it edits
  * all come from that one document. A page that has moved past the sequence
- * number the panel loaded with refuses the write, so a change is never applied
- * to state the maintainer did not see.
+ * number the panel loaded with refuses the write, and so does a page where
+ * that sequence belongs to another snapshot than the one the panel loaded, so
+ * a change is never applied to state the maintainer did not see.
  *
  * The comment this maintainer already wrote is edited, and one is created
  * where they have written none. Another maintainer's comment is never the
@@ -316,6 +363,18 @@ async function writeState(options) {
         merged
       );
     }
+    const expected = options.loadedHolder;
+    if (expected !== undefined && !sameHolder(expected, holderOf(merged))) {
+      const found = holderOf(merged).by;
+      return refused(
+        'superseded',
+        null,
+        `Nothing was written: this advisory's state at sequence ${merged.observedSeq} comes from` +
+          ` ${found ?? 'another maintainer'} now, and not from the snapshot the panel was loaded` +
+          ' with. Reload and apply the change again.',
+        merged
+      );
+    }
     if (merged.readOnly) {
       return refused(
         'read-only',
@@ -358,8 +417,24 @@ async function writeState(options) {
     });
     stampTriageSince(snapshot, merged.state, changes, at, seedTriageSince(fresh));
 
+    // The snapshot goes through this extension's own reader before it goes
+    // out. A payload the reader would exclude is one no reader takes as state,
+    // and an advisory carrying a snapshot the extension that wrote it refuses
+    // to read is one nobody can write from until it is superseded by hand.
+    const json = snapshotJson(snapshot);
+    const reading = globalThis.bghsa.schema.readSnapshot(json);
+    if (!reading.valid) {
+      return refused(
+        'invalid',
+        null,
+        'Nothing was written: the snapshot this extension built is one it would not read' +
+          ` back: ${reading.problems.join('; ')}.`,
+        merged
+      );
+    }
+
     const body = buildBody(snapshot);
-    const contains = [globalThis.bghsa.schema.STATE_COMMENT_MARKER, snapshotJson(snapshot)];
+    const contains = [globalThis.bghsa.schema.STATE_COMMENT_MARKER, json];
     /** @type {{ doc: Document, ref: AdvisoryRef, body: string, contains: string[] }} */
     const common = { doc: page, ref: fresh.ref, body, contains };
     const passed = {
@@ -386,6 +461,8 @@ globalThis.bghsa.state = {
   snapshotJson,
   buildBody,
   ownStateComments,
+  holderOf,
+  sameHolder,
   nowStamp,
   seedTriageSince,
   stampTriageSince,

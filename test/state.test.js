@@ -9,6 +9,7 @@ const { parseHTML } = require('linkedom');
 const parse = require('../src/common/parse-detail.js');
 const schema = require('../src/common/schema.js');
 const write = require('../src/common/write.js');
+const merge = require('../src/common/merge.js');
 const state = require('../src/detail/state.js');
 
 /**
@@ -334,6 +335,53 @@ test('a page that moved past the sequence the panel loaded refuses the write', a
   }
 });
 
+test('a snapshot other than the one the panel loaded refuses the write', async () => {
+  // The sequence number is where the panel left it, and the snapshot holding
+  // state at that number is not the one the panel read.
+  const { outcome, calls } = await run(triagePage(), {
+    loadedHolder: { commentId: null, by: 'yaroslavk' },
+  });
+  assert.strictEqual(outcome.ok, false);
+  assert.strictEqual(outcome.reason, 'superseded');
+  assert.strictEqual(calls.length, 1, 'a comment request went out');
+  assert.strictEqual(outcome.snapshot, null);
+  assert.strictEqual(outcome.merged?.observedSeq, OBSERVED);
+  assert.strictEqual(
+    outcome.message,
+    `Nothing was written: this advisory's state at sequence ${OBSERVED} comes from samuelkarp` +
+      ' now, and not from the snapshot the panel was loaded with. Reload and apply the change' +
+      ' again.'
+  );
+});
+
+test('a comment other than the one that held state refuses the write', async () => {
+  const { outcome, calls } = await run(triagePage(), {
+    loadedHolder: { commentId: '10101', by: 'samuelkarp' },
+  });
+  assert.strictEqual(outcome.ok, false);
+  assert.strictEqual(outcome.reason, 'superseded');
+  assert.strictEqual(calls.length, 1, 'a comment request went out');
+});
+
+test('the state a write of this panel left behind is not a rival', async () => {
+  // A remembered state names no comment in the document, so the login it went
+  // out under is what stands for it. Every save after the first reads it, and
+  // refusing there would refuse them all.
+  const { outcome } = await run(triagePage(), {
+    loadedHolder: { commentId: null, by: 'SamuelKarp' },
+  });
+  assert.ok(outcome.ok === true, `the write failed: ${outcome.message}`);
+});
+
+test('the holder of a state is the comment it came from', () => {
+  const page = triagePage();
+  const advisory = parse.parseDetail(page);
+  if (advisory === null) throw new Error('the fixture is not an advisory detail page');
+  const holder = state.holderOf(merge.mergeSnapshots(advisory.comments));
+  assert.strictEqual(holder.commentId, OWN_ID);
+  assert.strictEqual(holder.by, 'samuelkarp');
+});
+
 test('a page naming no signed-in account is not written to', async () => {
   const page = triagePage();
   const box = page.querySelector('div.timeline-new-comment');
@@ -362,6 +410,22 @@ test('a snapshot this extension could not interpret takes one confirmation', asy
   assert.ok(
     /** @type {Record<string, unknown>} */ (confirmed.outcome.snapshot).seq === 3,
     'the confirmed write did not outrank the snapshot it supersedes'
+  );
+});
+
+test('a snapshot this extension would not read back is not written', async () => {
+  // No control on the panel builds this, and the write checks anyway: an
+  // advisory carrying a snapshot its own writer refuses to read is one every
+  // reader excludes from state.
+  const { outcome, calls } = await run(triagePage(), { changes: { owners: 'dmcgowan' } });
+  assert.strictEqual(outcome.ok, false);
+  assert.strictEqual(outcome.reason, 'invalid');
+  assert.strictEqual(calls.length, 1, 'a comment request went out');
+  assert.strictEqual(outcome.snapshot, null);
+  assert.strictEqual(
+    outcome.message,
+    'Nothing was written: the snapshot this extension built is one it would not read back:' +
+      ' owners is not an array of strings.'
   );
 });
 

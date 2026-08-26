@@ -125,6 +125,15 @@ const results = new Map();
 const opened = new Set();
 
 /**
+ * The half-typed owner logins, keyed as {@link keyOf} keys them. A login is a
+ * change once it is added and not before, and until then it is text in a
+ * control that a render pass would otherwise take away.
+ *
+ * @type {Map<string, string>}
+ */
+const drafts = new Map();
+
+/**
  * The advisories a save from this panel is on its way to GitHub for. A pass
  * during the flight builds the controls again, and this is what the pass reads
  * to build them held still: a value staged against a request already out is a
@@ -180,6 +189,7 @@ function stageConfirmation(key, track, value) {
 function discard(key) {
   edits.delete(key);
   results.delete(key);
+  drafts.delete(key);
 }
 
 /**
@@ -621,6 +631,74 @@ function changesOf(tracking, fingerprints, pending, envelope) {
 }
 
 /**
+ * The stored objects one control removes as a whole, and the fields this reader
+ * knows inside each.
+ *
+ * @type {readonly { key: string, name: string, fields: readonly string[] }[]}
+ */
+const NESTED_TRACKS = [
+  { key: 'embargo', name: 'embargo', fields: ['lift'] },
+  { key: 'closure', name: 'closure reason', fields: ['reason', 'duplicateOf'] },
+];
+
+/**
+ * The fields a stored object carries that this reader does not interpret.
+ *
+ * @param {Record<string, unknown> | null} state
+ * @param {string} key
+ * @param {readonly string[]} known
+ * @returns {string[]}
+ */
+function unknownFields(state, key, known) {
+  const held = state === null ? undefined : state[key];
+  if (!globalThis.bghsa.schema.isPlainObject(held)) return [];
+  return Object.keys(held).filter((field) => !known.includes(field));
+}
+
+/**
+ * The stored objects a save would take away that carry fields this reader does
+ * not know.
+ *
+ * A control here stands for the record as a whole: the embargo is in force
+ * while the object is there, so turning it off removes the object, and every
+ * field inside it goes with it. REQUIREMENTS.md section 3 has a write preserve
+ * what it does not recognize, and a field a newer version of this extension
+ * wrote inside the embargo is exactly that. The write is refused and says
+ * which fields stand in the way, because a refusal is recoverable by a
+ * maintainer running a version that knows those fields and a deletion is not.
+ *
+ * @param {Record<string, unknown> | null} state The state the write builds on.
+ * @param {Record<string, unknown>} changes
+ * @returns {{ key: string, name: string, fields: string[] }[]}
+ */
+function unclearable(state, changes) {
+  /** @type {{ key: string, name: string, fields: string[] }[]} */
+  const blocked = [];
+  for (const track of NESTED_TRACKS) {
+    if (changes[track.key] !== null) continue;
+    const unknown = unknownFields(state, track.key, track.fields);
+    if (unknown.length > 0) blocked.push({ key: track.key, name: track.name, fields: unknown });
+  }
+  return blocked;
+}
+
+/**
+ * @param {{ key: string, name: string, fields: string[] }[]} blocked
+ * @returns {string} what the panel says where a save would delete a field it
+ *   does not know.
+ */
+function unclearableMessage(blocked) {
+  const names = blocked.map((one) => one.name).join(' and ');
+  const fields = blocked
+    .flatMap((one) => one.fields.map((field) => `${one.key}.${field}`))
+    .join(', ');
+  return (
+    `Nothing was written: clearing the ${names} would delete ${fields}, which this extension` +
+    ' does not recognize and carries forward untouched. Update the extension.'
+  );
+}
+
+/**
  * @param {string} key
  * @param {MergedState} merged
  * @returns {void} holds the state an advisory stands in after a write this
@@ -723,6 +801,15 @@ async function save(context) {
   const ref = context.advisory.ref;
   if (ref === null) return stopped(context, key, 'unreadable', UNREADABLE_MESSAGE);
 
+  // The changes as they will be built, read for the records they take away.
+  // The envelope stands in here: which fields a save removes does not depend
+  // on who writes it or when.
+  const shape = changesOf(context.tracking, context.fingerprints, pending, { by: '', at: '' });
+  const blocked = unclearable(context.merged.state, shape);
+  if (blocked.length > 0) {
+    return stopped(context, key, 'unclearable', unclearableMessage(blocked));
+  }
+
   results.delete(key);
   // What the request carries, held from before it goes out. The store moves on
   // under a save, and what lands is what was captured here.
@@ -734,6 +821,10 @@ async function save(context) {
     outcome = await globalThis.bghsa.state.writeState({
       ref,
       loadedSeq: context.merged.observedSeq,
+      // The state a save remembers is at a sequence number the page has not
+      // caught up with, and a rival write claiming that same number is state
+      // this panel never showed. The holder is what tells the two apart.
+      loadedHolder: globalThis.bghsa.state.holderOf(context.merged),
       changes: (envelope) => changesOf(context.tracking, context.fingerprints, pending, envelope),
       confirmed: pending.supersede === true,
       ...(context.at === undefined ? {} : { at: context.at }),
@@ -797,6 +888,20 @@ function setDisabled(node, off) {
     node.removeAttribute('disabled');
     node.removeAttribute('aria-disabled');
   }
+}
+
+/**
+ * Reads a text control as it is typed and when the value settles. `change`
+ * alone fires on blur, and a pass that rebuilds the panel between a keystroke
+ * and the blur would take the half-typed value with it.
+ *
+ * @param {Element} field
+ * @param {() => void} handler
+ * @returns {void}
+ */
+function onValue(field, handler) {
+  field.addEventListener('input', handler);
+  field.addEventListener('change', handler);
 }
 
 /**
@@ -960,7 +1065,12 @@ function ownersField(doc, context, key, update) {
   };
   draw();
 
-  const typed = textControl(doc, 'bghsa-owner-input', 'text', null, 'login');
+  const typed = textControl(doc, 'bghsa-owner-input', 'text', drafts.get(key) ?? null, 'login');
+  onValue(typed, () => {
+    const held = valueOf(typed);
+    if (held === '') drafts.delete(key);
+    else drafts.set(key, held);
+  });
   const candidateList = element(doc, 'datalist', 'bghsa-owner-candidates');
   candidateList.id = `bghsa-owner-candidates-${key.replace(/[^a-z0-9-]/g, '-')}`;
   typed.setAttribute('list', candidateList.id);
@@ -979,6 +1089,7 @@ function ownersField(doc, context, key, update) {
     }
     typed.setAttribute('value', '');
     /** @type {{ value?: unknown }} */ (/** @type {unknown} */ (typed)).value = '';
+    drafts.delete(key);
     draw();
     update();
   });
@@ -1011,7 +1122,7 @@ function embargoField(doc, context, key, update) {
     stage(key, { embargo: isChecked(applies.box) });
     update();
   });
-  lift.addEventListener('change', () => {
+  onValue(lift, () => {
     stage(key, { embargoLift: orNull(valueOf(lift)) });
     update();
   });
@@ -1055,7 +1166,7 @@ function closureField(doc, context, key, update) {
     showDuplicate();
     update();
   });
-  duplicate.addEventListener('change', () => {
+  onValue(duplicate, () => {
     stage(key, { closureDuplicateOf: orNull(valueOf(duplicate)) });
     update();
   });
@@ -1250,6 +1361,7 @@ globalThis.bghsa.edit = {
   results,
   opened,
   saving,
+  drafts,
   keyOf,
   editsFor,
   stage,
@@ -1268,6 +1380,10 @@ globalThis.bghsa.edit = {
   armNavigationWarning,
   optional,
   changesOf,
+  NESTED_TRACKS,
+  unknownFields,
+  unclearable,
+  unclearableMessage,
   remember,
   preferred,
   afterWrite,

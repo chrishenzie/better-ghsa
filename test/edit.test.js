@@ -260,6 +260,22 @@ function tick(box, value) {
 }
 
 /**
+ * Types into a control without leaving it. `change` fires on blur, and half a
+ * date is what the field holds until then.
+ *
+ * @param {Element} field
+ * @param {string} value
+ * @returns {void}
+ */
+function typing(field, value) {
+  /** @type {{ value?: unknown }} */ (/** @type {unknown} */ (field)).value = value;
+  field.setAttribute('value', value);
+  const view = field.ownerDocument?.defaultView;
+  if (view === null || view === undefined) throw new Error('the document has no view');
+  field.dispatchEvent(new view.Event('input', { bubbles: true }));
+}
+
+/**
  * @param {Element} field
  * @param {string} value
  * @returns {void}
@@ -340,6 +356,91 @@ test('a save that landed leaves the panel holding what it wrote', async () => {
   assert.strictEqual(after.tracking.triage, 'evaluating', 'the panel read the page again');
   assert.strictEqual(after.merged.observedSeq, 8);
   assert.strictEqual(after.merged.confirmationRequired, false);
+});
+
+/**
+ * Another maintainer's state comment, at the ordering claim `seq` and from a
+ * login that takes the tie. The reporter's comment on the fixture stands in
+ * for it: it becomes a member's, and it carries their snapshot.
+ *
+ * @param {Document} page
+ * @param {number} seq
+ * @param {string} triage
+ * @returns {void}
+ */
+function rivalSnapshot(page, seq, triage) {
+  const group = page.querySelector('#advisory-comment-282848');
+  if (group === null) throw new Error('the fixture carries one other comment');
+  for (const link of group.querySelectorAll('a.author')) {
+    link.setAttribute('href', '/zulu-triage');
+  }
+  const badge = page.createElement('span');
+  badge.className = 'Label';
+  badge.textContent = 'Member';
+  group.prepend(badge);
+  const fence = group.querySelector('.highlight-source-json pre');
+  if (fence === null) throw new Error('the comment carries no snapshot');
+  fence.textContent = JSON.stringify(
+    {
+      betterGhsa: '1.0',
+      seq,
+      by: 'zulu-triage',
+      at: AT,
+      triage,
+      triageSince: AT,
+    },
+    null,
+    2
+  );
+}
+
+test('a rival snapshot at the sequence a save reached refuses the next save', async () => {
+  forget();
+  const page = fixture('triage-thread.html');
+  const remote = fixture('triage-thread.html');
+  const talk = session(remote);
+  const first = await editorFor(page, {
+    fetch: talk.fetch,
+    parseDocument: talk.parseDocument,
+  });
+  const key = edit.keyOf(first.context.advisory);
+  choose(control(first.editor, 'select.bghsa-triage'), 'evaluating');
+  const landed = await edit.save(first.context);
+  assert.ok(landed.ok === true, `the first save failed: ${landed.message}`);
+  assert.strictEqual(sentSnapshot(talk.calls)['seq'], 8);
+
+  // Another maintainer claimed sequence 8 at the same moment, and the tie on
+  // GitHub goes to the greater login.
+  rivalSnapshot(remote, 8, 'awaiting maintainer input');
+
+  const second = await editorFor(page, {
+    fetch: talk.fetch,
+    parseDocument: talk.parseDocument,
+  });
+  assert.strictEqual(second.context.merged.observedSeq, 8, 'the panel forgot the write it made');
+  choose(control(second.editor, 'select.bghsa-triage'), 'awaiting reporter');
+  const outcome = await edit.save(second.context);
+
+  assert.strictEqual(outcome.ok, false);
+  assert.strictEqual(outcome.reason, 'superseded');
+  assert.strictEqual(
+    talk.posts().length,
+    1,
+    'the second save wrote on state the maintainer never saw'
+  );
+  assert.strictEqual(
+    edit.editsFor(key).triage,
+    'awaiting reporter',
+    'the refused change was taken out of the panel'
+  );
+
+  // The panel reloads from what the advisory says now.
+  const third = await editorFor(page, {
+    fetch: talk.fetch,
+    parseDocument: talk.parseDocument,
+  });
+  assert.strictEqual(third.context.tracking.triage, 'awaiting maintainer input');
+  forget();
 });
 
 test('a save GitHub refused leaves the change in the panel and says why', async () => {
@@ -695,6 +796,88 @@ test('the embargo controls write the date they hold, and clear the track when of
   tick(control(off.editor, 'input.bghsa-embargo'), false);
   await edit.save(off.context);
   assert.strictEqual(sentSnapshot(second.calls)['embargo'], undefined);
+});
+
+test('text is held as it is typed, before the field is left', async () => {
+  forget();
+  const page = fixture('triage-thread.html');
+  const { editor, context } = await editorFor(page);
+  const key = edit.keyOf(context.advisory);
+  typing(control(editor, 'input.bghsa-embargo-lift'), '2026-12-01');
+  choose(control(editor, 'select.bghsa-closure'), 'duplicate');
+  typing(control(editor, 'input.bghsa-closure-duplicate'), 'GHSA-1111-2222-3333');
+
+  assert.strictEqual(edit.editsFor(key).embargoLift, '2026-12-01');
+  assert.strictEqual(edit.editsFor(key).closureDuplicateOf, 'GHSA-1111-2222-3333');
+  assert.strictEqual(note(editor).includes('embargo'), true, 'the note said nothing of the date');
+  forget();
+});
+
+test('half-typed text survives a render pass', async () => {
+  forget();
+  const page = fixture('triage-thread.html');
+  const first = await panel.render(page);
+  assert.ok(first !== null, 'the fixture offered no anchor');
+  const before = /** @type {Element} */ (first);
+  typing(control(before, 'input.bghsa-embargo-lift'), '2026-12-01');
+  // A login is a change once it is added, and text in the control until then.
+  typing(control(before, 'input.bghsa-owner-input'), 'kolysh');
+
+  const second = await panel.render(page);
+  assert.ok(second !== null, 'the second pass placed no panel');
+  const after = /** @type {Element} */ (second);
+  assert.ok(after !== before, 'the pass did not rebuild the panel');
+  assert.strictEqual(
+    control(after, 'input.bghsa-embargo-lift').getAttribute('value'),
+    '2026-12-01',
+    'the pass took the date with it'
+  );
+  assert.strictEqual(
+    control(after, 'input.bghsa-owner-input').getAttribute('value'),
+    'kolysh',
+    'the pass took the half-typed login with it'
+  );
+  forget();
+});
+
+/**
+ * Puts a field inside the stored embargo that this reader does not know, as a
+ * newer version of the extension writing the same advisory would.
+ *
+ * @param {Document} page
+ * @returns {void}
+ */
+function embargoWithUnknownField(page) {
+  const fence = page.querySelector(`#${OWN_COMMENT} .highlight-source-json pre`);
+  if (fence === null) throw new Error('the fixture carries no snapshot');
+  const held = JSON.parse(String(fence.textContent ?? ''));
+  held.embargo = { lift: '2026-09-30', reason: 'coordinated release' };
+  fence.textContent = JSON.stringify(held, null, 2);
+}
+
+test('clearing a record holding an unknown field is refused', async () => {
+  forget();
+  const page = fixture('triage-thread.html');
+  embargoWithUnknownField(page);
+  const talk = session(fixture('triage-thread.html'));
+  const { editor, context } = await editorFor(page, {
+    fetch: talk.fetch,
+    parseDocument: talk.parseDocument,
+  });
+  const key = edit.keyOf(context.advisory);
+  tick(control(editor, 'input.bghsa-embargo'), false);
+  const outcome = await edit.save(context);
+
+  assert.strictEqual(outcome.ok, false);
+  assert.strictEqual(outcome.reason, 'unclearable');
+  assert.strictEqual(talk.calls.length, 0, 'a write that would delete a field went out');
+  assert.strictEqual(
+    outcome.message,
+    'Nothing was written: clearing the embargo would delete embargo.reason, which this' +
+      ' extension does not recognize and carries forward untouched. Update the extension.'
+  );
+  assert.strictEqual(edit.editsFor(key).embargo, false, 'the refused change was dropped');
+  forget();
 });
 
 test('the closure controls write the duplicate only for a duplicate', async () => {
