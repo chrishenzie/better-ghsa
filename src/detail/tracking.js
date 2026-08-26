@@ -26,6 +26,34 @@ if (typeof require === 'function') {
  */
 
 /**
+ * @typedef {'title' | 'description' | 'scoring'} ConfirmationTrack
+ */
+
+/**
+ * The confirmation tracks, in the order the panel shows them. `short` names the
+ * track in a sentence, and `warn` names the track REQUIREMENTS.md section 8
+ * warns on while it stands unconfirmed.
+ *
+ * @type {readonly { key: ConfirmationTrack, name: string, short: string,
+ *   warn: boolean }[]}
+ */
+const CONFIRMATION_TRACKS = [
+  { key: 'title', name: 'Advisory title', short: 'advisory title', warn: false },
+  {
+    key: 'description',
+    name: 'Advisory description',
+    short: 'advisory description',
+    warn: false,
+  },
+  {
+    key: 'scoring',
+    name: 'Severity and CVSS vector',
+    short: 'severity and CVSS vector',
+    warn: true,
+  },
+];
+
+/**
  * @typedef {object} Confirmation
  * @property {ConfirmationStatus} status
  * @property {string | null} by The login the record names.
@@ -180,7 +208,13 @@ async function readAdvisory(advisory, merged) {
   return read(merged.state, await fingerprints(advisory));
 }
 
-globalThis.bghsa.tracking = { read, untracked, fingerprints, readAdvisory };
+globalThis.bghsa.tracking = {
+  CONFIRMATION_TRACKS,
+  read,
+  untracked,
+  fingerprints,
+  readAdvisory,
+};
 
 if (typeof module !== 'undefined') {
   module.exports = globalThis.bghsa.tracking;

@@ -682,11 +682,11 @@ test('a severity a live region stopped carrying reaches the banner', async () =>
 
 test("the extension's own writing schedules no pass", async () => {
   reset(triageDoc);
-  const readAdvisory = tracking.readAdvisory;
+  const fingerprints = tracking.fingerprints;
   let passes = 0;
-  globalThis.bghsa.tracking.readAdvisory = (advisory, merged) => {
+  globalThis.bghsa.tracking.fingerprints = (advisory) => {
     passes += 1;
-    return readAdvisory(advisory, merged);
+    return fingerprints(advisory);
   };
   const observer = panel.observe(triageDoc);
   try {
@@ -697,7 +697,7 @@ test("the extension's own writing schedules no pass", async () => {
     assert.strictEqual(triageDoc.querySelectorAll(`#${panel.PANEL_ID}`).length, 1);
   } finally {
     observer?.disconnect();
-    globalThis.bghsa.tracking.readAdvisory = readAdvisory;
+    globalThis.bghsa.tracking.fingerprints = fingerprints;
   }
 });
 
@@ -719,18 +719,18 @@ test('the observer runs its passes through the loop it is given', async () => {
 
 test('a pass reads the document alone, and a request during one folds into one more', async () => {
   reset(triageDoc);
-  const readAdvisory = tracking.readAdvisory;
+  const fingerprints = tracking.fingerprints;
   let reading = 0;
   let overlaps = 0;
   let passes = 0;
-  globalThis.bghsa.tracking.readAdvisory = async (advisory, merged) => {
+  globalThis.bghsa.tracking.fingerprints = async (advisory) => {
     passes += 1;
     reading += 1;
     if (reading > 1) overlaps += 1;
     await delay(5);
-    const view = await readAdvisory(advisory, merged);
+    const read = await fingerprints(advisory);
     reading -= 1;
-    return view;
+    return read;
   };
   try {
     const pass = panel.renderLoop(triageDoc);
@@ -742,7 +742,7 @@ test('a pass reads the document alone, and a request during one folds into one m
     assert.strictEqual(triageDoc.querySelectorAll(`#${panel.STYLE_ID}`).length, 1);
     assert.strictEqual(chipCount(), 1);
   } finally {
-    globalThis.bghsa.tracking.readAdvisory = readAdvisory;
+    globalThis.bghsa.tracking.fingerprints = fingerprints;
   }
 });
 

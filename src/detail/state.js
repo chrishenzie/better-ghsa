@@ -38,13 +38,19 @@ if (typeof require === 'function') {
  */
 
 /**
+ * @typedef {(envelope: { by: string, at: string }) => Record<string, unknown>} ChangesBuilder
+ */
+
+/**
  * @typedef {object} StateWriteOptions
  * @property {AdvisoryRef} ref The advisory to write on, read from the page.
  * @property {number} loadedSeq The highest ordering claim the panel loaded
  *   with. A page that has moved past it refuses the write.
- * @property {Record<string, unknown>} changes The panel's changes, as snapshot
- *   fields. A field named null is removed, and a field not named is carried
- *   forward whether or not this reader knows it.
+ * @property {Record<string, unknown> | ChangesBuilder} changes The panel's
+ *   changes, as snapshot fields. A field named null is removed, and a field
+ *   not named is carried forward whether or not this reader knows it. A
+ *   builder is handed the login and the time this write stamps, which is what
+ *   a record naming who did something binds to.
  * @property {boolean} [confirmed] Whether the maintainer has confirmed a write
  *   that supersedes a snapshot this reader could not interpret.
  * @property {string} [at] The write time. The clock is read when this is
@@ -247,7 +253,7 @@ function settled(outcome, snapshot, merged) {
  */
 async function writeState(options) {
   const write = globalThis.bghsa.write;
-  const { ref, loadedSeq, changes } = options;
+  const { ref, loadedSeq } = options;
   const nameWithOwner = `${ref.owner}/${ref.repo}`;
 
   if (!globalThis.bghsa.allowlist.isAllowed(nameWithOwner)) {
@@ -341,6 +347,10 @@ async function writeState(options) {
     }
 
     const at = options.at ?? nowStamp();
+    // The changes are asked for once the login and the time are settled, so a
+    // record inside them names the account this write goes out under.
+    const changes =
+      typeof options.changes === 'function' ? options.changes({ by: viewer, at }) : options.changes;
     const snapshot = globalThis.bghsa.merge.nextSnapshot(merged.state, changes, {
       by: viewer,
       at,

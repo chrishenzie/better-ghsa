@@ -13,6 +13,7 @@ if (typeof require === 'function') {
   require('./tracking.js');
   require('./comments.js');
   require('./preserve.js');
+  require('./edit.js');
 }
 
 /** The id of the sentinel element the extension owns. */
@@ -25,6 +26,8 @@ const STYLE_ID = 'bghsa-style';
 const STYLE_TEXT = [
   '.bghsa-chips { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; }',
   '.bghsa-label { flex: 0 0 9rem; }',
+  '.bghsa-field-label { flex: 0 0 9rem; }',
+  '.bghsa-editor-summary { cursor: pointer; }',
   '.bghsa-missing { font-style: italic; }',
   '.bghsa-confirmed { display: flex; flex-direction: column; gap: 6px; }',
   '.bghsa-confirmation-name { flex: 0 0 13rem; }',
@@ -135,28 +138,8 @@ function buildChips(doc, derived, embargoOverdue) {
   return header;
 }
 
-/**
- * The confirmation tracks, in the order the panel shows them. `warn` names the
- * track REQUIREMENTS.md section 8 warns on while it stands unconfirmed.
- *
- * @type {readonly { key: 'title' | 'description' | 'scoring', name: string,
- *   short: string, warn: boolean }[]}
- */
-const CONFIRMATION_TRACKS = [
-  { key: 'title', name: 'Advisory title', short: 'advisory title', warn: false },
-  {
-    key: 'description',
-    name: 'Advisory description',
-    short: 'advisory description',
-    warn: false,
-  },
-  {
-    key: 'scoring',
-    name: 'Severity and CVSS vector',
-    short: 'severity and CVSS vector',
-    warn: true,
-  },
-];
+/** The confirmation tracks, in the order the panel shows them. */
+const CONFIRMATION_TRACKS = globalThis.bghsa.tracking.CONFIRMATION_TRACKS;
 
 /**
  * What the confirmation chip reads. A drifted track reverted to unconfirmed,
@@ -424,9 +407,13 @@ function buildPreserve(doc, advisory) {
  * @param {import('../common/parse-detail.js').ParsedDetail} advisory
  * @param {import('../common/derive.js').DerivedState} derived
  * @param {import('./tracking.js').TrackingView} tracking
+ * @param {import('./edit.js').EditorContext} [context] What the editing
+ *   controls read. A panel built without one displays the stored state and
+ *   does not edit it, because a write is refused against the ordering claim
+ *   the panel was read at and nothing else names it.
  * @returns {Element}
  */
-function buildPanel(doc, advisory, derived, tracking) {
+function buildPanel(doc, advisory, derived, tracking, context) {
   const panel = element(doc, 'div', 'Box mb-3 bghsa-panel');
   panel.id = PANEL_ID;
   panel.setAttribute('data-bghsa-panel', '1');
@@ -459,6 +446,7 @@ function buildPanel(doc, advisory, derived, tracking) {
   panel.append(buildConfirmations(doc, tracking));
   for (const banner of confirmationWarnings(doc, tracking)) panel.append(banner);
   for (const track of buildTracks(doc, tracking)) panel.append(track);
+  if (context !== undefined) panel.append(globalThis.bghsa.edit.buildEditor(doc, context));
 
   const descriptionRow = row(doc, 'Description');
   if (advisory.descriptionOriginal === null) {
@@ -514,10 +502,11 @@ function ensureStyle(doc) {
  * @param {import('../common/parse-detail.js').ParsedDetail} advisory
  * @param {import('../common/derive.js').DerivedState} derived
  * @param {import('./tracking.js').TrackingView} tracking
+ * @param {import('./edit.js').EditorContext} [context]
  * @returns {Element | null} the panel, or null when the page offers no anchor.
  */
-function injectPanel(doc, advisory, derived, tracking) {
-  const panel = buildPanel(doc, advisory, derived, tracking);
+function injectPanel(doc, advisory, derived, tracking, context) {
+  const panel = buildPanel(doc, advisory, derived, tracking, context);
   const existing = doc.getElementById(PANEL_ID);
   const place = anchor(doc);
   if (place !== null) {
@@ -548,6 +537,27 @@ function outOfPlace(doc) {
 }
 
 /**
+ * The render loop each document runs its passes through. One loop per document
+ * is what keeps a pass the observer asked for and a pass a save asked for from
+ * reading and writing the document together.
+ *
+ * @type {WeakMap<Document, () => Promise<void>>}
+ */
+const loops = new WeakMap();
+
+/**
+ * @param {Document} doc
+ * @returns {() => Promise<void>} that document's loop, made on first use.
+ */
+function passFor(doc) {
+  const held = loops.get(doc);
+  if (held !== undefined) return held;
+  const loop = renderLoop(doc);
+  loops.set(doc, loop);
+  return loop;
+}
+
+/**
  * Reads the document and places the panel. Returns null when the document is
  * not an advisory detail page, or when it offers no anchor.
  *
@@ -558,11 +568,27 @@ function outOfPlace(doc) {
  * @returns {Promise<Element | null>}
  */
 async function render(doc) {
+  const edit = globalThis.bghsa.edit;
   const advisory = globalThis.bghsa.parseDetail.parseDetail(doc);
   if (advisory === null) return null;
-  const merged = globalThis.bghsa.merge.mergeSnapshots(advisory.comments);
-  const tracking = await globalThis.bghsa.tracking.readAdvisory(advisory, merged);
-  const placed = injectPanel(doc, advisory, globalThis.bghsa.derive.derive(advisory), tracking);
+  // A comment this page wrote is on GitHub and not in this document, so the
+  // state a write left behind outranks what the document's comments merge to
+  // until the page is read again.
+  const merged = edit.preferred(
+    edit.keyOf(advisory),
+    globalThis.bghsa.merge.mergeSnapshots(advisory.comments)
+  );
+  const fingerprints = await globalThis.bghsa.tracking.fingerprints(advisory);
+  const tracking = globalThis.bghsa.tracking.read(merged.state, fingerprints);
+  const derived = globalThis.bghsa.derive.derive(advisory);
+  const placed = injectPanel(doc, advisory, derived, tracking, {
+    advisory,
+    derived,
+    tracking,
+    fingerprints,
+    merged,
+    rerender: () => passFor(doc)(),
+  });
   // The chips carry the extension's tone classes, and a page offering the
   // panel no anchor still gets them.
   ensureStyle(doc);
@@ -639,9 +665,10 @@ function observe(doc, pass = renderLoop(doc)) {
  */
 function start() {
   const doc = globalThis.document;
-  const pass = renderLoop(doc);
+  const pass = passFor(doc);
   void pass();
   observe(doc, pass);
+  globalThis.bghsa.edit.armNavigationWarning(doc);
 }
 
 globalThis.bghsa.panel = {
@@ -665,6 +692,7 @@ globalThis.bghsa.panel = {
   ownWrite,
   needsRender,
   renderLoop,
+  passFor,
   observe,
   start,
 };

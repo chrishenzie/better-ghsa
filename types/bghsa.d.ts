@@ -17,6 +17,7 @@ interface BghsaNamespace {
   comments: typeof import('../src/detail/comments.js');
   preserve: typeof import('../src/detail/preserve.js');
   state: typeof import('../src/detail/state.js');
+  edit: typeof import('../src/detail/edit.js');
   panel: typeof import('../src/detail/panel.js');
   content: typeof import('../src/content.js');
 }

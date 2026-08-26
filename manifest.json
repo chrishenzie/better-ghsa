@@ -22,6 +22,7 @@
         "src/detail/comments.js",
         "src/detail/preserve.js",
         "src/detail/state.js",
+        "src/detail/edit.js",
         "src/detail/panel.js",
         "src/content.js"
       ],
