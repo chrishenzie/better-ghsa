@@ -45,14 +45,6 @@ const MISSING = 'missing';
 const element = globalThis.bghsa.dom.element;
 
 /**
- * @param {string | null} value
- * @returns {string} `value`, or the missing marker.
- */
-function shown(value) {
-  return value === null || value === '' ? MISSING : value;
-}
-
-/**
  * The names of the values the extension could not read from the page. An empty
  * list means every value it set out to read is in hand.
  *
@@ -97,22 +89,6 @@ function chip(doc, text, tone) {
 }
 
 /**
- * A chip carrying one named value. A value that could not be read is marked
- * and toned, so it does not read as a value the page holds.
- *
- * @param {Document} doc
- * @param {string} label
- * @param {string | null} value
- * @returns {Element}
- */
-function valueChip(doc, label, value) {
-  const unread = value === null || value === '';
-  const node = chip(doc, `${label}: ${shown(value)}`, unread ? 'attention' : undefined);
-  if (unread) node.classList.add('bghsa-missing');
-  return node;
-}
-
-/**
  * @param {Document} doc
  * @param {string} label
  * @returns {{ row: Element, body: Element }} a Box row and the element its
@@ -140,21 +116,22 @@ function warning(doc, text) {
  * signal is a chip only while it is firing, because it is there to say that
  * something needs attention.
  *
- * The CVE is on the list page. The advisory page carries it already, so the
- * panel does not repeat it.
+ * The advisory page carries the state, the severity, and the CVE above the
+ * panel, so the row does not repeat them. A value of theirs the extension
+ * could not read is named in the incomplete banner.
  *
  * @param {Document} doc
- * @param {import('../common/parse-detail.js').ParsedDetail} advisory
  * @param {import('../common/derive.js').DerivedState} derived
+ * @param {boolean} embargoOverdue Whether the embargo's lift date has gone by
+ *   on an advisory that is not published.
  * @returns {Element}
  */
-function buildChips(doc, advisory, derived) {
+function buildChips(doc, derived, embargoOverdue) {
   const header = element(doc, 'div', 'Box-header bghsa-chips');
   header.append(element(doc, 'strong', 'mr-2', 'Better GHSA'));
-  header.append(valueChip(doc, 'State', advisory.state));
-  header.append(valueChip(doc, 'Severity', advisory.severityLabel));
   if (derived.neverReviewed) header.append(chip(doc, 'Never reviewed', 'danger'));
   if (derived.newActivity) header.append(chip(doc, 'New activity', 'attention'));
+  if (embargoOverdue) header.append(chip(doc, 'Embargo overdue', 'danger'));
   return header;
 }
 
@@ -453,7 +430,16 @@ function buildPanel(doc, advisory, derived, tracking) {
   const panel = element(doc, 'div', 'Box mb-3 bghsa-panel');
   panel.id = PANEL_ID;
   panel.setAttribute('data-bghsa-panel', '1');
-  panel.append(buildChips(doc, advisory, derived));
+  panel.append(
+    buildChips(
+      doc,
+      derived,
+      globalThis.bghsa.derive.embargoOverdue(
+        advisory,
+        tracking.embargo ? tracking.embargoLift : null
+      )
+    )
+  );
 
   const missing = missingValues(advisory, derived);
   if (missing.length > 0) {

@@ -141,3 +141,30 @@ test('an advisory with no private fork has no patch prepared', () => {
   assert.deepStrictEqual(state.patch.branches, []);
   assert.deepStrictEqual(state.patch.pullRequests, []);
 });
+
+/** The instant every embargo assertion below is judged against. */
+const NOW = Date.parse('2026-08-26T12:00:00Z');
+
+test('an embargo is overdue where its lift moment has passed and nothing published it', () => {
+  const triage = advisory('triage-thread.html');
+  assert.strictEqual(triage.state, 'Triage');
+  const published = advisory('published-containerd.html');
+  assert.strictEqual(published.state, 'Published');
+  const unread = { ...triage, state: null };
+
+  /** @type {[string, typeof triage, string | null, boolean][]} */
+  const cases = [
+    ['a lift date already gone by', triage, '2026-08-01', true],
+    ['a lift date later today', triage, '2026-08-26', false],
+    ['a lift date next month', triage, '2026-09-30', false],
+    ['a lift time earlier today', triage, '2026-08-26T11:00:00Z', true],
+    ['a lift time later today', triage, '2026-08-26T13:00:00Z', false],
+    ['a lift date gone by on a published advisory', published, '2026-08-01', false],
+    ['a lift date gone by on an advisory whose state went unread', unread, '2026-08-01', true],
+    ['a lift date that is not a date', triage, 'when the harvest is in', false],
+    ['no lift date at all', triage, null, false],
+  ];
+  for (const [name, parsed, lift, overdue] of cases) {
+    assert.strictEqual(derive.embargoOverdue(parsed, lift, NOW), overdue, name);
+  }
+});

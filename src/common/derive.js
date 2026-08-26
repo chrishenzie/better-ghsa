@@ -52,6 +52,42 @@ function reviewedByState(advisory) {
   return state === 'draft' || state === 'published';
 }
 
+/** A stored lift date carrying no time of day, which stands for the whole day. */
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * @param {string} lift A stored embargo lift date.
+ * @returns {number | null} the instant the embargo has run past, and null for
+ *   a value that does not read as a time. A date with no time of day stands
+ *   for the whole of that day, so it runs out at the end of it in UTC.
+ */
+function liftInstant(lift) {
+  const stamp = DATE_ONLY.test(lift) ? `${lift}T23:59:59.999Z` : lift;
+  const parsed = Date.parse(stamp);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+/**
+ * Whether the embargo on this advisory has run out: its lift date has gone by
+ * and the advisory is not published.
+ *
+ * An advisory whose state this extension could not read counts as unpublished,
+ * because the page said nothing that says otherwise, and the state it could
+ * not read is named in the panel's incomplete banner.
+ *
+ * @param {import('./parse-detail.js').ParsedDetail} advisory
+ * @param {string | null} lift The stored lift date, and null where no embargo
+ *   is in force or none names a date.
+ * @param {number} [now] The instant to judge the date against.
+ * @returns {boolean}
+ */
+function embargoOverdue(advisory, lift, now = Date.now()) {
+  if (lift === null) return false;
+  if ((advisory.state === null ? null : advisory.state.toLowerCase()) === 'published') return false;
+  const instant = liftInstant(lift);
+  return instant !== null && now > instant;
+}
+
 /**
  * @typedef {object} CveState
  * @property {string | null} id The assigned CVE.
@@ -202,7 +238,7 @@ function derive(advisory) {
   };
 }
 
-globalThis.bghsa.derive = { derive, memberLogins, cveState, patchState };
+globalThis.bghsa.derive = { derive, memberLogins, cveState, patchState, embargoOverdue };
 
 if (typeof module !== 'undefined') {
   module.exports = globalThis.bghsa.derive;
