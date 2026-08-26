@@ -43,6 +43,9 @@ const SAVED_PENDING_MESSAGE =
 /** What the panel says while a write from it is on its way to GitHub. */
 const WRITING_MESSAGE = 'Writing to GitHub.';
 
+/** What marks a control the flight took away, so the flight can give it back. */
+const FLIGHT_MARK = 'data-bghsa-flight';
+
 /** What the panel says when Save is pressed with every control as it stands. */
 const UNCHANGED_MESSAGE = 'Nothing was written: no control on this panel holds a change.';
 
@@ -215,14 +218,15 @@ function pick(staged, stored) {
 
 /**
  * The fields of `pending` the advisory does not already carry. A control put
- * back where it started is not a change, and neither is a date on an embargo
- * that is off or a duplicate on a closure that is not a duplicate.
+ * back where it started is not a change. A value in a control whose gate is
+ * off is one the panel holds and a save does not write, and it is here,
+ * because the panel is what holds it.
  *
  * @param {TrackingView} tracking
  * @param {Pending} pending
  * @returns {Pending}
  */
-function differences(tracking, pending) {
+function staged(tracking, pending) {
   /** @type {Pending} */
   const kept = {};
   if (pending.triage !== undefined && pending.triage !== tracking.triage) {
@@ -231,19 +235,16 @@ function differences(tracking, pending) {
   if (pending.owners !== undefined && !sameLogins(pending.owners, tracking.owners)) {
     kept.owners = pending.owners;
   }
-  const embargo = pick(pending.embargo, tracking.embargo);
   if (pending.embargo !== undefined && pending.embargo !== tracking.embargo) {
     kept.embargo = pending.embargo;
   }
-  if (embargo && pending.embargoLift !== undefined && pending.embargoLift !== tracking.embargoLift) {
+  if (pending.embargoLift !== undefined && pending.embargoLift !== tracking.embargoLift) {
     kept.embargoLift = pending.embargoLift;
   }
-  const reason = pick(pending.closureReason, tracking.closureReason);
   if (pending.closureReason !== undefined && pending.closureReason !== tracking.closureReason) {
     kept.closureReason = pending.closureReason;
   }
   if (
-    reason === 'duplicate' &&
     pending.closureDuplicateOf !== undefined &&
     pending.closureDuplicateOf !== tracking.closureDuplicateOf
   ) {
@@ -252,14 +253,68 @@ function differences(tracking, pending) {
   /** @type {Partial<Record<ConfirmationTrack, boolean>>} */
   const confirm = {};
   for (const track of globalThis.bghsa.tracking.CONFIRMATION_TRACKS) {
-    const staged = pending.confirm?.[track.key];
-    if (staged === undefined) continue;
-    if (staged === (tracking[track.key].status === 'confirmed')) continue;
-    confirm[track.key] = staged;
+    const value = pending.confirm?.[track.key];
+    if (value === undefined) continue;
+    if (value === (tracking[track.key].status === 'confirmed')) continue;
+    confirm[track.key] = value;
   }
   if (Object.keys(confirm).length > 0) kept.confirm = confirm;
   if (pending.supersede !== undefined) kept.supersede = pending.supersede;
   return kept;
+}
+
+/**
+ * The staged fields a save writes: the ones the advisory does not already
+ * carry, less a date on an embargo that is off and a duplicate on a closure
+ * that is not a duplicate. Neither has a place in the snapshot the controls
+ * describe, so neither is a change to write.
+ *
+ * @param {TrackingView} tracking
+ * @param {Pending} pending
+ * @returns {Pending}
+ */
+function differences(tracking, pending) {
+  const kept = staged(tracking, pending);
+  if (!pick(pending.embargo, tracking.embargo)) delete kept.embargoLift;
+  if (pick(pending.closureReason, tracking.closureReason) !== 'duplicate') {
+    delete kept.closureDuplicateOf;
+  }
+  return kept;
+}
+
+/**
+ * The values a control holds that a save leaves behind, and what the panel says
+ * about each. A maintainer who typed a date and then turned the embargo off
+ * still has the date, and is told it is not going anywhere until the embargo is
+ * back on.
+ *
+ * @type {Record<string, string>}
+ */
+const HELD_NOTES = {
+  embargoLift: 'The lift date is held and is not written while the embargo is off.',
+  closureDuplicateOf:
+    'The duplicate advisory is held and is not written while the closure reason is not' +
+    ' duplicate.',
+};
+
+/**
+ * @param {TrackingView} tracking
+ * @param {Pending} pending
+ * @returns {string[]} the staged fields a save leaves behind because the
+ *   control that gates them is off.
+ */
+function heldTracks(tracking, pending) {
+  const all = staged(tracking, pending);
+  const writing = differences(tracking, pending);
+  /** @type {string[]} */
+  const names = [];
+  if (all.embargoLift !== undefined && writing.embargoLift === undefined) {
+    names.push('embargoLift');
+  }
+  if (all.closureDuplicateOf !== undefined && writing.closureDuplicateOf === undefined) {
+    names.push('closureDuplicateOf');
+  }
+  return names;
 }
 
 /**
@@ -372,23 +427,19 @@ function changedTracks(tracking, fingerprints, pending) {
  * both stop counting as unsaved work.
  *
  * A confirmation the panel cannot record is not one the advisory has caught up
- * with, so it stays where it is and the panel keeps saying so.
+ * with, so it stays where it is and the panel keeps saying so. Neither is a
+ * value whose gate is off: a save leaves it behind, and a pass that dropped it
+ * would take typing the maintainer can still see.
  *
  * @param {string} key
  * @param {TrackingView} tracking
- * @param {Fingerprints} fingerprints
  * @returns {void}
  */
-function prune(key, tracking, fingerprints) {
+function prune(key, tracking) {
   const pending = edits.get(key);
   if (pending === undefined) return;
-  const kept = differences(tracking, pending);
-  const gate = writable(tracking, fingerprints, kept);
-  if (
-    changedTracks(tracking, fingerprints, kept).length === 0 &&
-    gate.blocked.length === 0 &&
-    kept.supersede !== true
-  ) {
+  const kept = staged(tracking, pending);
+  if (PENDING_FIELDS.every((field) => !Object.hasOwn(kept, field)) && kept.supersede !== true) {
     edits.delete(key);
   } else {
     edits.set(key, kept);
@@ -759,6 +810,37 @@ function refused(reason, message) {
 }
 
 /**
+ * @param {unknown} error
+ * @returns {string} what the panel says where a save ended in an error rather
+ *   than a result. Where the request went and what became of it are both
+ *   unknown here, and the message says so.
+ */
+function failedMessage(error) {
+  const detail = error instanceof Error ? error.message : String(error);
+  return (
+    `The save did not finish: ${detail}. This extension cannot tell whether the write` +
+    ' landed. Reload the advisory to see what it carries.'
+  );
+}
+
+/**
+ * Asks for a render pass. A pass that fails is not one asking again would fix,
+ * and the result a maintainer is owed is recorded before this runs, so the
+ * failure ends here and the press that started the save puts the panel back.
+ *
+ * @param {EditorContext} context
+ * @returns {Promise<void>}
+ */
+async function repaint(context) {
+  try {
+    await context.rerender?.();
+  } catch {
+    // Nothing here can rebuild the panel. The controls come back where they
+    // stand, and the note says what the last save did.
+  }
+}
+
+/**
  * A save that stopped before a request was built. The reason is recorded and a
  * pass is asked for, because the press that started the save put "Writing to
  * GitHub" on the panel and disabled the controls, and the panel holds those
@@ -772,7 +854,7 @@ function refused(reason, message) {
  */
 async function stopped(context, key, reason, message) {
   results.set(key, { ok: false, message });
-  await context.rerender?.();
+  await repaint(context);
   return refused(reason, message);
 }
 
@@ -788,6 +870,12 @@ async function stopped(context, key, reason, message) {
  */
 async function save(context) {
   const key = keyOf(context.advisory);
+  // A save while one is already going out is refused here, where the mark is
+  // set. The write refuses it too, and a second call reaching that refusal
+  // would take the mark the first call is still flying under with it.
+  if (saving.has(key)) {
+    return stopped(context, key, 'in-flight', globalThis.bghsa.state.IN_FLIGHT_MESSAGE);
+  }
   const pending = editsFor(key);
   if (changedTracks(context.tracking, context.fingerprints, pending).length === 0) {
     // A staged confirmation with nothing behind it is work the maintainer did,
@@ -800,15 +888,6 @@ async function save(context) {
   }
   const ref = context.advisory.ref;
   if (ref === null) return stopped(context, key, 'unreadable', UNREADABLE_MESSAGE);
-
-  // The changes as they will be built, read for the records they take away.
-  // The envelope stands in here: which fields a save removes does not depend
-  // on who writes it or when.
-  const shape = changesOf(context.tracking, context.fingerprints, pending, { by: '', at: '' });
-  const blocked = unclearable(context.merged.state, shape);
-  if (blocked.length > 0) {
-    return stopped(context, key, 'unclearable', unclearableMessage(blocked));
-  }
 
   results.delete(key);
   // What the request carries, held from before it goes out. The store moves on
@@ -826,16 +905,30 @@ async function save(context) {
       // this panel never showed. The holder is what tells the two apart.
       loadedHolder: globalThis.bghsa.state.holderOf(context.merged),
       changes: (envelope) => changesOf(context.tracking, context.fingerprints, pending, envelope),
+      // What a clear would take away is judged against the state the write
+      // builds on, which is the one its own fetch read. The state the panel
+      // loaded with is older and can hold other fields.
+      guard: (state, changes) => {
+        const blocked = unclearable(state, changes);
+        return blocked.length === 0
+          ? null
+          : { reason: 'unclearable', message: unclearableMessage(blocked) };
+      },
       confirmed: pending.supersede === true,
       ...(context.at === undefined ? {} : { at: context.at }),
       ...(context.fetch === undefined ? {} : { fetch: context.fetch }),
       ...(context.parseDocument === undefined ? {} : { parseDocument: context.parseDocument }),
     });
-  } finally {
-    // Released before the pass below, so the pass builds controls a maintainer
-    // can use again.
+  } catch (error) {
+    // Every failure the writer knows comes back as a result. One that reaches
+    // here is the ground moving under it, and the panel says so rather than
+    // holding "Writing to GitHub" until something else asks for a pass.
     saving.delete(key);
+    return stopped(context, key, 'failed', failedMessage(error));
   }
+  // Released by the call that set it, and before the pass below, so the pass
+  // builds controls a maintainer can use again.
+  saving.delete(key);
 
   const landed = outcome.ok ? afterWrite(outcome) : null;
   if (landed !== null) {
@@ -846,7 +939,7 @@ async function save(context) {
   }
   const saved = edits.has(key) ? SAVED_PENDING_MESSAGE : SAVED_MESSAGE;
   results.set(key, { ok: outcome.ok, message: outcome.ok ? saved : outcome.message });
-  await context.rerender?.();
+  await repaint(context);
   return outcome;
 }
 
@@ -1248,7 +1341,7 @@ function supersedeField(doc, key, update) {
  */
 function buildEditor(doc, context) {
   const key = keyOf(context.advisory);
-  prune(key, context.tracking, context.fingerprints);
+  prune(key, context.tracking);
   const box = element(doc, 'div', 'Box-row bghsa-editor');
 
   if (context.merged.readOnly) {
@@ -1267,6 +1360,10 @@ function buildEditor(doc, context) {
 
   const controls = element(doc, 'div', 'pt-2 bghsa-controls');
   disclosure.append(controls);
+
+  // The result this panel is built for, which is the one the flash below
+  // carries. The note names anything that lands after it.
+  const shown = results.get(key);
 
   // Built before the controls so their handlers can call it, and given its work
   // once the nodes it reports on are in hand.
@@ -1297,22 +1394,44 @@ function buildEditor(doc, context) {
     const pending = editsFor(key);
     const names = changedTracks(context.tracking, context.fingerprints, pending);
     const blocked = blockedTracks(context.tracking, context.fingerprints, pending);
+    const held = heldTracks(context.tracking, pending);
     /** @type {string[]} */
     const said = [];
     if (names.length > 0) said.push(`Unsaved changes: ${names.join(', ')}.`);
     if (blocked.length > 0) said.push(unrecordedNote(blocked));
+    for (const field of held) {
+      const sentence = HELD_NOTES[field];
+      if (sentence !== undefined) said.push(sentence);
+    }
+    // What a save did lands in the panel as a flash on the next pass. A result
+    // this panel was not built for is one no pass has shown, so the note
+    // carries it: the pass may be the thing that failed.
+    const result = results.get(key);
+    if (result !== undefined && result !== shown) said.push(result.message);
     note.textContent = flight
       ? WRITING_MESSAGE
       : said.length === 0
         ? 'No unsaved changes.'
         : said.join(' ');
     setDisabled(saveButton, flight || names.length === 0);
-    setDisabled(discardButton, flight || (names.length === 0 && blocked.length === 0));
+    setDisabled(
+      discardButton,
+      flight || (names.length === 0 && blocked.length === 0 && held.length === 0)
+    );
     // Every control is held still while the request is out, whether this is
-    // the pass that sent it or a pass the page asked for in the meantime.
+    // the pass that sent it or a pass the page asked for in the meantime, and
+    // the flight gives back what it took once it settles. A control already
+    // off for a reason of its own is left alone.
     if (flight) {
-      for (const held of controls.querySelectorAll('input, select, button')) {
-        setDisabled(held, true);
+      for (const node of controls.querySelectorAll('input, select, button')) {
+        if (node.hasAttribute('disabled')) continue;
+        node.setAttribute(FLIGHT_MARK, '');
+        setDisabled(node, true);
+      }
+    } else {
+      for (const node of controls.querySelectorAll(`[${FLIGHT_MARK}]`)) {
+        node.removeAttribute(FLIGHT_MARK);
+        setDisabled(node, false);
       }
     }
   };
@@ -1320,24 +1439,24 @@ function buildEditor(doc, context) {
 
   saveButton.addEventListener('click', () => {
     // The save marks the advisory before it awaits anything, so the controls
-    // this press leaves behind read the flight from the same place a pass does.
-    const sent = save(context);
+    // this press leaves behind read the flight from the same place a pass does,
+    // and they are read again once it settles, because the pass that would
+    // replace them can be the thing that went wrong.
+    void save(context).then(update, update);
     update();
-    void sent;
   });
   discardButton.addEventListener('click', () => {
     discard(key);
     void context.rerender?.();
   });
 
-  const result = results.get(key);
-  if (result !== undefined) {
+  if (shown !== undefined) {
     controls.append(
       element(
         doc,
         'div',
-        `flash mt-2 bghsa-save-result ${result.ok ? 'flash-success' : 'flash-warn'}`,
-        result.message
+        `flash mt-2 bghsa-save-result ${shown.ok ? 'flash-success' : 'flash-warn'}`,
+        shown.message
       )
     );
   }
@@ -1368,7 +1487,10 @@ globalThis.bghsa.edit = {
   stageConfirmation,
   discard,
   release,
+  staged,
   differences,
+  HELD_NOTES,
+  heldTracks,
   writable,
   blockedTracks,
   unrecordedNote,

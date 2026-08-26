@@ -169,14 +169,17 @@ function lastSnapshot(calls) {
 }
 
 /**
- * @returns {void} takes every advisory's changes, held state, and results back
- *   out, so one test says nothing to the next.
+ * @returns {void} takes every advisory's changes, held state, results,
+ *   half-typed text, and flight marks back out, so one test says nothing to
+ *   the next.
  */
 function forget() {
   edit.edits.clear();
   edit.written.clear();
   edit.results.clear();
   edit.opened.clear();
+  edit.drafts.clear();
+  edit.saving.clear();
 }
 
 /**
@@ -855,11 +858,82 @@ function embargoWithUnknownField(page) {
   fence.textContent = JSON.stringify(held, null, 2);
 }
 
+test('a lift date typed with the embargo off survives a pass', async () => {
+  forget();
+  const page = fixture('triage-thread.html');
+  const advisory = parse.parseDetail(page);
+  if (advisory === null) throw new Error('the fixture is not an advisory detail page');
+  const key = edit.keyOf(advisory);
+  const first = await panel.render(page);
+  assert.ok(first !== null, 'the fixture offered no anchor');
+  const before = /** @type {Element} */ (first);
+  tick(control(before, 'input.bghsa-embargo'), false);
+  typing(control(before, 'input.bghsa-embargo-lift'), '2026-12-01');
+  assert.ok(
+    note(before).includes('The lift date is held'),
+    `the panel said nothing of the date it holds: ${note(before)}`
+  );
+
+  const second = await panel.render(page);
+  assert.ok(second !== null, 'the second pass placed no panel');
+  const after = /** @type {Element} */ (second);
+  assert.strictEqual(
+    edit.editsFor(key).embargoLift,
+    '2026-12-01',
+    'the pass took the date the maintainer typed'
+  );
+  assert.strictEqual(
+    control(after, 'input.bghsa-embargo-lift').getAttribute('value'),
+    '2026-12-01',
+    'the control came back holding something else'
+  );
+  forget();
+});
+
+test('a duplicate id survives the reason moving away and back', async () => {
+  forget();
+  const { page, talk } = pair('triage-thread.html');
+  const { editor } = await editorFor(page, {
+    fetch: talk.fetch,
+    parseDocument: talk.parseDocument,
+  });
+  choose(control(editor, 'select.bghsa-closure'), 'duplicate');
+  typing(control(editor, 'input.bghsa-closure-duplicate'), 'GHSA-1111-2222-3333');
+  choose(control(editor, 'select.bghsa-closure'), 'out of scope');
+  assert.ok(
+    note(editor).includes('The duplicate advisory is held'),
+    `the panel said nothing of the id it holds: ${note(editor)}`
+  );
+
+  // A pass, which is where the value was going missing.
+  const again = await editorFor(page, {
+    fetch: talk.fetch,
+    parseDocument: talk.parseDocument,
+  });
+  choose(control(again.editor, 'select.bghsa-closure'), 'duplicate');
+  assert.strictEqual(
+    control(again.editor, 'input.bghsa-closure-duplicate').getAttribute('value'),
+    'GHSA-1111-2222-3333',
+    'the control came back holding something else'
+  );
+  const outcome = await edit.save(again.context);
+  assert.ok(outcome.ok === true, `the save failed: ${outcome.message}`);
+  const closure = /** @type {Record<string, unknown>} */ (sentSnapshot(talk.calls)['closure']);
+  assert.ok(closure['reason'] === 'duplicate', 'the save wrote another closure reason');
+  assert.ok(
+    closure['duplicateOf'] === 'GHSA-1111-2222-3333',
+    'the save did not write the id the maintainer typed'
+  );
+  forget();
+});
+
 test('clearing a record holding an unknown field is refused', async () => {
   forget();
   const page = fixture('triage-thread.html');
   embargoWithUnknownField(page);
-  const talk = session(fixture('triage-thread.html'));
+  const remote = fixture('triage-thread.html');
+  embargoWithUnknownField(remote);
+  const talk = session(remote);
   const { editor, context } = await editorFor(page, {
     fetch: talk.fetch,
     parseDocument: talk.parseDocument,
@@ -870,13 +944,52 @@ test('clearing a record holding an unknown field is refused', async () => {
 
   assert.strictEqual(outcome.ok, false);
   assert.strictEqual(outcome.reason, 'unclearable');
-  assert.strictEqual(talk.calls.length, 0, 'a write that would delete a field went out');
+  assert.strictEqual(talk.posts().length, 0, 'a write that would delete a field went out');
   assert.strictEqual(
     outcome.message,
     'Nothing was written: clearing the embargo would delete embargo.reason, which this' +
       ' extension does not recognize and carries forward untouched. Update the extension.'
   );
   assert.strictEqual(edit.editsFor(key).embargo, false, 'the refused change was dropped');
+  forget();
+});
+
+test('a clear is judged against the state the write reads', async () => {
+  forget();
+  // The field landed on the advisory after the panel loaded, by a hand edit at
+  // the sequence the panel is holding. The panel's own page does not carry it.
+  const page = fixture('triage-thread.html');
+  const remote = fixture('triage-thread.html');
+  embargoWithUnknownField(remote);
+  const talk = session(remote);
+  const { editor, context } = await editorFor(page, {
+    fetch: talk.fetch,
+    parseDocument: talk.parseDocument,
+  });
+  tick(control(editor, 'input.bghsa-embargo'), false);
+  const outcome = await edit.save(context);
+
+  assert.ok(outcome.ok === false, 'a write that would delete embargo.reason landed');
+  assert.ok(outcome.reason === 'unclearable', `the write was refused as ${outcome.reason}`);
+  assert.strictEqual(talk.posts().length, 0, 'a write that would delete a field went out');
+});
+
+test('a clear the write reads no unknown field against still goes', async () => {
+  forget();
+  // The mirror: the panel loaded with the field and the advisory no longer
+  // carries it, so nothing stands in the way of the clear.
+  const page = fixture('triage-thread.html');
+  embargoWithUnknownField(page);
+  const talk = session(fixture('triage-thread.html'));
+  const { editor, context } = await editorFor(page, {
+    fetch: talk.fetch,
+    parseDocument: talk.parseDocument,
+  });
+  tick(control(editor, 'input.bghsa-embargo'), false);
+  const outcome = await edit.save(context);
+
+  assert.ok(outcome.ok === true, `the save failed: ${outcome.message}`);
+  assert.strictEqual(sentSnapshot(talk.calls)['embargo'], undefined);
   forget();
 });
 
@@ -1021,6 +1134,52 @@ test('a pass during a save leaves the maintainer nothing to stage', async () => 
   forget();
 });
 
+test('a second save while one is on its way keeps the flight mark', async () => {
+  forget();
+  const page = fixture('triage-thread.html');
+  const talk = session(fixture('triage-thread.html'));
+  /** @type {() => void} */
+  let go = () => {};
+  /** @type {Promise<void>} */
+  const arrive = new Promise((resolve) => {
+    go = () => resolve();
+  });
+  /** @type {import('../src/common/write.js').WriteFetch} */
+  const slow = async (url, init) => {
+    if ((init.method ?? 'GET') === 'GET') await arrive;
+    return talk.fetch(url, init);
+  };
+  const { editor, context } = await editorFor(page, {
+    fetch: slow,
+    parseDocument: talk.parseDocument,
+  });
+  const key = edit.keyOf(context.advisory);
+  choose(control(editor, 'select.bghsa-triage'), 'evaluating');
+
+  const flight = edit.save(context);
+  /** @type {import('../src/detail/state.js').StateWriteResult} */
+  let landed;
+  try {
+    const second = await edit.save(context);
+    assert.ok(second.ok === false, 'a second save while one was out was not refused');
+    assert.ok(second.reason === 'in-flight', `the second save was refused as ${second.reason}`);
+    assert.ok(edit.saving.has(key), 'the second save took the mark the first one is flying under');
+    // What a pass during the flight builds, which is what the maintainer reads.
+    const during = edit.buildEditor(page, context);
+    assert.strictEqual(note(during), edit.WRITING_MESSAGE);
+    assert.strictEqual(control(during, 'button.bghsa-save').hasAttribute('disabled'), true);
+  } finally {
+    // Let go of the flight whatever happened above, so a write left hanging
+    // says nothing to the next test.
+    go();
+    landed = await flight;
+  }
+  assert.ok(landed.ok === true, `the first save failed: ${landed.message}`);
+  assert.strictEqual(talk.posts().length, 1, 'more than one comment request went out');
+  assert.ok(!edit.saving.has(key), 'the mark outlived the flight');
+  forget();
+});
+
 test('a value staged while a write is out is kept and reported', async () => {
   forget();
   const page = fixture('triage-thread.html');
@@ -1088,6 +1247,108 @@ test('a save leaves a confirmation it could not record staged', async () => {
     'the confirmation the write could not record was dropped'
   );
   assert.strictEqual(edit.results.get(key)?.message, edit.SAVED_PENDING_MESSAGE);
+  forget();
+});
+
+/**
+ * Puts the writer out of action the way an environment failure does, and puts
+ * it back whatever the caller did.
+ *
+ * @param {() => Promise<void>} body
+ * @returns {Promise<void>}
+ */
+async function withBrokenWriter(body) {
+  const real = globalThis.bghsa.state.writeState;
+  globalThis.bghsa.state.writeState = async () => {
+    throw new TypeError('crypto.subtle is undefined');
+  };
+  try {
+    await body();
+  } finally {
+    globalThis.bghsa.state.writeState = real;
+  }
+}
+
+test('a save that threw is recorded and asks for a pass', async () => {
+  forget();
+  const page = fixture('triage-thread.html');
+  let passes = 0;
+  const { editor, context } = await editorFor(page, {
+    rerender: () => {
+      passes += 1;
+    },
+  });
+  const key = edit.keyOf(context.advisory);
+  choose(control(editor, 'select.bghsa-triage'), 'evaluating');
+
+  await withBrokenWriter(async () => {
+    const outcome = await edit.save(context);
+    assert.ok(outcome.ok === false, 'a save that threw came back as a write that landed');
+    assert.ok(outcome.reason === 'failed', `the save came back as ${outcome.reason}`);
+    assert.ok(
+      outcome.message.includes('crypto.subtle is undefined'),
+      `the panel says: ${outcome.message}`
+    );
+  });
+  assert.strictEqual(passes, 1, 'the save asked for no pass');
+  assert.ok(!edit.saving.has(key), 'the panel is still marked as writing');
+  assert.strictEqual(edit.editsFor(key).triage, 'evaluating', 'the change was thrown away');
+  forget();
+});
+
+test('a save whose render pass throws still settles', async () => {
+  forget();
+  const { page, talk } = pair('triage-thread.html');
+  const { editor, context } = await editorFor(page, {
+    fetch: talk.fetch,
+    parseDocument: talk.parseDocument,
+    rerender: () => {
+      throw new Error('the pass failed');
+    },
+  });
+  const key = edit.keyOf(context.advisory);
+  choose(control(editor, 'select.bghsa-triage'), 'evaluating');
+  const outcome = await edit.save(context);
+
+  assert.ok(outcome.ok === true, `the save failed: ${outcome.message}`);
+  assert.strictEqual(talk.posts().length, 1, 'the save wrote more than one comment');
+  assert.ok(!edit.saving.has(key), 'the panel is still marked as writing');
+  forget();
+});
+
+test('a save that ended in an error leaves the panel usable', async () => {
+  forget();
+  const page = fixture('triage-thread.html');
+  const { editor, context } = await editorFor(page, {
+    rerender: () => {
+      throw new Error('the pass failed');
+    },
+  });
+  const key = edit.keyOf(context.advisory);
+  choose(control(editor, 'select.bghsa-triage'), 'evaluating');
+
+  await withBrokenWriter(async () => {
+    /** @type {HTMLElement} */ (
+      /** @type {unknown} */ (control(editor, 'button.bghsa-save'))
+    ).click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+
+  assert.ok(!edit.saving.has(key), 'the panel is still marked as writing');
+  assert.ok(
+    note(editor).includes('The save did not finish'),
+    `the panel says: ${note(editor)}`
+  );
+  assert.strictEqual(
+    control(editor, 'select.bghsa-triage').hasAttribute('disabled'),
+    false,
+    'the flight kept the controls it took'
+  );
+  assert.strictEqual(
+    control(editor, 'button.bghsa-save').hasAttribute('disabled'),
+    false,
+    'the panel offers no way to try again'
+  );
   forget();
 });
 

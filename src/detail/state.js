@@ -26,8 +26,9 @@ if (typeof require === 'function') {
  * @property {boolean} ok
  * @property {string | null} reason One of `allowlist`, `in-flight`, `fetch`,
  *   `mismatch`, `unreadable`, `stale`, `superseded`, `read-only`,
- *   `confirmation`, `ambiguous`, `invalid`, the reasons a write of the comment
- *   itself carries, and null on success.
+ *   `confirmation`, `ambiguous`, `invalid`, the reason a caller's `guard`
+ *   named, the reasons a write of the comment itself carries, and null on
+ *   success.
  * @property {number | null} status
  * @property {string} message What happened, in the words the panel shows.
  * @property {Record<string, unknown> | null} snapshot The snapshot this write
@@ -69,6 +70,11 @@ if (typeof require === 'function') {
  *   a record naming who did something binds to.
  * @property {boolean} [confirmed] Whether the maintainer has confirmed a write
  *   that supersedes a snapshot this reader could not interpret.
+ * @property {(state: Record<string, unknown> | null, changes: Record<string,
+ *   unknown>) => { reason: string, message: string } | null} [guard] A last
+ *   look at the changes against the state this write builds on, which is the
+ *   state its own fetch read and not the one the panel was loaded with. An
+ *   objection refuses the write, and is what the panel says.
  * @property {string} [at] The write time. The clock is read when this is
  *   absent.
  * @property {WriteFetch} [fetch]
@@ -410,6 +416,11 @@ async function writeState(options) {
     // record inside them names the account this write goes out under.
     const changes =
       typeof options.changes === 'function' ? options.changes({ by: viewer, at }) : options.changes;
+    const objection = options.guard?.(merged.state, changes) ?? null;
+    if (objection !== null) {
+      return refused(objection.reason, null, objection.message, merged);
+    }
+
     const snapshot = globalThis.bghsa.merge.nextSnapshot(merged.state, changes, {
       by: viewer,
       at,
