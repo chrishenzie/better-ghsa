@@ -8,7 +8,10 @@ const { parseHTML } = require('linkedom');
 
 const parse = require('../src/common/parse-detail.js');
 const derive = require('../src/common/derive.js');
+const merge = require('../src/common/merge.js');
+const schema = require('../src/common/schema.js');
 const panel = require('../src/detail/panel.js');
+const tracking = require('../src/detail/tracking.js');
 const preserve = require('../src/detail/preserve.js');
 
 /**
@@ -74,10 +77,24 @@ function page() {
 
 /**
  * @param {import('../src/common/parse-detail.js').ParsedDetail} advisory
+ * @param {import('../src/detail/tracking.js').TrackingView} [view] the tracking
+ *   state to render, defaulting to an advisory no snapshot holds state for.
  * @returns {Element} the panel this advisory renders to.
  */
-function build(advisory) {
-  return panel.buildPanel(blank, advisory, derive.derive(advisory));
+function build(advisory, view = tracking.untracked()) {
+  return panel.buildPanel(blank, advisory, derive.derive(advisory), view);
+}
+
+/**
+ * The panel an advisory renders to with the tracking state its own page
+ * carries.
+ *
+ * @param {import('../src/common/parse-detail.js').ParsedDetail} advisory
+ * @returns {Promise<Element>}
+ */
+async function buildTracked(advisory) {
+  const merged = merge.mergeSnapshots(advisory.comments);
+  return build(advisory, await tracking.readAdvisory(advisory, merged));
 }
 
 /**
@@ -86,7 +103,7 @@ function build(advisory) {
  * @returns {Element} the panel placed in `doc`.
  */
 function place(doc, advisory = triage) {
-  const injected = panel.injectPanel(doc, advisory, derive.derive(advisory));
+  const injected = panel.injectPanel(doc, advisory, derive.derive(advisory), tracking.untracked());
   if (injected === null) throw new Error('the document offered no anchor');
   return injected;
 }
@@ -142,11 +159,48 @@ function chipClass(root, label) {
   throw new Error(`no chip reading ${label}`);
 }
 
-test('the chip row reads state, severity, and CVE', () => {
+/**
+ * The panel `advisory` renders to with `payload` holding its tracking state,
+ * judged against the values `advisory` itself carries.
+ *
+ * @param {import('../src/common/parse-detail.js').ParsedDetail} advisory
+ * @param {Record<string, unknown>} payload
+ * @returns {Promise<Element>}
+ */
+async function buildWith(advisory, payload) {
+  return build(advisory, tracking.read(payload, await tracking.fingerprints(advisory)));
+}
+
+/**
+ * @param {Element} root
+ * @param {string} name the track's name in the confirmation block.
+ * @returns {{ chip: string, classes: string, note: string }}
+ */
+function confirmation(root, name) {
+  for (const line of root.querySelectorAll('.bghsa-confirmation')) {
+    if (text(line.querySelector('.bghsa-confirmation-name')) !== name) continue;
+    const label = line.querySelector('.Label');
+    return {
+      chip: text(label),
+      classes: String(label?.getAttribute('class') ?? ''),
+      note: text(line.querySelector('.bghsa-confirmation-note')),
+    };
+  }
+  throw new Error(`no confirmation line for ${name}`);
+}
+
+/**
+ * @param {Element} root
+ * @returns {string[]} the labels of the rows the panel carries.
+ */
+function rowLabels(root) {
+  return texts(root, '.Box-row .bghsa-label');
+}
+
+test('the chip row reads state and severity', () => {
   assert.deepStrictEqual(texts(build(triage), '.Box-header .Label'), [
     'State: Triage',
     'Severity: High',
-    'CVE: none',
   ]);
 });
 
@@ -166,9 +220,153 @@ test('the panel reports whether the description is the original text', () => {
   assert.strictEqual(rowText(build(draft), 'Description'), 'Edited since it was reported.');
 });
 
-test('the panel sits in the main column, above the description Box, outside both live regions', () => {
+test('the panel leads with the three confirmations', () => {
+  const built = build(published);
+  assert.deepStrictEqual(texts(built, '.bghsa-confirmation-name'), [
+    'Advisory title',
+    'Advisory description',
+    'Severity and CVSS vector',
+  ]);
+  const first = built.querySelector('.Box-header')?.nextElementSibling;
+  assert.ok(
+    first?.classList.contains('bghsa-confirmed') === true,
+    'the confirmations are not the first thing under the chip row'
+  );
+});
+
+test('a confirmed value names who confirmed it and when', async () => {
+  const fingerprint = await schema.fingerprint(triage.title);
+  assert.ok(fingerprint === '8ae5d80140a5', `the title fingerprint reads ${fingerprint}`);
+  const built = await buildWith(triage, {
+    confirmed: { title: { by: 'samuelkarp', at: '2026-08-25T18:04:11Z', fp: fingerprint } },
+  });
+  const title = confirmation(built, 'Advisory title');
+  assert.ok(title.chip === 'Confirmed', `the title chip reads ${title.chip}`);
+  assert.ok(title.classes === 'Label Label--secondary', `a confirmed chip is toned: ${title.classes}`);
+  assert.ok(
+    title.note === 'samuelkarp confirmed this value on 2026-08-25 18:04 UTC.',
+    `the note reads ${title.note}`
+  );
+  assert.deepStrictEqual(
+    texts(built, '.bghsa-warning').filter((line) => line.includes('changed after')),
+    []
+  );
+});
+
+test('a value changed after it was confirmed reverts to unconfirmed and warns', async () => {
+  const fingerprint = await schema.fingerprint(triage.title);
+  const confirmed = {
+    confirmed: { title: { by: 'samuelkarp', at: '2026-08-25T18:04:11Z', fp: fingerprint } },
+  };
+  const rewritten = { ...triage, title: `${triage.title} in the drawer handler` };
+  const built = await buildWith(rewritten, confirmed);
+  const title = confirmation(built, 'Advisory title');
+  assert.ok(title.chip === 'Not confirmed', `the title chip reads ${title.chip}`);
+  assert.ok(
+    title.classes === 'Label Label--secondary bghsa-tone-danger',
+    `the drifted chip reads ${title.classes}`
+  );
+  assert.ok(
+    title.note === 'samuelkarp confirmed a different value on 2026-08-25 18:04 UTC.',
+    `the note reads ${title.note}`
+  );
+  assert.deepStrictEqual(texts(built, '.bghsa-warning'), [
+    'The advisory title changed after a maintainer confirmed it.',
+    'No maintainer has confirmed the severity and CVSS vector.',
+  ]);
+});
+
+test('each drifted track is named in its own warning', async () => {
+  const built = await buildWith(triage, {
+    confirmed: {
+      title: { by: 'samuelkarp', at: '2026-08-25T18:04:11Z', fp: '000000000000' },
+      scoring: { by: 'samuelkarp', at: '2026-08-25T18:04:11Z', fp: '000000000000' },
+    },
+  });
+  assert.deepStrictEqual(texts(built, '.bghsa-warning'), [
+    'The advisory title changed after a maintainer confirmed it.',
+    'The severity and CVSS vector changed after a maintainer confirmed it.',
+  ]);
+});
+
+test('an unconfirmed score warns and takes a state color', () => {
+  const built = build(published);
+  const scoring = confirmation(built, 'Severity and CVSS vector');
+  assert.ok(
+    scoring.classes === 'Label Label--secondary bghsa-tone-attention',
+    `the unconfirmed scoring chip reads ${scoring.classes}`
+  );
+  assert.deepStrictEqual(texts(built, '.bghsa-warning'), [
+    'No maintainer has confirmed the severity and CVSS vector.',
+  ]);
+});
+
+test('a confirmation whose current value went unread is not checked', async () => {
+  const built = await buildWith(
+    { ...triage, title: null },
+    { confirmed: { title: { by: 'samuelkarp', at: '2026-08-25T18:04:11Z', fp: 'aaaaaaaaaaaa' } } }
+  );
+  const title = confirmation(built, 'Advisory title');
+  assert.ok(title.chip === 'Not checked', `the title chip reads ${title.chip}`);
+  assert.ok(
+    title.classes === 'Label Label--secondary bghsa-tone-attention',
+    `the unchecked chip reads ${title.classes}`
+  );
+  assert.ok(
+    title.note ===
+      'samuelkarp confirmed a value on 2026-08-25 18:04 UTC. The value on the page' +
+        ' could not be read.',
+    `the note reads ${title.note}`
+  );
+});
+
+test('the stored tracks the triage advisory carries are shown', async () => {
+  const built = await buildTracked(triage);
+  assert.deepStrictEqual(rowLabels(built), [
+    'Triage',
+    'Owners',
+    'Backport targets',
+    'Embargo',
+    'Description',
+    'Original report',
+  ]);
+  assert.deepStrictEqual(texts(built, '.Box-row:not(.bghsa-confirmed) .bghsa-chips .Label'), [
+    'awaiting reporter',
+    'samuelkarp',
+    'release/1.0',
+  ]);
+  assert.deepStrictEqual(texts(built, '.bghsa-since'), ['since 2026-08-25 18:04 UTC']);
+  assert.strictEqual(rowText(built, 'Embargo'), 'Lifts 2026-09-30.');
+});
+
+test('a track the snapshot says nothing about carries no row', () => {
+  assert.deepStrictEqual(rowLabels(build(draft)), ['Description', 'Original report']);
+});
+
+test('a closed advisory shows the reason and what it duplicates', async () => {
+  const built = await buildWith(triage, {
+    triage: 'evaluating',
+    closure: { reason: 'duplicate', duplicateOf: 'GHSA-cm76-qm8v-3j95' },
+  });
+  assert.strictEqual(rowText(built, 'Closed as'), 'duplicateof GHSA-cm76-qm8v-3j95');
+});
+
+test('the panel does not list the snapshots it read', async () => {
+  const built = await buildTracked(triage);
+  const rendered = text(built);
+  assert.ok(
+    !rendered.includes('282848'),
+    'the panel names a comment the snapshots came from'
+  );
+  assert.ok(
+    !rendered.includes('prakleumas'),
+    'the panel names the author of an untrusted snapshot'
+  );
+});
+
+test('the panel sits in the main column, above the description Box, outside both live regions', async () => {
   reset(triageDoc);
-  const injected = panel.render(triageDoc);
+  const injected = await panel.render(triageDoc);
   assert.ok(injected !== null, 'render placed no panel');
   const placed = /** @type {Element} */ (injected);
 
@@ -209,7 +407,6 @@ test('a severity that cannot be read is shown as missing and raises the banner',
   assert.deepStrictEqual(texts(built, '.Box-header .Label'), [
     'State: Draft',
     'Severity: missing',
-    'CVE: none',
   ]);
   assert.strictEqual(
     chipClass(built, 'Severity: missing'),
@@ -236,24 +433,26 @@ test('a pull request state that went unread raises the banner and a warning', ()
   ]);
   assert.deepStrictEqual(texts(built, '.bghsa-warning:not(.bghsa-banner)'), [
     'A pull request named a state this extension does not read.',
+    'No maintainer has confirmed the severity and CVSS vector.',
   ]);
 });
 
-test('a published advisory shows its assigned CVE and reads everything', () => {
+test('a published advisory reads every value it displays', () => {
   const built = build(published);
   assert.deepStrictEqual(texts(built, '.Box-header .Label'), [
     'State: Published',
     'Severity: Moderate',
-    'CVE: CVE-2026-31984',
   ]);
   assert.deepStrictEqual(texts(built, '.bghsa-banner'), []);
-  assert.deepStrictEqual(texts(built, '.bghsa-warning'), []);
+  assert.deepStrictEqual(texts(built, '.bghsa-warning'), [
+    'No maintainer has confirmed the severity and CVSS vector.',
+  ]);
 });
 
-test('a document that is not an advisory detail page gets no panel', () => {
+test('a document that is not an advisory detail page gets no panel', async () => {
   for (const name of ['list-page-triage.html', 'list-page-draft.html', 'edit-form.html']) {
     const doc = parseFixture(name);
-    assert.ok(panel.render(doc) === null, name);
+    assert.ok((await panel.render(doc)) === null, name);
     assert.ok(doc.getElementById('bghsa-detail-panel') === null, name);
   }
 });
@@ -284,7 +483,7 @@ test('a panel no longer sitting at its anchor is put back there', () => {
   assert.strictEqual(panel.outOfPlace(doc), false);
 });
 
-test('advisory content swapped in after load gets a panel with no reload', () => {
+test('advisory content swapped in after load gets a panel with no reload', async () => {
   reset(triageDoc);
   const content = /** @type {Element} */ (
     triageDoc.querySelector('div.new-discussion-timeline')
@@ -292,7 +491,7 @@ test('advisory content swapped in after load gets a panel with no reload', () =>
   const host = /** @type {ParentNode} */ (content.parentNode);
   content.remove();
 
-  assert.ok(panel.render(triageDoc) === null, 'content that is gone still rendered a panel');
+  assert.ok((await panel.render(triageDoc)) === null, 'content that is gone still rendered a panel');
   assert.ok(
     triageDoc.getElementById('bghsa-detail-panel') === null,
     'a panel is still in the document'
@@ -300,12 +499,12 @@ test('advisory content swapped in after load gets a panel with no reload', () =>
   assert.strictEqual(panel.outOfPlace(triageDoc), true);
 
   host.append(content);
-  const injected = panel.render(triageDoc);
+  const injected = await panel.render(triageDoc);
   assert.ok(injected !== null, 'swapped-in content got no panel');
   assert.strictEqual(triageDoc.querySelectorAll('#bghsa-detail-panel').length, 1);
   assert.deepStrictEqual(
     texts(/** @type {Element} */ (injected), '.Box-header .Label'),
-    ['State: Triage', 'Severity: High', 'CVE: none']
+    ['State: Triage', 'Severity: High']
   );
   assert.strictEqual(panel.outOfPlace(triageDoc), false);
 });

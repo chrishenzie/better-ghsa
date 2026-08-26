@@ -13,6 +13,7 @@ interface BghsaNamespace {
   parseDetail: typeof import('../src/common/parse-detail.js');
   derive: typeof import('../src/common/derive.js');
   write: typeof import('../src/common/write.js');
+  tracking: typeof import('../src/detail/tracking.js');
   preserve: typeof import('../src/detail/preserve.js');
   state: typeof import('../src/detail/state.js');
   panel: typeof import('../src/detail/panel.js');

@@ -5,9 +5,12 @@ globalThis.bghsa ??= /** @type {BghsaNamespace} */ ({});
 // The manifest orders content scripts; under Node the dependencies are named here.
 if (typeof require === 'function') {
   require('../common/dom.js');
+  require('../common/text.js');
   require('../common/trust.js');
+  require('../common/merge.js');
   require('../common/parse-detail.js');
   require('../common/derive.js');
+  require('./tracking.js');
   require('./preserve.js');
 }
 
@@ -22,6 +25,10 @@ const STYLE_TEXT = [
   '.bghsa-chips { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; }',
   '.bghsa-label { flex: 0 0 9rem; }',
   '.bghsa-missing { font-style: italic; }',
+  '.bghsa-confirmed { display: flex; flex-direction: column; gap: 6px; }',
+  '.bghsa-confirmation-name { flex: 0 0 13rem; }',
+  '.bghsa-confirmation-note { color: var(--fgColor-muted); }',
+  '.bghsa-since { color: var(--fgColor-muted); }',
   '.bghsa-tone-attention { color: var(--fgColor-default);' +
     ' background-color: var(--bgColor-attention);' +
     ' border-color: var(--bgColor-attention); }',
@@ -58,6 +65,10 @@ function missingValues(advisory, derived) {
   if (advisory.ghsaId === null) missing.push('advisory id');
   if (advisory.state === null) missing.push('state');
   if (advisory.severity === null) missing.push('severity');
+  // The confirmations bind to these two, so a track cannot be judged without
+  // them.
+  if (advisory.title === null) missing.push('advisory title');
+  if (advisory.description === null) missing.push('advisory description');
   if (advisory.reporter === null) missing.push('reporter');
   if (advisory.reportedAt === null) missing.push('report time');
   if (advisory.descriptionOriginal === null) missing.push('description provenance');
@@ -124,6 +135,9 @@ function warning(doc, text) {
  * signal is a chip only while it is firing, because it is there to say that
  * something needs attention.
  *
+ * The CVE is on the list page. The advisory page carries it already, so the
+ * panel does not repeat it.
+ *
  * @param {Document} doc
  * @param {import('../common/parse-detail.js').ParsedDetail} advisory
  * @param {import('../common/derive.js').DerivedState} derived
@@ -134,11 +148,196 @@ function buildChips(doc, advisory, derived) {
   header.append(element(doc, 'strong', 'mr-2', 'Better GHSA'));
   header.append(valueChip(doc, 'State', advisory.state));
   header.append(valueChip(doc, 'Severity', advisory.severityLabel));
-  const cve = derived.cve;
-  header.append(chip(doc, `CVE: ${cve.id === null ? cve.state : cve.id}`));
   if (derived.neverReviewed) header.append(chip(doc, 'Never reviewed', 'danger'));
   if (derived.newActivity) header.append(chip(doc, 'New activity', 'attention'));
   return header;
+}
+
+/**
+ * The confirmation tracks, in the order the panel shows them. `warn` names the
+ * track REQUIREMENTS.md section 8 warns on while it stands unconfirmed.
+ *
+ * @type {readonly { key: 'title' | 'description' | 'scoring', name: string,
+ *   short: string, warn: boolean }[]}
+ */
+const CONFIRMATION_TRACKS = [
+  { key: 'title', name: 'Advisory title', short: 'advisory title', warn: false },
+  {
+    key: 'description',
+    name: 'Advisory description',
+    short: 'advisory description',
+    warn: false,
+  },
+  {
+    key: 'scoring',
+    name: 'Severity and CVSS vector',
+    short: 'severity and CVSS vector',
+    warn: true,
+  },
+];
+
+/**
+ * What the confirmation chip reads. A drifted track reverted to unconfirmed,
+ * and reads as unconfirmed; who confirmed a different value is the note beside
+ * it.
+ *
+ * @param {import('./tracking.js').Confirmation} state
+ * @returns {string}
+ */
+function confirmationText(state) {
+  if (state.status === 'confirmed') return 'Confirmed';
+  if (state.status === 'unreadable') return 'Not checked';
+  return 'Not confirmed';
+}
+
+/**
+ * @param {import('./tracking.js').Confirmation} state
+ * @param {boolean} warn Whether an unconfirmed track on this row is a warning.
+ * @returns {'attention' | 'danger' | undefined}
+ */
+function confirmationTone(state, warn) {
+  if (state.status === 'drifted') return 'danger';
+  if (state.status === 'unreadable') return 'attention';
+  if (state.status === 'unconfirmed' && warn) return 'attention';
+  return undefined;
+}
+
+/**
+ * Who acted and when, as a sentence. A record naming no login reads as a
+ * maintainer, because the confirmation stands whether or not the login
+ * survived.
+ *
+ * @param {import('./tracking.js').Confirmation} state
+ * @param {string} action
+ * @returns {string}
+ */
+function attribution(state, action) {
+  const who = state.by === null ? 'A maintainer' : state.by;
+  const at = globalThis.bghsa.text.formatTime(state.at);
+  return at === null ? `${who} ${action}.` : `${who} ${action} on ${at}.`;
+}
+
+/**
+ * @param {import('./tracking.js').Confirmation} state
+ * @returns {string | null} what the panel says beside the chip.
+ */
+function confirmationNote(state) {
+  if (state.status === 'confirmed') return attribution(state, 'confirmed this value');
+  if (state.status === 'drifted') return attribution(state, 'confirmed a different value');
+  if (state.status === 'unreadable') {
+    return `${attribution(state, 'confirmed a value')} The value on the page could not be read.`;
+  }
+  return null;
+}
+
+/**
+ * The confirmations, which are what the panel is for: whether the advisory
+ * text was rewritten for publication and whether the score was approved.
+ *
+ * @param {Document} doc
+ * @param {import('./tracking.js').TrackingView} tracking
+ * @returns {Element}
+ */
+function buildConfirmations(doc, tracking) {
+  const container = element(doc, 'div', 'Box-row bghsa-confirmed');
+  container.append(element(doc, 'div', 'text-bold', 'Confirmed by a maintainer'));
+  for (const track of CONFIRMATION_TRACKS) {
+    const state = tracking[track.key];
+    const line = element(doc, 'div', 'bghsa-chips bghsa-confirmation');
+    line.append(element(doc, 'span', 'bghsa-confirmation-name', track.name));
+    line.append(chip(doc, confirmationText(state), confirmationTone(state, track.warn)));
+    const note = confirmationNote(state);
+    if (note !== null) line.append(element(doc, 'span', 'bghsa-confirmation-note', note));
+    container.append(line);
+  }
+  return container;
+}
+
+/**
+ * The warnings REQUIREMENTS.md section 8 requires: an unconfirmed score, and a
+ * value that moved away from what was confirmed. Each drifted track is named
+ * on its own line, so the reader is told which value moved.
+ *
+ * A drifted score raises the drift warning alone. That warning says the
+ * confirmation no longer holds, which is what the unconfirmed warning would
+ * say a second time.
+ *
+ * @param {Document} doc
+ * @param {import('./tracking.js').TrackingView} tracking
+ * @returns {Element[]}
+ */
+function confirmationWarnings(doc, tracking) {
+  /** @type {Element[]} */
+  const warnings = [];
+  for (const track of CONFIRMATION_TRACKS) {
+    if (tracking[track.key].status !== 'drifted') continue;
+    warnings.push(warning(doc, `The ${track.short} changed after a maintainer confirmed it.`));
+  }
+  if (tracking.scoring.status === 'unconfirmed' || tracking.scoring.status === 'unreadable') {
+    warnings.push(warning(doc, 'No maintainer has confirmed the severity and CVSS vector.'));
+  }
+  return warnings;
+}
+
+/**
+ * A row carrying one chip per value.
+ *
+ * @param {Document} doc
+ * @param {string} label
+ * @param {string[]} values
+ * @returns {Element}
+ */
+function chipRow(doc, label, values) {
+  const built = row(doc, label);
+  built.body.className = 'flex-auto bghsa-chips';
+  for (const value of values) built.body.append(chip(doc, value));
+  return built.row;
+}
+
+/**
+ * The stored tracks. A track appears only where the snapshot says something
+ * about it, so an advisory nobody has set a value on carries no rows here.
+ *
+ * @param {Document} doc
+ * @param {import('./tracking.js').TrackingView} tracking
+ * @returns {Element[]}
+ */
+function buildTracks(doc, tracking) {
+  /** @type {Element[]} */
+  const rows = [];
+
+  if (tracking.triage !== null) {
+    const built = row(doc, 'Triage');
+    built.body.className = 'flex-auto bghsa-chips';
+    built.body.append(chip(doc, tracking.triage));
+    const since = globalThis.bghsa.text.formatTime(tracking.triageSince);
+    if (since !== null) built.body.append(element(doc, 'span', 'bghsa-since', `since ${since}`));
+    rows.push(built.row);
+  }
+  if (tracking.owners.length > 0) rows.push(chipRow(doc, 'Owners', tracking.owners));
+  if (tracking.backports.length > 0) {
+    rows.push(chipRow(doc, 'Backport targets', tracking.backports));
+  }
+  if (tracking.embargo) {
+    const built = row(doc, 'Embargo');
+    built.body.textContent =
+      tracking.embargoLift === null
+        ? 'In force, with no lift date recorded.'
+        : `Lifts ${tracking.embargoLift}.`;
+    rows.push(built.row);
+  }
+  if (tracking.closureReason !== null) {
+    const built = row(doc, 'Closed as');
+    built.body.className = 'flex-auto bghsa-chips';
+    built.body.append(chip(doc, tracking.closureReason));
+    if (tracking.closureDuplicateOf !== null) {
+      built.body.append(
+        element(doc, 'span', 'bghsa-since', `of ${tracking.closureDuplicateOf}`)
+      );
+    }
+    rows.push(built.row);
+  }
+  return rows;
 }
 
 /**
@@ -235,16 +434,17 @@ function buildPreserve(doc, advisory) {
 }
 
 /**
- * The panel, built from a parsed advisory and its derived state. It reads
- * nothing from the document beyond the document itself, which creates the
- * nodes.
+ * The panel, built from a parsed advisory, its derived state, and the tracking
+ * state the advisory's snapshots hold. It reads nothing from the document
+ * beyond the document itself, which creates the nodes.
  *
  * @param {Document} doc
  * @param {import('../common/parse-detail.js').ParsedDetail} advisory
  * @param {import('../common/derive.js').DerivedState} derived
+ * @param {import('./tracking.js').TrackingView} tracking
  * @returns {Element}
  */
-function buildPanel(doc, advisory, derived) {
+function buildPanel(doc, advisory, derived, tracking) {
   const panel = element(doc, 'div', 'Box mb-3 bghsa-panel');
   panel.id = PANEL_ID;
   panel.setAttribute('data-bghsa-panel', '1');
@@ -264,6 +464,10 @@ function buildPanel(doc, advisory, derived) {
   if (derived.patch.incomplete) {
     panel.append(warning(doc, 'A pull request named a state this extension does not read.'));
   }
+
+  panel.append(buildConfirmations(doc, tracking));
+  for (const banner of confirmationWarnings(doc, tracking)) panel.append(banner);
+  for (const track of buildTracks(doc, tracking)) panel.append(track);
 
   const descriptionRow = row(doc, 'Description');
   if (advisory.descriptionOriginal === null) {
@@ -320,10 +524,11 @@ function ensureStyle(doc) {
  * @param {Document} doc
  * @param {import('../common/parse-detail.js').ParsedDetail} advisory
  * @param {import('../common/derive.js').DerivedState} derived
+ * @param {import('./tracking.js').TrackingView} tracking
  * @returns {Element | null} the panel, or null when the page offers no anchor.
  */
-function injectPanel(doc, advisory, derived) {
-  const panel = buildPanel(doc, advisory, derived);
+function injectPanel(doc, advisory, derived, tracking) {
+  const panel = buildPanel(doc, advisory, derived, tracking);
   const existing = doc.getElementById(PANEL_ID);
   const place = anchor(doc);
   if (place !== null) {
@@ -357,13 +562,18 @@ function outOfPlace(doc) {
  * Reads the document and places the panel. Returns null when the document is
  * not an advisory detail page, or when it offers no anchor.
  *
+ * Reading is asynchronous because a confirmation is judged against a
+ * fingerprint, and a digest is computed asynchronously.
+ *
  * @param {Document} doc
- * @returns {Element | null}
+ * @returns {Promise<Element | null>}
  */
-function render(doc) {
+async function render(doc) {
   const advisory = globalThis.bghsa.parseDetail.parseDetail(doc);
   if (advisory === null) return null;
-  return injectPanel(doc, advisory, globalThis.bghsa.derive.derive(advisory));
+  const merged = globalThis.bghsa.merge.mergeSnapshots(advisory.comments);
+  const tracking = await globalThis.bghsa.tracking.readAdvisory(advisory, merged);
+  return injectPanel(doc, advisory, globalThis.bghsa.derive.derive(advisory), tracking);
 }
 
 /**
@@ -392,7 +602,7 @@ function observe(doc) {
     scheduled = true;
     setTimeout(() => {
       scheduled = false;
-      if (outOfPlace(doc)) render(doc);
+      if (outOfPlace(doc)) void render(doc);
     }, 0);
   });
   observer.observe(target, { childList: true, subtree: true });
@@ -403,7 +613,7 @@ function observe(doc) {
  * @returns {void} renders the panel into this page and keeps it there.
  */
 function start() {
-  render(globalThis.document);
+  void render(globalThis.document);
   observe(globalThis.document);
 }
 
@@ -411,7 +621,12 @@ globalThis.bghsa.panel = {
   PANEL_ID,
   STYLE_ID,
   MISSING,
+  CONFIRMATION_TRACKS,
   missingValues,
+  when,
+  buildConfirmations,
+  confirmationWarnings,
+  buildTracks,
   buildPreserve,
   press,
   buildPanel,

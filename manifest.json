@@ -18,6 +18,7 @@
         "src/common/parse-detail.js",
         "src/common/derive.js",
         "src/common/write.js",
+        "src/detail/tracking.js",
         "src/detail/preserve.js",
         "src/detail/state.js",
         "src/detail/panel.js",
