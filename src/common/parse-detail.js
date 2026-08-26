@@ -45,11 +45,17 @@ function datetimeOf(element) {
 
 /**
  * @param {string | null | undefined} href
- * @returns {string | null} the login a `/{login}` href names.
+ * @returns {string | null} the login a `/{login}` href names. A percent escape
+ *   that does not decode names no login.
  */
 function loginFromHref(href) {
   const match = /^\/([^/?#]+)\/?$/.exec(String(href ?? ''));
-  return match === null ? null : decodeURIComponent(match[1] ?? '');
+  if (match === null) return null;
+  try {
+    return decodeURIComponent(match[1] ?? '');
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -85,12 +91,13 @@ function isCommentForm(form) {
  *
  * The box has to hold the form that posts a comment on this advisory, so the
  * login read here is the one that would author a comment written from this
- * page. A published advisory carries no such box and reads as null.
+ * page. A page carrying no such box reads as null.
  *
- * The anchor's href and the avatar's `alt` name the login twice, and they have
- * to agree. A login this cannot read is null, and a write with no login in
- * hand is refused: writing under the wrong identity edits another
- * maintainer's comment.
+ * The anchor's href and the avatar's `alt` name the login twice, and both have
+ * to name it and agree. A box naming it once is a box this does not read. A
+ * login this cannot read is null, and a write with no login in hand is
+ * refused: writing under the wrong identity edits another maintainer's
+ * comment.
  *
  * @param {Document} root
  * @returns {string | null}
@@ -111,8 +118,8 @@ function parseViewer(root) {
   if (login === null) return null;
 
   const image = link.querySelector('img[alt]');
-  const alt = image === null ? '' : collapse(image.getAttribute('alt'));
-  if (alt !== '' && alt !== `@${login}`) return null;
+  if (image === null) return null;
+  if (collapse(image.getAttribute('alt')) !== `@${login}`) return null;
   return login;
 }
 

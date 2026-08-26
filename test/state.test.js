@@ -286,6 +286,25 @@ test('a write never targets the comment another maintainer wrote', async () => {
   );
 });
 
+test('a viewer login spelled in another case edits the comment already there', async () => {
+  assert.strictEqual(
+    state.sameLogin('SamuelKarp', 'samuelkarp'),
+    true,
+    'two spellings of one login read as two accounts'
+  );
+
+  const page = triagePage();
+  // One account, spelled the way another part of GitHub spells it. Its state
+  // comment is the one this write replaces, and a second one is not created.
+  signIn(page, 'SamuelKarp');
+  const { outcome, calls } = await run(page, {});
+  assert.ok(outcome.ok === true, `the write failed: ${outcome.message}`);
+  assert.strictEqual(
+    target(calls),
+    `/git-utensils/Spoon-Knife/security/advisories/GHSA-jmvx-2wfw-xfgj/comments/${OWN_ID}`
+  );
+});
+
 test('a maintainer with two state comments is not written for', async () => {
   const page = triagePage();
   const other = page.querySelector(`#advisory-comment-${OTHER_ID}`);

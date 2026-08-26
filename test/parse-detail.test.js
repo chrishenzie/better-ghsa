@@ -444,7 +444,10 @@ test('the signed-in login is the one on the new-comment box', () => {
   );
 });
 
-test('an advisory with no new-comment box names no signed-in login', () => {
+test('a capture carrying no new-comment box names no signed-in login', () => {
+  // The containerd capture holds neither a comment thread nor a box that
+  // composes one. It is a page with nothing to read the login from, and it is
+  // not what a signed-in maintainer of that repository is served.
   const advisory = parse.parseDetail(fixture('published-containerd.html'));
   if (advisory === null) throw new Error('published-containerd.html did not parse');
   assert.strictEqual(advisory.viewer, null);
@@ -475,8 +478,34 @@ test('the signed-in login is named only where one box, avatar and form agree', (
       null,
     ],
     ['a box carrying no avatar', composer(COMPOSER_FORM), null],
+    [
+      'an avatar whose image names no login',
+      composer(avatar('/samuelkarp', '') + COMPOSER_FORM),
+      null,
+    ],
+    [
+      'an avatar carrying no image',
+      composer(
+        '<span class="timeline-comment-avatar"><a href="/samuelkarp"></a></span>' + COMPOSER_FORM
+      ),
+      null,
+    ],
   ];
   for (const [name, box, viewer] of cases) {
     assert.strictEqual(parse.parseViewer(box), viewer, name);
   }
+});
+
+test('an href whose percent escape does not decode names no login', () => {
+  // The author link falls back to the text it shows.
+  const commented = document(
+    '<div class="timeline-comment-group" id="advisory-comment-1">' +
+      '<a class="author" href="/%zz">prakleumas</a></div>'
+  );
+  const comments = parse.parseComments(commented);
+  assert.strictEqual(comments.length, 1);
+  assert.strictEqual(comments[0]?.author, 'prakleumas');
+
+  const box = composer(avatar('/%zz', '@%zz') + COMPOSER_FORM);
+  assert.strictEqual(parse.parseViewer(box), null);
 });

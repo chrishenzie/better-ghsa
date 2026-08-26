@@ -45,33 +45,36 @@ test('a reporter comment newer than every member action is new activity', () => 
   assert.strictEqual(state.newActivity, true);
 });
 
-test('an advisory with no comment at all has no visible member', () => {
+test('a capture carrying no comment thread has no visible member', () => {
+  // The containerd capture holds no comment nodes, so there is no badge to
+  // read a member off. What that advisory's thread holds is not in it.
   const state = derive.derive(advisory('published-containerd.html'));
   assert.deepStrictEqual(state.members, []);
   assert.strictEqual(state.newActivity, false);
 });
 
-test('a published advisory is reviewed with no member comment on it', () => {
-  const state = derive.derive(advisory('published-containerd.html'));
-  assert.deepStrictEqual(state.members, []);
-  assert.strictEqual(state.neverReviewed, false);
-});
-
-test('a draft advisory is reviewed', () => {
-  const parsed = advisory('draft.html');
-  assert.strictEqual(parsed.state, 'Draft');
-  const bare = { ...parsed, comments: [], timeline: [] };
-  const state = derive.derive(bare);
-  assert.deepStrictEqual(state.members, []);
-  assert.strictEqual(state.neverReviewed, false);
-});
-
-test('a closed advisory with no member activity is never reviewed', () => {
+test('the advisory state alone says whether it has been reviewed', () => {
+  // The containerd capture carries no member comment and no member action, so
+  // the state is the only signal left and never-reviewed follows it. Only the
+  // state varies here: moving an advisory to draft or published leaves its
+  // thread where it is.
   const parsed = advisory('published-containerd.html');
-  const closed = { ...parsed, state: 'Closed' };
-  const state = derive.derive(closed);
-  assert.deepStrictEqual(state.members, []);
-  assert.strictEqual(state.neverReviewed, true);
+  assert.deepStrictEqual(derive.derive(parsed).members, []);
+
+  /** @type {[string, boolean][]} */
+  const cases = [
+    ['Draft', false],
+    ['Published', false],
+    ['Triage', true],
+    ['Closed', true],
+  ];
+  for (const [state, neverReviewed] of cases) {
+    assert.strictEqual(
+      derive.derive({ ...parsed, state }).neverReviewed,
+      neverReviewed,
+      `state ${state}`
+    );
+  }
 });
 
 test('a CVE named on the advisory reads as assigned', () => {
