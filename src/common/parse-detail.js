@@ -3,7 +3,8 @@
 globalThis.bghsa ??= /** @type {BghsaNamespace} */ ({});
 
 // The manifest orders content scripts; under Node the dependency is named here.
-if (typeof require === 'function') require('./trust.js');
+if (typeof require === 'function') require('./text.js');
+require('./trust.js');
 
 /** The schema major version this reader interprets. */
 const SCHEMA_MAJOR = 1;
@@ -40,23 +41,11 @@ const OPEN_PULL_COLOR = 'color-fg-open';
  */
 const OPEN_PULL_LABEL = /^open\b/;
 
-/**
- * @param {string | null | undefined} value
- * @returns {string} `value` with runs of whitespace collapsed to one space and
- *   the ends trimmed.
- */
-function collapse(value) {
-  return String(value ?? '').replace(/\s+/g, ' ').trim();
-}
+/** How every reader here squares up the text a page carries. */
+const collapse = globalThis.bghsa.text.collapse;
 
-/**
- * @param {string} value
- * @returns {string | null} `value`, or null when it is empty after trimming.
- */
-function orNull(value) {
-  const trimmed = value.trim();
-  return trimmed === '' ? null : trimmed;
-}
+/** How every reader here reads an empty value as nothing. */
+const orNull = globalThis.bghsa.text.orNull;
 
 /**
  * @param {Element | null} element

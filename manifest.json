@@ -9,10 +9,13 @@
     {
       "matches": ["https://github.com/*/*/security/advisories*"],
       "js": [
+        "src/common/dom.js",
+        "src/common/text.js",
         "src/common/allowlist.js",
         "src/common/trust.js",
         "src/common/parse-detail.js",
         "src/common/derive.js",
+        "src/detail/panel.js",
         "src/content.js"
       ],
       "run_at": "document_idle"
