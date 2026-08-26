@@ -395,3 +395,53 @@ test('triageSince marks the moment the triage value last changed', async () => {
   );
 });
 
+test('the first write on an advisory measures triage from the last member action', async () => {
+  const { outcome } = await run(fixture('draft.html'), {
+    ref: DRAFT_REF,
+    loadedSeq: 2,
+    confirmed: true,
+    changes: { triage: 'evaluating' },
+  });
+  assert.ok(outcome.ok === true, `the write failed: ${outcome.message}`);
+  assert.strictEqual(outcome.merged?.state, null, 'the advisory already carried state');
+  assert.ok(
+    /** @type {Record<string, unknown>} */ (outcome.snapshot).triageSince ===
+      '2026-08-25T22:20:26Z',
+    'the first write did not measure triage from the last member action'
+  );
+});
+
+test('a first write on an advisory no member has touched measures from the report', async () => {
+  const page = fixture('draft.html');
+  // The member badge is what makes an action a member's, so a page carrying
+  // none is a page no member is visible on.
+  for (const badge of page.querySelectorAll('div.timeline-comment-group span.Label')) {
+    badge.remove();
+  }
+  const { outcome } = await run(page, {
+    ref: DRAFT_REF,
+    loadedSeq: 2,
+    changes: { triage: 'evaluating' },
+  });
+  assert.ok(outcome.ok === true, `the write failed: ${outcome.message}`);
+  assert.ok(
+    /** @type {Record<string, unknown>} */ (outcome.snapshot).triageSince ===
+      '2026-08-25T22:19:40Z',
+    'the first write did not measure triage from the report time'
+  );
+});
+
+test('a page offering nothing to measure from falls back to the write time', () => {
+  /** @type {Record<string, unknown>} */
+  const snapshot = { triage: 'evaluating' };
+  state.stampTriageSince(snapshot, null, {}, AT, null);
+  assert.strictEqual(snapshot['triageSince'], AT);
+});
+
+test('a write that names triageSince itself keeps the value it names', () => {
+  /** @type {Record<string, unknown>} */
+  const snapshot = { triage: 'evaluating', triageSince: '2020-01-01T00:00:00Z' };
+  state.stampTriageSince(snapshot, null, { triageSince: '2020-01-01T00:00:00Z' }, AT, AT);
+  assert.strictEqual(snapshot['triageSince'], '2020-01-01T00:00:00Z');
+});
+

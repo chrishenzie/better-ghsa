@@ -8,6 +8,7 @@ if (typeof require === 'function') {
   require('../common/schema.js');
   require('../common/merge.js');
   require('../common/parse-detail.js');
+  require('../common/derive.js');
   require('../common/write.js');
 }
 
@@ -162,21 +163,41 @@ function nowStamp() {
 }
 
 /**
+ * How long an advisory has been waiting is measured from `triageSince`, and
+ * the first write to an advisory is where that measurement starts. It starts
+ * at the most recent member action the page carries, and at the report time
+ * where no member has acted, so an advisory a maintainer has been working on
+ * does not read as having arrived at the moment its triage value was set.
+ *
+ * @param {ParsedDetail} advisory The advisory as the write's own fetch read it.
+ * @returns {string | null}
+ */
+function seedTriageSince(advisory) {
+  return globalThis.bghsa.derive.derive(advisory).lastMemberActivityAt ?? advisory.reportedAt;
+}
+
+/**
  * Stamps `triageSince` with the write time when this write changes the triage
  * value, and leaves it as the merged state carried it when it does not. A
  * write that names `triageSince` itself is left alone.
+ *
+ * The first write to an advisory carries no state forward, and its
+ * `triageSince` is `seed` rather than the write time. The write time stands in
+ * where the page offered nothing to seed from.
  *
  * @param {Record<string, unknown>} snapshot
  * @param {Record<string, unknown> | null} current
  * @param {Record<string, unknown>} changes
  * @param {string} at
+ * @param {string | null} [seed] Where the first write on an advisory measures
+ *   from.
  * @returns {void}
  */
-function stampTriageSince(snapshot, current, changes, at) {
+function stampTriageSince(snapshot, current, changes, at, seed = null) {
   if (Object.hasOwn(changes, 'triageSince')) return;
   const before = current === null ? undefined : current['triage'];
   if (snapshot['triage'] === before) return;
-  snapshot['triageSince'] = at;
+  snapshot['triageSince'] = current === null ? (seed ?? at) : at;
 }
 
 /**
@@ -325,7 +346,7 @@ async function writeState(options) {
       at,
       seq: merged.nextSeq,
     });
-    stampTriageSince(snapshot, merged.state, changes, at);
+    stampTriageSince(snapshot, merged.state, changes, at, seedTriageSince(fresh));
 
     const body = buildBody(snapshot);
     const contains = [globalThis.bghsa.schema.STATE_COMMENT_MARKER, snapshotJson(snapshot)];
@@ -356,6 +377,7 @@ globalThis.bghsa.state = {
   buildBody,
   ownStateComments,
   nowStamp,
+  seedTriageSince,
   stampTriageSince,
   writeState,
 };
