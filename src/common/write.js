@@ -142,9 +142,7 @@ function cloneForm(form) {
  */
 function findCommentForm(root) {
   for (const form of root.querySelectorAll('form[action]')) {
-    const action = form.getAttribute('action') ?? '';
-    const path = action.split('#')[0]?.split('?')[0] ?? '';
-    if (path.endsWith('/comments')) return form;
+    if (globalThis.bghsa.parseDetail.isCommentForm(form)) return form;
   }
   return null;
 }

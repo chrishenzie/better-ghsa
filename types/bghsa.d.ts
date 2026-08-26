@@ -14,6 +14,7 @@ interface BghsaNamespace {
   derive: typeof import('../src/common/derive.js');
   write: typeof import('../src/common/write.js');
   tracking: typeof import('../src/detail/tracking.js');
+  comments: typeof import('../src/detail/comments.js');
   preserve: typeof import('../src/detail/preserve.js');
   state: typeof import('../src/detail/state.js');
   panel: typeof import('../src/detail/panel.js');

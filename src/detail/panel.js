@@ -11,6 +11,7 @@ if (typeof require === 'function') {
   require('../common/parse-detail.js');
   require('../common/derive.js');
   require('./tracking.js');
+  require('./comments.js');
   require('./preserve.js');
 }
 
@@ -494,9 +495,7 @@ function buildPanel(doc, advisory, derived, tracking) {
  * @returns {{ parent: Element, before: Element } | null}
  */
 function anchor(doc) {
-  const header = doc.querySelector(
-    'div.js-repository-advisory-details > div.Box-header.timeline-comment-header'
-  );
+  const header = doc.querySelector(globalThis.bghsa.parseDetail.DESCRIPTION_HEADER);
   const box = header === null ? null : header.closest('div.Box');
   const region = box === null ? null : box.closest('div.js-socket-channel');
   const before = region ?? box;
@@ -573,7 +572,12 @@ async function render(doc) {
   if (advisory === null) return null;
   const merged = globalThis.bghsa.merge.mergeSnapshots(advisory.comments);
   const tracking = await globalThis.bghsa.tracking.readAdvisory(advisory, merged);
-  return injectPanel(doc, advisory, globalThis.bghsa.derive.derive(advisory), tracking);
+  const placed = injectPanel(doc, advisory, globalThis.bghsa.derive.derive(advisory), tracking);
+  // The chips carry the extension's tone classes, and a page offering the
+  // panel no anchor still gets them.
+  ensureStyle(doc);
+  globalThis.bghsa.comments.markComments(doc, merged);
+  return placed;
 }
 
 /**
@@ -631,6 +635,7 @@ globalThis.bghsa.panel = {
   press,
   buildPanel,
   anchor,
+  ensureStyle,
   outOfPlace,
   injectPanel,
   render,

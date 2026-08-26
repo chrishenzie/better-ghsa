@@ -10,6 +10,26 @@ if (typeof require === 'function') {
 }
 
 /**
+ * The header of the Box the advisory's description sits in.
+ *
+ * Several regions carry `js-repository-advisory-details`. The description's is
+ * the one whose own child is a comment-style Box header. That header names the
+ * reporter and the report time in every advisory state; the page header meta
+ * names the publisher and the publication time once published. The panel
+ * anchors itself on the same header, so GitHub renaming it takes the reporter
+ * and the panel together.
+ */
+const DESCRIPTION_HEADER =
+  'div.js-repository-advisory-details > div.Box-header.timeline-comment-header';
+
+/**
+ * The attribute the extension's own comment chips carry. A chip carries
+ * GitHub's `Label` classes so it sits with the role badges, and this attribute
+ * is what keeps a re-read from taking one for a role badge.
+ */
+const EXTENSION_CHIP_ATTRIBUTE = 'data-bghsa-comment-chip';
+
+/**
  * The `color-fg-*` modifier a fork row's icon carries for an open pull
  * request, which is the only modifier such a row is drawn with. The fork's
  * list shows open pull requests only: merging deletes the fork and the Box
@@ -244,6 +264,7 @@ function parseComments(root) {
     const roles = [];
     for (const badge of group.querySelectorAll('span.Label')) {
       if (badge.closest('.comment-body') !== null) continue;
+      if (badge.hasAttribute(EXTENSION_CHIP_ATTRIBUTE)) continue;
       const text = collapse(badge.textContent);
       if (text !== '' && !roles.includes(text)) roles.push(text);
     }
@@ -446,13 +467,7 @@ function parseDetail(root) {
   const ghsa = meta.querySelector('span.user-select-contain');
   const severityTitle = /Severity:\s*(\S+)/.exec(severity?.getAttribute('title') ?? '');
 
-  // Several regions carry `js-repository-advisory-details`. The description's
-  // is the one whose own child is a comment-style Box header. That header names
-  // the reporter and the report time in every advisory state; the page header
-  // meta names the publisher and the publication time once published.
-  const descriptionHeader = root.querySelector(
-    'div.js-repository-advisory-details > div.Box-header.timeline-comment-header'
-  );
+  const descriptionHeader = root.querySelector(DESCRIPTION_HEADER);
   const descriptionBox = descriptionHeader?.closest('div.Box') ?? null;
   const history = descriptionBox?.querySelector('span.js-comment-edit-history') ?? null;
   const revision = history?.querySelector('details') ?? null;
@@ -501,6 +516,9 @@ function parseDetail(root) {
 }
 
 globalThis.bghsa.parseDetail = {
+  DESCRIPTION_HEADER,
+  EXTENSION_CHIP_ATTRIBUTE,
+  isCommentForm,
   parseDetail,
   parseComments,
   parseTimeline,
