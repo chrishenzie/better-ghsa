@@ -112,9 +112,17 @@ function parseRef(root) {
 }
 
 /**
- * The state comment a rendered comment body holds, if it holds one. A comment
- * qualifies when it carries a JSON fence and either the parsed JSON has the
- * `betterGhsa` key or the body carries the fixed summary text.
+ * The state comment a rendered comment body holds, if it holds one.
+ *
+ * The marker in a code span says so, whatever the summary reads and whatever
+ * state the fence is in, so a fence that does not parse is read and carried to
+ * the merge, which warns on it by name. A marker inside the fence is text in a
+ * code block and says nothing.
+ *
+ * A body carrying no marker qualifies where its fence parses to an object
+ * naming `betterGhsa`. State comments written before the marker existed are
+ * recognized on that path alone, and one of those whose fence does not parse
+ * is not recognized at all.
  *
  * @param {Element | null} body The rendered comment body.
  * @returns {import('./schema.js').SnapshotReport | null}
@@ -122,17 +130,21 @@ function parseRef(root) {
 function parseStateComment(body) {
   const schema = globalThis.bghsa.schema;
   if (body === null) return null;
+
+  const marked = Array.from(body.querySelectorAll('code')).some(
+    (span) =>
+      span.closest('pre') === null &&
+      collapse(span.textContent).includes(schema.STATE_COMMENT_MARKER)
+  );
+
   const highlight = body.querySelector('.highlight-source-json');
-  if (highlight === null) return null;
-  const fence = highlight.matches('pre') ? highlight : highlight.querySelector('pre');
+  const fence =
+    highlight === null ? null : highlight.matches('pre') ? highlight : highlight.querySelector('pre');
   const raw = fence === null ? '' : (fence.textContent ?? '');
 
-  const labelled = Array.from(body.querySelectorAll('summary')).some(
-    (summary) => collapse(summary.textContent) === schema.STATE_COMMENT_SUMMARY
-  );
   const report = schema.readSnapshot(raw);
   const claimed = schema.isPlainObject(report.parsed) && 'betterGhsa' in report.parsed;
-  if (!claimed && !labelled) return null;
+  if (!marked && !claimed) return null;
   return report;
 }
 

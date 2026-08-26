@@ -241,27 +241,76 @@ test('a well-formed state comment from a refused author is read and marked untru
   assert.strictEqual(comment?.stateComment?.valid, true);
 });
 
-test('a JSON fence in an ordinary comment is not a state comment', () => {
-  const root = document(
-    '<div class="comment-body markdown-body js-comment-body">' +
-      '<div class="highlight highlight-source-json"><pre>{"hello": "world"}</pre></div>' +
-      '</div>'
-  );
-  const body = root.querySelector('div.comment-body');
-  assert.strictEqual(parse.parseStateComment(body), null);
+/**
+ * @param {string} inner The markup the comment body holds.
+ * @returns {Element | null} the comment body a state comment is read from.
+ */
+function commentBody(inner) {
+  const root = document(`<div class="comment-body markdown-body js-comment-body">${inner}</div>`);
+  return root.querySelector('div.comment-body');
+}
+
+test('a comment carrying no marker outside a fence is not a state comment', () => {
+  /** @type {[string, string][]} */
+  const cases = [
+    [
+      'a JSON fence in an ordinary comment',
+      '<div class="highlight highlight-source-json"><pre>{"hello": "world"}</pre></div>',
+    ],
+    [
+      'the summary text and nothing else',
+      '<details><summary>Better GHSA tracking state</summary>' +
+        '<div class="highlight highlight-source-json"><pre>{ oops</pre></div></details>',
+    ],
+    [
+      'the marker inside the fence',
+      '<div class="highlight highlight-source-json"><pre><code>' +
+        'better-ghsa:state:1: { oops</code></pre></div>',
+    ],
+  ];
+  for (const [name, inner] of cases) {
+    assert.strictEqual(parse.parseStateComment(commentBody(inner)), null, name);
+  }
 });
 
-test('the fixed summary marks a state comment whose fence is broken', () => {
+test('the marker marks a state comment whose payload does not parse', () => {
+  /** @type {[string, string][]} */
+  const cases = [
+    [
+      'a fence that is broken',
+      '<details><summary>Whatever the maintainer wrote here</summary>' +
+        '<p><code>better-ghsa:state:1:</code></p>' +
+        '<div class="highlight highlight-source-json"><pre>{ oops</pre></div></details>',
+    ],
+    [
+      'no fence at all',
+      '<details><summary>Better GHSA tracking state</summary>' +
+        '<p><code>better-ghsa:state:1:</code></p></details>',
+    ],
+  ];
+  for (const [name, inner] of cases) {
+    const report = parse.parseStateComment(commentBody(inner));
+    assert.notStrictEqual(report, null, name);
+    assert.strictEqual(report?.ordered, false, `${name} carried an ordering claim`);
+    assert.deepStrictEqual(
+      report?.problems,
+      ['the fenced block does not parse as JSON'],
+      `${name} reported the wrong problem`
+    );
+  }
+});
+
+test('a state comment written before the marker is read on its payload', () => {
   const root = document(
     '<div class="comment-body markdown-body js-comment-body"><details>' +
       '<summary>Better GHSA tracking state</summary>' +
-      '<div class="highlight highlight-source-json"><pre>{ oops</pre></div>' +
+      '<div class="highlight highlight-source-json"><pre>' +
+      '{"betterGhsa":"1.0","seq":4,"by":"samuelkarp"}</pre></div>' +
       '</details></div>'
   );
   const report = parse.parseStateComment(root.querySelector('div.comment-body'));
-  assert.notStrictEqual(report, null);
-  assert.strictEqual(report?.ordered, false);
-  assert.deepStrictEqual(report?.problems, ['the fenced block does not parse as JSON']);
+  assert.strictEqual(report?.seq, 4);
+  assert.strictEqual(report?.valid, true);
 });
 
 test('the timeline excludes comment groups and names actor and time', () => {

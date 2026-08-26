@@ -8,7 +8,27 @@ const SCHEMA_VERSION = '1.0';
 /** The schema major version this reader interprets. */
 const SCHEMA_MAJOR = 1;
 
-/** The fixed summary text of a state comment's `details` block. */
+/** The shape `betterGhsa` carries: a major and a minor, as section 5 states. */
+const VERSION_PATTERN = /^(\d+)\.(\d+)$/;
+
+/**
+ * What says a comment is a state comment. The body carries it once, in a code
+ * span inside the collapsed block alongside the fence, so the thread shows
+ * only the summary line: GitHub's sanitizer strips HTML comments and keeps
+ * `code`, so the token is in the rendered document the content script reads.
+ * The segment after `state` is the body format, so a later format can be told
+ * from this one.
+ *
+ * The marker says a comment is a state comment whatever its fence holds, which
+ * is what lets a fence that does not parse be warned on by name.
+ */
+const STATE_COMMENT_MARKER = 'better-ghsa:state:1:';
+
+/**
+ * The summary text of a state comment's `details` block. It is prose for the
+ * reader: recognition rests on the marker, so it can be rewritten without
+ * breaking anything.
+ */
 const STATE_COMMENT_SUMMARY = 'Better GHSA tracking state';
 
 /** Triage values this reader interprets. @type {readonly string[]} */
@@ -25,6 +45,13 @@ const CLOSURE_REASONS = [
   'withdrawn by reporter',
 ];
 
+/**
+ * The greatest ordering claim this reader reads. One above it is still a safe
+ * integer, so the claim the next write carries is exact and is strictly
+ * greater than every claim on the advisory.
+ */
+const MAX_SEQ = Number.MAX_SAFE_INTEGER - 1;
+
 /** How many hex characters of the digest a fingerprint keeps. */
 const FINGERPRINT_LENGTH = 12;
 
@@ -33,9 +60,16 @@ const FINGERPRINT_LENGTH = 12;
  * @property {string} raw The JSON source recovered from the fenced block.
  * @property {unknown} parsed The parsed payload, or null when it did not parse.
  * @property {string | null} version The `betterGhsa` schema version.
- * @property {number | null} major The schema major, when `version` is a version.
- * @property {boolean} schemaSupported Whether this reader interprets that major.
- * @property {number | null} seq The ordering claim.
+ * @property {number | null} major The schema major, when `version` reads as
+ *   `major.minor`. A payload that names no version this reader can read leaves
+ *   it null and fails validation.
+ * @property {boolean} schemaSupported Whether this reader reads the payload's
+ *   schema. False names one case: a readable major other than this reader's.
+ *   A payload with no readable major is a validation failure, not a version
+ *   this reader is too old for, and leaves this true.
+ * @property {number | null} seq The ordering claim, a whole number from 0 to
+ *   `MAX_SEQ`. A number outside that range is no ordering claim this reader
+ *   reads.
  * @property {string | null} by The login the snapshot names as its writer.
  * @property {boolean} ordered Whether the envelope carries an ordering claim.
  * @property {boolean} valid Whether the payload passed validation.
@@ -95,7 +129,12 @@ function validateSnapshot(payload) {
   /** @type {string[]} */
   const unrecognized = [];
 
-  if (typeof payload['betterGhsa'] !== 'string') problems.push('betterGhsa is not a string');
+  const version = payload['betterGhsa'];
+  if (typeof version !== 'string') {
+    problems.push('betterGhsa is not a string');
+  } else if (!VERSION_PATTERN.test(version)) {
+    problems.push('betterGhsa is not a major.minor version');
+  }
   for (const key of ['by', 'at', 'triage', 'triageSince']) requireString(payload, key, problems);
   for (const key of ['owners', 'backports']) requireStringArray(payload, key, problems);
 
@@ -184,17 +223,19 @@ function readSnapshot(raw) {
   const version = parsed['betterGhsa'];
   if (typeof version === 'string') {
     report.version = version;
-    const major = /^(\d+)\./.exec(version);
+    const major = VERSION_PATTERN.exec(version);
     if (major !== null) report.major = Number(major[1]);
   }
-  report.schemaSupported = report.major === SCHEMA_MAJOR;
+  report.schemaSupported = report.major === null || report.major === SCHEMA_MAJOR;
 
   const seq = parsed['seq'];
-  if (typeof seq === 'number' && Number.isFinite(seq)) {
+  if (typeof seq !== 'number' || !Number.isFinite(seq)) {
+    report.problems.push('seq is absent or is not a number');
+  } else if (!Number.isSafeInteger(seq) || seq < 0 || seq > MAX_SEQ) {
+    report.problems.push(`seq is not a whole number between 0 and ${MAX_SEQ}`);
+  } else {
     report.seq = seq;
     report.ordered = true;
-  } else {
-    report.problems.push('seq is absent or is not a number');
   }
 
   const by = parsed['by'];
@@ -250,12 +291,19 @@ async function fingerprint(value) {
  * absent half is written as the empty string. A null half and an empty half
  * therefore fingerprint alike.
  *
+ * Each half is written as a JSON string, so a newline in one of them reads as
+ * the two characters `\n` and no content can spell the separator that divides
+ * the halves. Two scoring states that differ therefore differ here, and their
+ * fingerprints differ with them.
+ *
  * @param {string | null | undefined} severity The stored severity selection.
  * @param {string | null | undefined} vector The CVSS vector.
  * @returns {string}
  */
 function scoringSource(severity, vector) {
-  return `severity=${normalize(severity)}\ncvss=${normalize(vector)}`;
+  /** @param {string | null | undefined} value @returns {string} */
+  const half = (value) => JSON.stringify(normalize(value));
+  return `severity=${half(severity)}\ncvss=${half(vector)}`;
 }
 
 /**
@@ -270,9 +318,12 @@ function scoringFingerprint(severity, vector) {
 globalThis.bghsa.schema = {
   SCHEMA_VERSION,
   SCHEMA_MAJOR,
+  VERSION_PATTERN,
+  STATE_COMMENT_MARKER,
   STATE_COMMENT_SUMMARY,
   TRIAGE_VALUES,
   CLOSURE_REASONS,
+  MAX_SEQ,
   FINGERPRINT_LENGTH,
   isPlainObject,
   validateSnapshot,

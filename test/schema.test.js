@@ -25,6 +25,30 @@ test('a snapshot with no seq carries no ordering claim', () => {
   assert.deepStrictEqual(stringSeq.problems, ['seq is absent or is not a number']);
 });
 
+test('a seq outside the range this reader orders carries no ordering claim', () => {
+  for (const raw of [
+    '{"betterGhsa":"1.0","seq":9007199254740992}',
+    '{"betterGhsa":"1.0","seq":1e300}',
+    '{"betterGhsa":"1.0","seq":9007199254740991}',
+    '{"betterGhsa":"1.0","seq":-1}',
+    '{"betterGhsa":"1.0","seq":2.5}',
+  ]) {
+    const report = schema.readSnapshot(raw);
+    assert.strictEqual(report.ordered, false, `${raw} carried an ordering claim`);
+    assert.strictEqual(report.seq, null, `${raw} yielded a seq`);
+    assert.deepStrictEqual(
+      report.problems,
+      [`seq is not a whole number between 0 and ${schema.MAX_SEQ}`],
+      `${raw} reported the wrong problem`
+    );
+  }
+
+  const ceiling = schema.readSnapshot(`{"betterGhsa":"1.0","seq":${schema.MAX_SEQ}}`);
+  assert.strictEqual(ceiling.ordered, true);
+  assert.strictEqual(ceiling.seq, schema.MAX_SEQ);
+  assert.strictEqual(Number.isSafeInteger(schema.MAX_SEQ + 1), true);
+});
+
 test('a readable seq survives a payload that fails validation', () => {
   const report = schema.readSnapshot(
     '{"betterGhsa":"1.0","seq":4,"by":"samuelkarp","owners":"samuelkarp"}'
@@ -74,6 +98,28 @@ test('a schema major this reader does not know is reported as unsupported', () =
   assert.strictEqual(known.schemaSupported, true);
 });
 
+test('a payload naming no readable version fails validation and is not a version gap', () => {
+  const cases = [
+    ['{"seq":3}', 'betterGhsa is not a string'],
+    ['{"betterGhsa":1,"seq":3}', 'betterGhsa is not a string'],
+    ['{"betterGhsa":"soon","seq":3}', 'betterGhsa is not a major.minor version'],
+    ['{"betterGhsa":"1","seq":3}', 'betterGhsa is not a major.minor version'],
+    ['{"betterGhsa":"1.0.1","seq":3}', 'betterGhsa is not a major.minor version'],
+  ];
+  for (const [raw, problem] of cases) {
+    const report = schema.readSnapshot(/** @type {string} */ (raw));
+    assert.strictEqual(report.major, null, `${raw} yielded a major`);
+    assert.strictEqual(report.ordered, true, `${raw} lost its ordering claim`);
+    assert.strictEqual(report.valid, false, `${raw} passed validation`);
+    assert.strictEqual(
+      report.schemaSupported,
+      true,
+      `${raw} was read as a schema version this reader is too old for`
+    );
+    assert.deepStrictEqual(report.problems, [problem], `${raw} reported the wrong problem`);
+  }
+});
+
 test('a confirmation record with a non-string fingerprint fails validation', () => {
   const report = schema.readSnapshot(
     '{"betterGhsa":"1.0","seq":1,"confirmed":{"title":{"by":"dmcgowan","at":"x","fp":12}}}'
@@ -120,20 +166,31 @@ test('a fingerprint is twelve hex characters of the SHA-256 of the normalized va
 test('the scoring source labels each half and writes an absent half empty', () => {
   assert.strictEqual(
     schema.scoringSource('cvss_v3', 'CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N'),
-    'severity=cvss_v3\ncvss=CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N'
+    'severity="cvss_v3"\ncvss="CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"'
   );
-  assert.strictEqual(schema.scoringSource('moderate', null), 'severity=moderate\ncvss=');
-  assert.strictEqual(schema.scoringSource(null, null), 'severity=\ncvss=');
+  assert.strictEqual(schema.scoringSource('moderate', null), 'severity="moderate"\ncvss=""');
+  assert.strictEqual(schema.scoringSource(null, null), 'severity=""\ncvss=""');
+});
+
+test('a newline in one scoring half cannot imitate the separator', async () => {
+  const inSeverity = schema.scoringSource('low\ncvss=x', '');
+  const inVector = schema.scoringSource('low', 'x\ncvss=');
+  assert.notStrictEqual(inSeverity, inVector, 'two scoring states share one source value');
+  assert.notStrictEqual(
+    await schema.scoringFingerprint('low\ncvss=x', ''),
+    await schema.scoringFingerprint('low', 'x\ncvss='),
+    'two scoring states share one fingerprint'
+  );
 });
 
 test('the scoring fingerprint covers severity and vector together', async () => {
   const severityOnly = await schema.scoringFingerprint('moderate', null);
-  assert.strictEqual(severityOnly, '1ccabcfdf244');
+  assert.strictEqual(severityOnly, 'fa0dd8eb9e2a');
   assert.strictEqual(
     await schema.scoringFingerprint('cvss_v3', 'CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N'),
-    '404294f8123c'
+    'a42f036545e4'
   );
-  assert.strictEqual(await schema.scoringFingerprint(null, null), '900ae52b2023');
+  assert.strictEqual(await schema.scoringFingerprint(null, null), 'a533e6b86c5c');
 
   const changed = await schema.scoringFingerprint('high', null);
   assert.ok(changed !== severityOnly, 'a changed severity kept its fingerprint');
