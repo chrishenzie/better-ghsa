@@ -2,29 +2,12 @@
 
 globalThis.bghsa ??= /** @type {BghsaNamespace} */ ({});
 
-// The manifest orders content scripts; under Node the dependency is named here.
-if (typeof require === 'function') require('./text.js');
-require('./trust.js');
-
-/** The schema major version this reader interprets. */
-const SCHEMA_MAJOR = 1;
-
-/** The fixed summary text of a state comment's `details` block. */
-const STATE_COMMENT_SUMMARY = 'Better GHSA tracking state';
-
-/** Triage values this reader interprets. @type {readonly string[]} */
-const TRIAGE_VALUES = ['evaluating', 'awaiting reporter', 'awaiting maintainer input'];
-
-/** Closure reasons this reader interprets. @type {readonly string[]} */
-const CLOSURE_REASONS = [
-  'duplicate',
-  'not a vulnerability',
-  'not reproducible',
-  'working as intended',
-  'out of scope',
-  'no reporter response',
-  'withdrawn by reporter',
-];
+// The manifest orders content scripts; under Node the dependencies are named here.
+if (typeof require === 'function') {
+  require('./text.js');
+  require('./trust.js');
+  require('./schema.js');
+}
 
 /**
  * The `color-fg-*` modifier a fork row's icon carries for an open pull
@@ -129,194 +112,15 @@ function parseRef(root) {
 }
 
 /**
- * @typedef {object} SnapshotReport
- * @property {string} raw The JSON source recovered from the fenced block.
- * @property {unknown} parsed The parsed payload, or null when it did not parse.
- * @property {string | null} version The `betterGhsa` schema version.
- * @property {number | null} major The schema major, when `version` is a version.
- * @property {boolean} schemaSupported Whether this reader interprets that major.
- * @property {number | null} seq The ordering claim.
- * @property {string | null} by The login the snapshot names as its writer.
- * @property {boolean} ordered Whether the envelope carries an ordering claim.
- * @property {boolean} valid Whether the payload passed validation.
- * @property {string[]} problems Why the snapshot is not usable, in display order.
- * @property {string[]} unrecognized Known enum fields holding a value this
- *   reader does not interpret. Their values are displayed raw and carried
- *   forward.
- */
-
-/**
- * @param {unknown} value
- * @returns {value is Record<string, unknown>}
- */
-function isPlainObject(value) {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-/**
- * @param {Record<string, unknown>} payload
- * @param {string} key
- * @param {string[]} problems
- * @returns {void}
- */
-function requireStringArray(payload, key, problems) {
-  const value = payload[key];
-  if (value === undefined) return;
-  if (!Array.isArray(value) || value.some((entry) => typeof entry !== 'string')) {
-    problems.push(`${key} is not an array of strings`);
-  }
-}
-
-/**
- * @param {Record<string, unknown>} payload
- * @param {string} key
- * @param {string[]} problems
- * @param {string} [prefix] The path to `payload` within the snapshot.
- * @returns {void}
- */
-function requireString(payload, key, problems, prefix) {
-  const value = payload[key];
-  if (value === undefined) return;
-  if (typeof value !== 'string') {
-    problems.push(`${prefix === undefined ? '' : `${prefix}.`}${key} is not a string`);
-  }
-}
-
-/**
- * Checks the type of every field this reader knows. Unknown fields pass, and so
- * does an unrecognized value in a known enum field.
- *
- * @param {Record<string, unknown>} payload
- * @returns {{ problems: string[], unrecognized: string[] }}
- */
-function validateSnapshot(payload) {
-  /** @type {string[]} */
-  const problems = [];
-  /** @type {string[]} */
-  const unrecognized = [];
-
-  if (typeof payload['betterGhsa'] !== 'string') problems.push('betterGhsa is not a string');
-  for (const key of ['by', 'at', 'triage', 'triageSince']) requireString(payload, key, problems);
-  for (const key of ['owners', 'backports']) requireStringArray(payload, key, problems);
-
-  const triage = payload['triage'];
-  if (typeof triage === 'string' && !TRIAGE_VALUES.includes(triage)) unrecognized.push('triage');
-
-  const confirmed = payload['confirmed'];
-  if (confirmed !== undefined) {
-    if (!isPlainObject(confirmed)) {
-      problems.push('confirmed is not an object');
-    } else {
-      for (const [track, record] of Object.entries(confirmed)) {
-        if (!isPlainObject(record)) {
-          problems.push(`confirmed.${track} is not an object`);
-          continue;
-        }
-        for (const key of ['by', 'at', 'fp']) {
-          requireString(record, key, problems, `confirmed.${track}`);
-        }
-      }
-    }
-  }
-
-  const embargo = payload['embargo'];
-  if (embargo !== undefined) {
-    if (!isPlainObject(embargo)) problems.push('embargo is not an object');
-    else requireString(embargo, 'lift', problems, 'embargo');
-  }
-
-  const closure = payload['closure'];
-  if (closure !== undefined) {
-    if (!isPlainObject(closure)) {
-      problems.push('closure is not an object');
-    } else {
-      for (const key of ['reason', 'duplicateOf']) {
-        requireString(closure, key, problems, 'closure');
-      }
-      const reason = closure['reason'];
-      if (typeof reason === 'string' && !CLOSURE_REASONS.includes(reason)) {
-        unrecognized.push('closure.reason');
-      }
-    }
-  }
-
-  return { problems, unrecognized };
-}
-
-/**
- * Reads the snapshot a state comment carries. The envelope, `seq` and `by`, is
- * read independently of the payload, so ordering holds for a snapshot whose
- * payload is invalid.
- *
- * @param {string} raw The JSON source from the fenced block.
- * @returns {SnapshotReport}
- */
-function readSnapshot(raw) {
-  /** @type {SnapshotReport} */
-  const report = {
-    raw,
-    parsed: null,
-    version: null,
-    major: null,
-    schemaSupported: false,
-    seq: null,
-    by: null,
-    ordered: false,
-    valid: false,
-    problems: [],
-    unrecognized: [],
-  };
-
-  /** @type {unknown} */
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    report.problems.push('the fenced block does not parse as JSON');
-    return report;
-  }
-  if (!isPlainObject(parsed)) {
-    report.problems.push('the fenced block is not a JSON object');
-    return report;
-  }
-  report.parsed = parsed;
-
-  const version = parsed['betterGhsa'];
-  if (typeof version === 'string') {
-    report.version = version;
-    const major = /^(\d+)\./.exec(version);
-    if (major !== null) report.major = Number(major[1]);
-  }
-  report.schemaSupported = report.major === SCHEMA_MAJOR;
-
-  const seq = parsed['seq'];
-  if (typeof seq === 'number' && Number.isFinite(seq)) {
-    report.seq = seq;
-    report.ordered = true;
-  } else {
-    report.problems.push('seq is absent or is not a number');
-  }
-
-  const by = parsed['by'];
-  if (typeof by === 'string') report.by = by;
-
-  const checked = validateSnapshot(parsed);
-  report.unrecognized = checked.unrecognized;
-  report.problems.push(...checked.problems);
-  report.valid = report.ordered && checked.problems.length === 0;
-
-  return report;
-}
-
-/**
  * The state comment a rendered comment body holds, if it holds one. A comment
  * qualifies when it carries a JSON fence and either the parsed JSON has the
  * `betterGhsa` key or the body carries the fixed summary text.
  *
  * @param {Element | null} body The rendered comment body.
- * @returns {SnapshotReport | null}
+ * @returns {import('./schema.js').SnapshotReport | null}
  */
 function parseStateComment(body) {
+  const schema = globalThis.bghsa.schema;
   if (body === null) return null;
   const highlight = body.querySelector('.highlight-source-json');
   if (highlight === null) return null;
@@ -324,10 +128,10 @@ function parseStateComment(body) {
   const raw = fence === null ? '' : (fence.textContent ?? '');
 
   const labelled = Array.from(body.querySelectorAll('summary')).some(
-    (summary) => collapse(summary.textContent) === STATE_COMMENT_SUMMARY
+    (summary) => collapse(summary.textContent) === schema.STATE_COMMENT_SUMMARY
   );
-  const report = readSnapshot(raw);
-  const claimed = isPlainObject(report.parsed) && 'betterGhsa' in report.parsed;
+  const report = schema.readSnapshot(raw);
+  const claimed = schema.isPlainObject(report.parsed) && 'betterGhsa' in report.parsed;
   if (!claimed && !labelled) return null;
   return report;
 }
@@ -343,7 +147,7 @@ function parseStateComment(body) {
  * @property {boolean} trusted Whether this author's snapshots count.
  * @property {string | null} at
  * @property {string} text The rendered body, whitespace collapsed.
- * @property {SnapshotReport | null} stateComment
+ * @property {import('./schema.js').SnapshotReport | null} stateComment
  */
 
 /**
@@ -622,16 +426,11 @@ function parseDetail(root) {
 }
 
 globalThis.bghsa.parseDetail = {
-  SCHEMA_MAJOR,
-  STATE_COMMENT_SUMMARY,
-  TRIAGE_VALUES,
-  CLOSURE_REASONS,
   parseDetail,
   parseComments,
   parseTimeline,
   parseFork,
   parseStateComment,
-  readSnapshot,
 };
 
 if (typeof module !== 'undefined') {

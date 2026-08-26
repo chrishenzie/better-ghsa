@@ -241,50 +241,6 @@ test('a well-formed state comment from a refused author is read and marked untru
   assert.strictEqual(comment?.stateComment?.valid, true);
 });
 
-test('a fence that does not parse is reported as carrying no ordering claim', () => {
-  const report = parse.readSnapshot('{ "betterGhsa": "1.0", ');
-  assert.strictEqual(report.parsed, null);
-  assert.strictEqual(report.seq, null);
-  assert.strictEqual(report.ordered, false);
-  assert.strictEqual(report.valid, false);
-  assert.deepStrictEqual(report.problems, ['the fenced block does not parse as JSON']);
-});
-
-test('a snapshot with no seq carries no ordering claim', () => {
-  const report = parse.readSnapshot('{"betterGhsa":"1.0","by":"samuelkarp"}');
-  assert.strictEqual(report.ordered, false);
-  assert.strictEqual(report.valid, false);
-  assert.deepStrictEqual(report.problems, ['seq is absent or is not a number']);
-
-  const stringSeq = parse.readSnapshot('{"betterGhsa":"1.0","seq":"4"}');
-  assert.strictEqual(stringSeq.ordered, false);
-  assert.deepStrictEqual(stringSeq.problems, ['seq is absent or is not a number']);
-});
-
-test('an unrecognized value in a known enum field is named, not rejected', () => {
-  const report = parse.readSnapshot(
-    '{"betterGhsa":"1.0","seq":1,"triage":"marinating","closure":{"reason":"lost the fork"}}'
-  );
-  assert.strictEqual(report.valid, true);
-  assert.deepStrictEqual(report.problems, []);
-  assert.deepStrictEqual(report.unrecognized, ['triage', 'closure.reason']);
-});
-
-test('a schema major this reader does not know is reported as unsupported', () => {
-  const report = parse.readSnapshot('{"betterGhsa":"2.0","seq":9}');
-  assert.strictEqual(report.major, 2);
-  assert.strictEqual(report.schemaSupported, false);
-  assert.strictEqual(report.valid, true);
-});
-
-test('a confirmation record with a non-string fingerprint fails validation', () => {
-  const report = parse.readSnapshot(
-    '{"betterGhsa":"1.0","seq":1,"confirmed":{"title":{"by":"dmcgowan","at":"x","fp":12}}}'
-  );
-  assert.strictEqual(report.valid, false);
-  assert.deepStrictEqual(report.problems, ['confirmed.title.fp is not a string']);
-});
-
 test('a JSON fence in an ordinary comment is not a state comment', () => {
   const root = document(
     '<div class="comment-body markdown-body js-comment-body">' +

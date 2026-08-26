@@ -13,6 +13,7 @@
         "src/common/text.js",
         "src/common/allowlist.js",
         "src/common/trust.js",
+        "src/common/schema.js",
         "src/common/parse-detail.js",
         "src/common/derive.js",
         "src/common/write.js",
