@@ -63,6 +63,60 @@ function authorIn(scope) {
 }
 
 /**
+ * Whether `form` is the one that posts a new comment on the advisory.
+ *
+ * @param {Element} form
+ * @returns {boolean}
+ */
+function isCommentForm(form) {
+  const action = form.getAttribute('action') ?? '';
+  const path = action.split('#')[0]?.split('?')[0] ?? '';
+  return path.endsWith('/comments');
+}
+
+/**
+ * The login of the account this page was rendered for.
+ *
+ * An advisory page names the signed-in account in one place: the avatar on the
+ * box that composes a new comment, `div.timeline-new-comment`. Every other
+ * login on the page belongs to a comment author, a timeline actor, or a
+ * collaborator, and none of those says who is reading. The write path needs
+ * this login to find that maintainer's own state comment and to stamp `by`.
+ *
+ * The box has to hold the form that posts a comment on this advisory, so the
+ * login read here is the one that would author a comment written from this
+ * page. A published advisory carries no such box and reads as null.
+ *
+ * The anchor's href and the avatar's `alt` name the login twice, and they have
+ * to agree. A login this cannot read is null, and a write with no login in
+ * hand is refused: writing under the wrong identity edits another
+ * maintainer's comment.
+ *
+ * @param {Document} root
+ * @returns {string | null}
+ */
+function parseViewer(root) {
+  const boxes = root.querySelectorAll('div.timeline-new-comment');
+  // Two boxes name no one box, and the page carries one.
+  if (boxes.length !== 1) return null;
+  const box = boxes[0];
+  if (box === undefined) return null;
+  if (!Array.from(box.querySelectorAll('form[action]')).some(isCommentForm)) return null;
+
+  const links = box.querySelectorAll('span.timeline-comment-avatar a[href]');
+  if (links.length !== 1) return null;
+  const link = links[0];
+  if (link === undefined) return null;
+  const login = loginFromHref(link.getAttribute('href'));
+  if (login === null) return null;
+
+  const image = link.querySelector('img[alt]');
+  const alt = image === null ? '' : collapse(image.getAttribute('alt'));
+  if (alt !== '' && alt !== `@${login}`) return null;
+  return login;
+}
+
+/**
  * The source value of one advisory metadata form field. A `select` reads from
  * the option the server marked selected, which is the stored value whether or
  * not the maintainer has since touched the control.
@@ -345,6 +399,7 @@ function parseFork(root) {
 /**
  * @typedef {object} ParsedDetail
  * @property {AdvisoryRef | null} ref
+ * @property {string | null} viewer The login this page was rendered for.
  * @property {string | null} ghsaId
  * @property {string | null} state `Triage`, `Draft`, `Published`, or `Closed`.
  * @property {string | null} severity The severity, lowercased, or null when unset.
@@ -405,6 +460,7 @@ function parseDetail(root) {
 
   return {
     ref: parseRef(root),
+    viewer: parseViewer(root),
     ghsaId: ghsa === null ? null : orNull(collapse(ghsa.textContent)),
     state: state === null ? null : orNull(collapse(state.textContent)),
     severity:
@@ -442,6 +498,7 @@ globalThis.bghsa.parseDetail = {
   parseComments,
   parseTimeline,
   parseFork,
+  parseViewer,
   parseStateComment,
 };
 

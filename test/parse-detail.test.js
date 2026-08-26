@@ -406,3 +406,77 @@ test('a document that is not an advisory detail page yields null', () => {
   }
 });
 
+/**
+ * @param {string} inner The markup inside the new-comment box.
+ * @returns {Document}
+ */
+function composer(inner) {
+  return document(`<div class="timeline-new-comment">${inner}</div>`);
+}
+
+/** The form that posts a comment, as the box carries it. */
+const COMPOSER_FORM =
+  '<form action="/git-utensils/Spoon-Knife/security/advisories/GHSA-jmvx-2wfw-xfgj/comments">' +
+  '<textarea name="body"></textarea></form>';
+
+/**
+ * @param {string} href
+ * @param {string} alt
+ * @returns {string} the avatar the new-comment box carries.
+ */
+function avatar(href, alt) {
+  return (
+    `<span class="timeline-comment-avatar"><a href="${href}">` +
+    `<img class="avatar" alt="${alt}"></a></span>`
+  );
+}
+
+test('the signed-in login is the one on the new-comment box', () => {
+  const advisory = parse.parseDetail(fixture('triage-thread.html'));
+  if (advisory === null) throw new Error('triage-thread.html did not parse');
+  assert.strictEqual(advisory.viewer, 'samuelkarp');
+  // The thread carries comments by someone else, and the report is theirs, so
+  // the login read here is not the author of any one comment.
+  assert.strictEqual(advisory.reporter, 'prakleumas');
+  assert.ok(
+    advisory.comments.some((comment) => comment.author === 'prakleumas'),
+    'the triage thread carries no comment by the reporter'
+  );
+});
+
+test('an advisory with no new-comment box names no signed-in login', () => {
+  const advisory = parse.parseDetail(fixture('published-containerd.html'));
+  if (advisory === null) throw new Error('published-containerd.html did not parse');
+  assert.strictEqual(advisory.viewer, null);
+});
+
+test('the signed-in login is named only where one box, avatar and form agree', () => {
+  /** @type {[string, Document, string | null][]} */
+  const cases = [
+    [
+      'a box that posts a comment',
+      composer(avatar('/samuelkarp', '@samuelkarp') + COMPOSER_FORM),
+      'samuelkarp',
+    ],
+    ['a box that posts no comment', composer(avatar('/samuelkarp', '@samuelkarp')), null],
+    [
+      'an avatar naming two logins',
+      composer(avatar('/samuelkarp', '@prakleumas') + COMPOSER_FORM),
+      null,
+    ],
+    [
+      'two new-comment boxes',
+      document(
+        `<div class="timeline-new-comment">${avatar('/samuelkarp', '@samuelkarp')}` +
+          `${COMPOSER_FORM}</div>` +
+          `<div class="timeline-new-comment">${avatar('/prakleumas', '@prakleumas')}` +
+          `${COMPOSER_FORM}</div>`
+      ),
+      null,
+    ],
+    ['a box carrying no avatar', composer(COMPOSER_FORM), null],
+  ];
+  for (const [name, box, viewer] of cases) {
+    assert.strictEqual(parse.parseViewer(box), viewer, name);
+  }
+});
