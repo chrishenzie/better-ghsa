@@ -363,3 +363,227 @@ test('a write this extension could not confirm is not sent', async () => {
   assert.strictEqual(fake.calls.length, 0);
 });
 
+/** The id of the comment the captured edit form belongs to. */
+const EDIT_ID = '282847';
+
+/** The edit form as GitHub rendered it, by field name. */
+const EDIT_FIELDS = [
+  '_method',
+  'authenticity_token',
+  'context',
+  'required_field_9231',
+  'timestamp',
+  'timestamp_secret',
+  'repository_advisory_comment[id]',
+  'repository_advisory_comment[bodyVersion]',
+  'repository_advisory_comment[body]',
+  'comment_id',
+];
+
+/** A response document holding the edited comment. */
+const EDITED =
+  '<!doctype html><html><body><div class="comment-body">' +
+  '<details><summary>Better GHSA tracking state</summary>' +
+  '<p><code>better-ghsa:state:1:</code></p></details></div></body></html>';
+
+/**
+ * @param {Partial<import('../src/common/write.js').EditCommentOptions>} overrides
+ * @returns {import('../src/common/write.js').EditCommentOptions}
+ */
+function editOptions(overrides) {
+  return {
+    doc: editDoc,
+    ref: REF,
+    commentId: EDIT_ID,
+    body: 'the snapshot this extension writes',
+    contains: ['better-ghsa:state:1:'],
+    parseDocument: document,
+    ...overrides,
+  };
+}
+
+/**
+ * @param {string} action
+ * @param {string} fields
+ * @returns {Document} a page carrying one edit form for {@link EDIT_ID}.
+ */
+function editPage(action, fields) {
+  return document(
+    `<!doctype html><html><body><form id="advisory-comment-${EDIT_ID}-edit-form"` +
+      ` action="${action}">${fields}</form></body></html>`
+  );
+}
+
+/** The fields an edit form has to carry, as markup. */
+const EDIT_TOKENS =
+  '<input type="hidden" name="authenticity_token" value="t">' +
+  '<input type="hidden" name="repository_advisory_comment[bodyVersion]" value="v">' +
+  '<textarea name="repository_advisory_comment[body]"></textarea>';
+
+test('the edit form for one comment is found by its id', () => {
+  assert.ok(write.findEditForm(editDoc, EDIT_ID) !== null, 'the capture carries no edit form');
+  assert.ok(
+    write.findEditForm(triageDoc, EDIT_ID) !== null,
+    'the advisory page carries no edit form for that comment'
+  );
+  assert.ok(
+    write.findEditForm(triageDoc, '999999') === null,
+    'an edit form was found for a comment that is not on the page'
+  );
+});
+
+test('an edit action names the one comment the caller chose', () => {
+  assert.strictEqual(
+    write.editPath(REF, EDIT_ID),
+    `/git-utensils/Spoon-Knife/security/advisories/GHSA-jmvx-2wfw-xfgj/comments/${EDIT_ID}`
+  );
+  for (const action of [
+    `/git-utensils/Spoon-Knife/security/advisories/GHSA-jmvx-2wfw-xfgj/comments/${EDIT_ID}`,
+    `https://github.com/git-utensils/Spoon-Knife/security/advisories/GHSA-jmvx-2wfw-xfgj/comments/${EDIT_ID}`,
+  ]) {
+    assert.strictEqual(write.actionMatchesRef(action, REF, EDIT_ID), true, action);
+  }
+  for (const action of [
+    '/git-utensils/Spoon-Knife/security/advisories/GHSA-jmvx-2wfw-xfgj/comments/282848',
+    '/git-utensils/Spoon-Knife/security/advisories/GHSA-jmvx-2wfw-xfgj/comments',
+    `/someone/else/security/advisories/GHSA-jmvx-2wfw-xfgj/comments/${EDIT_ID}`,
+    `https://example.invalid/git-utensils/Spoon-Knife/security/advisories/GHSA-jmvx-2wfw-xfgj/comments/${EDIT_ID}`,
+  ]) {
+    assert.strictEqual(write.actionMatchesRef(action, REF, EDIT_ID), false, action);
+  }
+});
+
+test('an edit sends the cloned form with the body the only field changed', async () => {
+  const form = one(editDoc, `form[id="advisory-comment-${EDIT_ID}-edit-form"]`);
+  const rendered = write.cloneForm(form);
+  assert.deepStrictEqual(names(rendered), EDIT_FIELDS);
+
+  const fake = fakeFetch(200, EDITED);
+  const outcome = await write.editComment(editOptions({ fetch: fake.send }));
+  assert.strictEqual(outcome.ok, true);
+  assert.strictEqual(outcome.status, 200);
+  assert.strictEqual(fake.calls.length, 1);
+
+  const call = /** @type {{ url: string, init: RequestInit }} */ (fake.calls[0]);
+  assert.strictEqual(
+    call.url,
+    `/git-utensils/Spoon-Knife/security/advisories/GHSA-jmvx-2wfw-xfgj/comments/${EDIT_ID}`
+  );
+  assert.strictEqual(call.init.method, 'POST');
+  assert.strictEqual(call.init.credentials, 'same-origin');
+
+  const sent = /** @type {URLSearchParams} */ (/** @type {unknown} */ (call.init.body));
+  assert.ok(sent instanceof URLSearchParams, 'the edit did not send form parameters');
+  assert.deepStrictEqual(names(sent), EDIT_FIELDS);
+  for (const field of EDIT_FIELDS) {
+    if (field === write.EDIT_BODY_FIELD) continue;
+    assert.ok(
+      sent.get(field) === rendered.get(field),
+      `the edit changed ${field} on its way out of the page`
+    );
+  }
+  assert.ok(
+    sent.get(write.EDIT_BODY_FIELD) === 'the snapshot this extension writes',
+    'the edit did not carry the new body'
+  );
+});
+
+test('an edit form posting to another comment is not written to', async () => {
+  const elsewhere = editPage(
+    '/git-utensils/Spoon-Knife/security/advisories/GHSA-jmvx-2wfw-xfgj/comments/282848',
+    EDIT_TOKENS
+  );
+  const fake = fakeFetch(200, EDITED);
+  const outcome = await write.editComment(editOptions({ doc: elsewhere, fetch: fake.send }));
+  assert.strictEqual(outcome.ok, false);
+  assert.strictEqual(outcome.reason, 'mismatch');
+  assert.strictEqual(fake.calls.length, 0, 'a request went out');
+  assert.strictEqual(
+    outcome.message,
+    'Nothing was written: the edit form on this page posts somewhere other than' +
+      ` git-utensils/Spoon-Knife GHSA-jmvx-2wfw-xfgj comment ${EDIT_ID}.`
+  );
+});
+
+test('a page carrying no edit form for that comment is not edited', async () => {
+  const fake = fakeFetch(200, EDITED);
+  const outcome = await write.editComment(
+    editOptions({ doc: triageDoc, commentId: '999999', fetch: fake.send })
+  );
+  assert.strictEqual(outcome.ok, false);
+  assert.strictEqual(outcome.reason, 'no-form');
+  assert.strictEqual(fake.calls.length, 0);
+  assert.strictEqual(
+    outcome.message,
+    'Nothing was written: this page carries no edit form for comment 999999.'
+  );
+});
+
+test('an edit form carrying no concurrency token is not sent', async () => {
+  const action = `/git-utensils/Spoon-Knife/security/advisories/GHSA-jmvx-2wfw-xfgj/comments/${EDIT_ID}`;
+  const stripped = editPage(
+    action,
+    '<input type="hidden" name="authenticity_token" value="t">' +
+      '<textarea name="repository_advisory_comment[body]"></textarea>'
+  );
+  const fake = fakeFetch(200, EDITED);
+  const outcome = await write.editComment(editOptions({ doc: stripped, fetch: fake.send }));
+  assert.strictEqual(outcome.ok, false);
+  assert.strictEqual(outcome.reason, 'no-token');
+  assert.strictEqual(fake.calls.length, 0, 'a request went out');
+  assert.strictEqual(
+    outcome.message,
+    `Nothing was written: the edit form for comment ${EDIT_ID} carries no` +
+      ' repository_advisory_comment[bodyVersion].'
+  );
+  const whole = editPage(action, EDIT_TOKENS);
+  const second = await write.editComment(editOptions({ doc: whole, fetch: fake.send }));
+  assert.strictEqual(second.ok, true);
+});
+
+test('the page a write runs against is fetched from the advisory URL', async () => {
+  assert.strictEqual(
+    write.detailUrl(REF),
+    '/git-utensils/Spoon-Knife/security/advisories/GHSA-jmvx-2wfw-xfgj'
+  );
+  const fake = fakeFetch(200, '<!doctype html><html><body><p id="here">read</p></body></html>');
+  const fetched = await write.fetchAdvisoryPage(REF, {
+    fetch: fake.send,
+    parseDocument: document,
+  });
+  assert.strictEqual(fetched.failure, null);
+  assert.ok(fetched.page !== null, 'the fetch produced no page');
+  assert.strictEqual(
+    /** @type {Document} */ (fetched.page).querySelector('#here')?.textContent,
+    'read'
+  );
+  const call = /** @type {{ url: string, init: RequestInit }} */ (fake.calls[0]);
+  assert.strictEqual(call.url, '/git-utensils/Spoon-Knife/security/advisories/GHSA-jmvx-2wfw-xfgj');
+  assert.strictEqual(call.init.method, 'GET');
+  assert.strictEqual(call.init.credentials, 'same-origin');
+  assert.strictEqual(call.init.cache, 'no-store');
+});
+
+test('a page the write could not read produces a failure and no page', async () => {
+  const refused = await write.fetchAdvisoryPage(REF, {
+    fetch: fakeFetch(404, '').send,
+    parseDocument: document,
+  });
+  assert.strictEqual(refused.page, null);
+  assert.strictEqual(refused.failure?.reason, 'fetch');
+  assert.strictEqual(refused.failure?.status, 404);
+  assert.strictEqual(
+    refused.failure?.message,
+    'Nothing was written: GitHub answered 404 for the advisory page.'
+  );
+
+  const unreachable = await write.fetchAdvisoryPage(REF, {
+    fetch: async () => {
+      throw new TypeError('NetworkError');
+    },
+    parseDocument: document,
+  });
+  assert.strictEqual(unreachable.page, null);
+  assert.strictEqual(unreachable.failure?.reason, 'fetch');
+  assert.strictEqual(unreachable.failure?.status, null);
+});

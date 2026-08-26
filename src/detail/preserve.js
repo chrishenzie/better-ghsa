@@ -290,23 +290,6 @@ function offered(advisory) {
  */
 
 /**
- * @param {AdvisoryRef} ref
- * @returns {string} the advisory detail page a write reads first.
- */
-function detailUrl(ref) {
-  return `/${ref.owner}/${ref.repo}/security/advisories/${ref.ghsaId}`;
-}
-
-/** How the detail page is asked for. */
-const DETAIL_INIT = /** @type {RequestInit} */ ({
-  method: 'GET',
-  credentials: 'same-origin',
-  redirect: 'follow',
-  cache: 'no-store',
-  headers: { Accept: 'text/html' },
-});
-
-/**
  * @param {Availability} state
  * @returns {WriteResult}
  */
@@ -355,27 +338,18 @@ async function preserve(advisory, options) {
   const toDocument =
     options?.parseDocument ?? ((html) => new DOMParser().parseFromString(html, 'text/html'));
 
-  /** @type {Document} */
-  let page;
-  try {
-    const response = await send(detailUrl(ref), DETAIL_INIT);
-    if (!(response.status >= 200 && response.status < 300)) {
-      attempts.delete(key);
-      return failed(
-        'fetch',
-        response.status,
-        `Nothing was written: GitHub answered ${response.status} for the advisory page.`
-      );
-    }
-    page = toDocument(await response.text());
-  } catch (error) {
+  const fetched = await globalThis.bghsa.write.fetchAdvisoryPage(ref, {
+    fetch: send,
+    parseDocument: toDocument,
+  });
+  if (fetched.failure !== null || fetched.page === null) {
     attempts.delete(key);
-    return failed(
-      'fetch',
-      null,
-      `Nothing was written: the advisory page could not be read: ${String(error)}`
+    return (
+      fetched.failure ??
+      failed('fetch', null, 'Nothing was written: the advisory page could not be read.')
     );
   }
+  const page = fetched.page;
 
   const fresh = globalThis.bghsa.parseDetail.parseDetail(page);
   if (fresh === null || fresh.ref === null || !sameRef(fresh.ref, ref)) {
@@ -435,7 +409,6 @@ globalThis.bghsa.preserve = {
   balanceDetails,
   hasPreservationComment,
   buildBody,
-  detailUrl,
   offered,
   preserve,
 };

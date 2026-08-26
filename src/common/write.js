@@ -22,9 +22,9 @@ require('./allowlist.js');
 /**
  * @typedef {object} WriteResult
  * @property {boolean} ok
- * @property {string | null} reason One of `allowlist`, `unverifiable`,
- *   `no-form`, `mismatch`, `status`, `unwritten`, `unreachable`, and null on
- *   success.
+ * @property {string | null} reason One of `allowlist`, `fetch`,
+ *   `unverifiable`, `no-form`, `no-token`, `mismatch`, `status`, `unwritten`,
+ *   `unreachable`, and null on success.
  * @property {number | null} status The response status, when there was one.
  * @property {string} message What happened, in the words the panel shows.
  */
@@ -160,6 +160,17 @@ function commentPath(ref) {
 }
 
 /**
+ * The path the form that edits one comment posts to.
+ *
+ * @param {import('./parse-detail.js').AdvisoryRef} ref
+ * @param {string} commentId
+ * @returns {string}
+ */
+function editPath(ref, commentId) {
+  return `${commentPath(ref)}/${commentId}`;
+}
+
+/**
  * Whether a form action posts to the advisory the reference names. The
  * allowlist gates on the reference read from the page, so the request target
  * carries the same owner, repository, and advisory id, on `github.com`. An
@@ -167,9 +178,11 @@ function commentPath(ref) {
  *
  * @param {string} action
  * @param {import('./parse-detail.js').AdvisoryRef} ref
+ * @param {string} [commentId] The comment the action has to name. Without it
+ *   the action has to name the advisory's comment collection.
  * @returns {boolean}
  */
-function actionMatchesRef(action, ref) {
+function actionMatchesRef(action, ref, commentId) {
   /** @type {URL} */
   let url;
   try {
@@ -178,7 +191,25 @@ function actionMatchesRef(action, ref) {
     return false;
   }
   if (url.origin !== 'https://github.com') return false;
-  return url.pathname.replace(/\/+$/, '').toLowerCase() === commentPath(ref).toLowerCase();
+  const wanted = commentId === undefined ? commentPath(ref) : editPath(ref, commentId);
+  return url.pathname.replace(/\/+$/, '').toLowerCase() === wanted.toLowerCase();
+}
+
+/**
+ * The form that edits one comment. GitHub renders it into the document before
+ * any menu is opened, so it is in a page this extension fetched and never
+ * displayed.
+ *
+ * Its presence says nothing about who wrote the comment: a maintainer with
+ * write access on the repository gets an edit form for everyone's comments.
+ * The caller decides whose comment it may post.
+ *
+ * @param {Document} root
+ * @param {string} commentId
+ * @returns {Element | null}
+ */
+function findEditForm(root, commentId) {
+  return root.querySelector(`form[id="advisory-comment-${commentId}-edit-form"]`);
 }
 
 /** Elements whose text a reader of the page never sees as comment content. */
@@ -247,6 +278,77 @@ function commentContains(doc, needles) {
 }
 
 /**
+ * @param {boolean} ok
+ * @param {string | null} reason
+ * @param {number | null} status
+ * @param {string} message
+ * @returns {WriteResult}
+ */
+function result(ok, reason, status, message) {
+  return { ok, reason, status, message };
+}
+
+/**
+ * The advisory detail page a write reads before it builds anything.
+ *
+ * @param {import('./parse-detail.js').AdvisoryRef} ref
+ * @returns {string}
+ */
+function detailUrl(ref) {
+  return `/${ref.owner}/${ref.repo}/security/advisories/${ref.ghsaId}`;
+}
+
+/** How that page is asked for. */
+const DETAIL_INIT = /** @type {RequestInit} */ ({
+  method: 'GET',
+  credentials: 'same-origin',
+  redirect: 'follow',
+  cache: 'no-store',
+  headers: { Accept: 'text/html' },
+});
+
+/**
+ * Reads the advisory page the rest of a write runs against: the state it
+ * merges, the form it clones, and the text it writes all come from this one
+ * document, fetched at the moment the write was asked for.
+ *
+ * @param {import('./parse-detail.js').AdvisoryRef} ref
+ * @param {{ fetch?: WriteFetch, parseDocument?: (html: string) => Document }} options
+ * @returns {Promise<{ page: Document | null, failure: WriteResult | null }>}
+ *   exactly one of the two.
+ */
+async function fetchAdvisoryPage(ref, options) {
+  const send = options.fetch ?? /** @type {WriteFetch} */ (globalThis.fetch.bind(globalThis));
+  const toDocument =
+    options.parseDocument ?? ((html) => new DOMParser().parseFromString(html, 'text/html'));
+  try {
+    const response = await send(detailUrl(ref), DETAIL_INIT);
+    if (!(response.status >= 200 && response.status < 300)) {
+      return {
+        page: null,
+        failure: result(
+          false,
+          'fetch',
+          response.status,
+          `Nothing was written: GitHub answered ${response.status} for the advisory page.`
+        ),
+      };
+    }
+    return { page: toDocument(await response.text()), failure: null };
+  } catch (error) {
+    return {
+      page: null,
+      failure: result(
+        false,
+        'fetch',
+        null,
+        `Nothing was written: the advisory page could not be read: ${String(error)}`
+      ),
+    };
+  }
+}
+
+/**
  * @typedef {object} CreateCommentOptions
  * @property {Document} doc The page carrying the form the write clones.
  * @property {import('./parse-detail.js').AdvisoryRef} ref The advisory the
@@ -261,31 +363,51 @@ function commentContains(doc, needles) {
  */
 
 /**
- * @param {boolean} ok
- * @param {string | null} reason
- * @param {number | null} status
- * @param {string} message
- * @returns {WriteResult}
+ * @typedef {object} EditCommentOptions
+ * @property {Document} doc The page carrying the edit form the write clones.
+ * @property {import('./parse-detail.js').AdvisoryRef} ref The advisory the
+ *   comment is on, read from that page.
+ * @property {string} commentId The comment this edit replaces the body of.
+ *   The caller has established that this maintainer wrote it.
+ * @property {string} body The comment's new markdown.
+ * @property {readonly string[]} contains Text the response must render in one
+ *   comment for the write to count as done.
+ * @property {WriteFetch} [fetch]
+ * @property {(html: string) => Document} [parseDocument]
+ * @property {() => void} [beforeSend] Called once the request is built and
+ *   before it goes out, so the caller holds the advisory for the flight.
  */
-function result(ok, reason, status, message) {
-  return { ok, reason, status, message };
-}
+
+/** The field an edit carries the comment's new markdown in. */
+const EDIT_BODY_FIELD = 'repository_advisory_comment[body]';
 
 /**
- * Creates one comment on the advisory the document shows.
+ * Fields an edit form has to carry for the request to be one this extension
+ * will send. `authenticity_token` is what authorizes the POST, and
+ * `repository_advisory_comment[bodyVersion]` is GitHub's optimistic
+ * concurrency token for the comment body: without it, an edit would overwrite
+ * a body that changed between the fetch and the POST.
  *
- * The repository is checked before anything else, so a repository off the
- * allowlist never reaches a request. A write whose result cannot be confirmed
- * is reported as failed, because the comment it would leave is permanent and
- * visible to the reporter.
- *
- * @param {CreateCommentOptions} options
- * @returns {Promise<WriteResult>}
+ * @type {readonly string[]}
  */
-async function createComment(options) {
-  const { doc, ref, body, contains } = options;
-  const nameWithOwner = `${ref.owner}/${ref.repo}`;
+const REQUIRED_EDIT_FIELDS = [
+  'authenticity_token',
+  'repository_advisory_comment[bodyVersion]',
+  EDIT_BODY_FIELD,
+];
 
+/**
+ * What refuses a write before any request is built: a repository this
+ * extension does not write to, a comment with nothing in it, and a write whose
+ * result could not be recognized in GitHub's answer.
+ *
+ * @param {import('./parse-detail.js').AdvisoryRef} ref
+ * @param {string} body
+ * @param {readonly string[]} contains
+ * @returns {WriteResult | null} null when nothing refuses the write.
+ */
+function refuseBeforeRequest(ref, body, contains) {
+  const nameWithOwner = `${ref.owner}/${ref.repo}`;
   if (!globalThis.bghsa.allowlist.isAllowed(nameWithOwner)) {
     return result(
       false,
@@ -305,34 +427,21 @@ async function createComment(options) {
       'Nothing was written: this extension has no way to confirm the write.'
     );
   }
+  return null;
+}
 
-  const form = findCommentForm(doc);
-  if (form === null) {
-    return result(
-      false,
-      'no-form',
-      null,
-      'Nothing was written: this page carries no comment form.'
-    );
-  }
-  const action = form.getAttribute('action') ?? '';
-  if (!actionMatchesRef(action, ref)) {
-    return result(
-      false,
-      'mismatch',
-      null,
-      'Nothing was written: the comment form on this page posts somewhere other than' +
-        ` ${nameWithOwner} ${ref.ghsaId}.`
-    );
-  }
-
-  const params = cloneForm(form);
-  params.set('body', body);
-  // The action the Comment button performs. It carries `disabled` while the
-  // comment field is empty, which is the state of the page under the panel.
-  const submit = form.querySelector('button[type="submit"][name="comment"]');
-  if (submit !== null) params.set('comment', submit.getAttribute('value') ?? '1');
-
+/**
+ * Sends one built request and reads GitHub's answer. A write whose result
+ * cannot be confirmed is reported as failed, because the comment it would
+ * leave is permanent and visible to the reporter.
+ *
+ * @param {string} action
+ * @param {URLSearchParams} params
+ * @param {readonly string[]} contains
+ * @param {CreateCommentOptions | EditCommentOptions} options
+ * @returns {Promise<WriteResult>}
+ */
+async function postForm(action, params, contains, options) {
   const send = options.fetch ?? /** @type {WriteFetch} */ (globalThis.fetch.bind(globalThis));
   /** @type {WriteResponse} */
   let response;
@@ -355,8 +464,7 @@ async function createComment(options) {
   }
 
   const toDocument =
-    options.parseDocument ??
-    ((html) => new DOMParser().parseFromString(html, 'text/html'));
+    options.parseDocument ?? ((html) => new DOMParser().parseFromString(html, 'text/html'));
   let written = false;
   try {
     written = commentContains(toDocument(await response.text()), contains);
@@ -374,15 +482,123 @@ async function createComment(options) {
   return result(true, null, status, 'The comment was written.');
 }
 
+/**
+ * Creates one comment on the advisory the document shows.
+ *
+ * The repository is checked before anything else, so a repository off the
+ * allowlist never reaches a request.
+ *
+ * @param {CreateCommentOptions} options
+ * @returns {Promise<WriteResult>}
+ */
+async function createComment(options) {
+  const { doc, ref, body, contains } = options;
+  const refused = refuseBeforeRequest(ref, body, contains);
+  if (refused !== null) return refused;
+
+  const form = findCommentForm(doc);
+  if (form === null) {
+    return result(
+      false,
+      'no-form',
+      null,
+      'Nothing was written: this page carries no comment form.'
+    );
+  }
+  const action = form.getAttribute('action') ?? '';
+  if (!actionMatchesRef(action, ref)) {
+    return result(
+      false,
+      'mismatch',
+      null,
+      'Nothing was written: the comment form on this page posts somewhere other than' +
+        ` ${ref.owner}/${ref.repo} ${ref.ghsaId}.`
+    );
+  }
+
+  const params = cloneForm(form);
+  params.set('body', body);
+  // The action the Comment button performs. It carries `disabled` while the
+  // comment field is empty, which is the state of the page under the panel.
+  const submit = form.querySelector('button[type="submit"][name="comment"]');
+  if (submit !== null) params.set('comment', submit.getAttribute('value') ?? '1');
+
+  return postForm(action, params, contains, options);
+}
+
+/**
+ * Replaces the body of one comment on the advisory the document shows.
+ *
+ * The clone carries the form's own fields untouched and changes one: the
+ * randomized `required_field_XXXX` and the signed `timestamp_secret` cannot be
+ * constructed, and `repository_advisory_comment[bodyVersion]` is what makes
+ * GitHub reject an edit whose comment changed after the fetch.
+ *
+ * Which comment this may post to is the caller's decision. The form for
+ * another maintainer's comment is in the page too, and posting it would
+ * overwrite what that maintainer wrote.
+ *
+ * @param {EditCommentOptions} options
+ * @returns {Promise<WriteResult>}
+ */
+async function editComment(options) {
+  const { doc, ref, commentId, body, contains } = options;
+  const refused = refuseBeforeRequest(ref, body, contains);
+  if (refused !== null) return refused;
+
+  const form = findEditForm(doc, commentId);
+  if (form === null) {
+    return result(
+      false,
+      'no-form',
+      null,
+      `Nothing was written: this page carries no edit form for comment ${commentId}.`
+    );
+  }
+  const action = form.getAttribute('action') ?? '';
+  if (!actionMatchesRef(action, ref, commentId)) {
+    return result(
+      false,
+      'mismatch',
+      null,
+      'Nothing was written: the edit form on this page posts somewhere other than' +
+        ` ${ref.owner}/${ref.repo} ${ref.ghsaId} comment ${commentId}.`
+    );
+  }
+
+  const params = cloneForm(form);
+  const missing = REQUIRED_EDIT_FIELDS.filter((field) => !params.has(field));
+  if (missing.length > 0) {
+    return result(
+      false,
+      'no-token',
+      null,
+      `Nothing was written: the edit form for comment ${commentId} carries no` +
+        ` ${missing.join(' and no ')}.`
+    );
+  }
+  params.set(EDIT_BODY_FIELD, body);
+
+  return postForm(action, params, contains, options);
+}
+
 globalThis.bghsa.write = {
+  DETAIL_INIT,
+  EDIT_BODY_FIELD,
+  REQUIRED_EDIT_FIELDS,
+  detailUrl,
+  fetchAdvisoryPage,
   formEntries,
   cloneForm,
   findCommentForm,
+  findEditForm,
   commentPath,
+  editPath,
   actionMatchesRef,
   renderedText,
   commentContains,
   createComment,
+  editComment,
 };
 
 if (typeof module !== 'undefined') {
