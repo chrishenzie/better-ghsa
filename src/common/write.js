@@ -173,8 +173,9 @@ function editPath(ref, commentId) {
 /**
  * Whether a form action posts to the advisory the reference names. The
  * allowlist gates on the reference read from the page, so the request target
- * carries the same owner, repository, and advisory id, on `github.com`. An
- * action this cannot resolve to that one path is refused.
+ * carries the same owner, repository, and advisory id, on `github.com`, and
+ * names no credentials. An action this cannot resolve to that one path is
+ * refused.
  *
  * @param {string} action
  * @param {import('./parse-detail.js').AdvisoryRef} ref
@@ -191,6 +192,9 @@ function actionMatchesRef(action, ref, commentId) {
     return false;
   }
   if (url.origin !== 'https://github.com') return false;
+  // `origin` drops userinfo, so `https://user:pass@github.com/...` reads as
+  // github.com here and is a request this extension does not send.
+  if (url.username !== '' || url.password !== '') return false;
   const wanted = commentId === undefined ? commentPath(ref) : editPath(ref, commentId);
   return url.pathname.replace(/\/+$/, '').toLowerCase() === wanted.toLowerCase();
 }

@@ -210,6 +210,9 @@ test('a form action names the advisory the reference names', () => {
     '/someone/else/security/advisories/GHSA-jmvx-2wfw-xfgj/comments',
     '/git-utensils/Spoon-Knife/security/advisories/GHSA-0000-0000-0000/comments',
     'https://example.invalid/git-utensils/Spoon-Knife/security/advisories/GHSA-jmvx-2wfw-xfgj/comments',
+    // Credentials in the action, which `origin` does not carry.
+    'https://user:pass@github.com/git-utensils/Spoon-Knife/security/advisories/GHSA-jmvx-2wfw-xfgj/comments',
+    'https://evil@github.com/git-utensils/Spoon-Knife/security/advisories/GHSA-jmvx-2wfw-xfgj/comments',
     'comments',
     '',
   ]) {
@@ -448,6 +451,7 @@ test('an edit action names the one comment the caller chose', () => {
     '/git-utensils/Spoon-Knife/security/advisories/GHSA-jmvx-2wfw-xfgj/comments',
     `/someone/else/security/advisories/GHSA-jmvx-2wfw-xfgj/comments/${EDIT_ID}`,
     `https://example.invalid/git-utensils/Spoon-Knife/security/advisories/GHSA-jmvx-2wfw-xfgj/comments/${EDIT_ID}`,
+    `https://user:pass@github.com/git-utensils/Spoon-Knife/security/advisories/GHSA-jmvx-2wfw-xfgj/comments/${EDIT_ID}`,
   ]) {
     assert.strictEqual(write.actionMatchesRef(action, REF, EDIT_ID), false, action);
   }
