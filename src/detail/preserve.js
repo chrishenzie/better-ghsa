@@ -10,25 +10,49 @@ if (typeof require === 'function') {
 }
 
 /**
- * The summary text of the preservation comment's `details` block. It is fixed,
- * so a preservation comment is recognized by it without the body being parsed.
+ * The summary text of the preservation comment's `details` block. It is prose
+ * for the reader: nothing this extension does keys on it, so it can be
+ * rewritten without breaking recognition or write verification.
  */
 const PRESERVE_SUMMARY = 'Original report preserved by Better GHSA';
 
-/** What the comment says about a title. */
-const TITLE_NOTE =
-  'The title below is the advisory title as it stood when this comment was' +
-  ' written, because GitHub records no revision signal for a title.';
+/** The label the advisory's title is written under. */
+const TITLE_LABEL = 'Title:';
 
-/** What the comment says about a description that has never been revised. */
-const ORIGINAL_NOTE =
-  "The description below is the reporter's original text: the advisory" +
-  ' description carried no revision when this comment was written.';
+/** The label the advisory's description is written under. */
+const DESCRIPTION_LABEL = 'Description:';
 
-/** What the comment says about a description that has been revised. */
-const REVISED_NOTE =
-  'The description below is the text as it stood when this comment was' +
-  ' written. The advisory description has been revised since it was reported.';
+/**
+ * What says a comment is a preservation comment. The body carries it once, in
+ * a code span under the summary: GitHub's sanitizer strips HTML comments but
+ * keeps `code`, so the token is in the rendered document both checks read, and
+ * it owes nothing to any sentence. The trailing `1` is the body format, so a
+ * later format can be told from this one.
+ *
+ * A reporter can copy this token into their own description, which hides the
+ * button on their own advisory. That denies the feature on that advisory and
+ * writes nothing, so recognition fails safe. Write verification does not rest
+ * on it; see `newMarker`.
+ */
+const MARKER_PREFIX = 'better-ghsa:preserved:1:';
+
+/** How many random bytes a marker's per-write value carries. */
+const MARKER_BYTES = 8;
+
+/**
+ * The marker for one press: the fixed prefix and a value drawn immediately
+ * before the body is built. The response counts as the write only where it
+ * renders this value, which no description written earlier can hold, so text
+ * the reporter controls cannot confirm a write that did not happen.
+ *
+ * @returns {string}
+ */
+function newMarker() {
+  const bytes = new Uint8Array(MARKER_BYTES);
+  globalThis.crypto.getRandomValues(bytes);
+  const value = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+  return `${MARKER_PREFIX}${value}`;
+}
 
 /** What the panel says while a press is on its way to GitHub. */
 const PENDING_MESSAGE = 'A press is already on its way to GitHub for this advisory.';
@@ -69,7 +93,9 @@ const attempts = new Map();
  * @returns {string} the key an advisory's attempt is held under.
  */
 function attemptKey(ref) {
-  return `${ref.owner}/${ref.repo}/${ref.ghsaId}`;
+  // Lowercased, because `sameRef` and the allowlist read a reference
+  // case-insensitively and two spellings of one advisory are one advisory.
+  return `${ref.owner}/${ref.repo}/${ref.ghsaId}`.toLowerCase();
 }
 
 /**
@@ -86,14 +112,14 @@ function sameRef(left, right) {
 }
 
 /**
- * Whether the advisory already carries a preservation comment. The fixed
- * summary text is what says so; the body is not parsed.
+ * Whether the advisory already carries a preservation comment. The marker is
+ * what says so; the body is not parsed and no sentence in it is read.
  *
  * @param {readonly ParsedComment[]} comments
  * @returns {boolean}
  */
 function hasPreservationComment(comments) {
-  return comments.some((comment) => comment.text.includes(PRESERVE_SUMMARY));
+  return comments.some((comment) => comment.text.includes(MARKER_PREFIX));
 }
 
 /**
@@ -103,133 +129,64 @@ function hasPreservationComment(comments) {
  * the reporter opened stays, and the pair renders as a block nested inside the
  * enclosing one.
  *
- * A tag inside a fenced block or a code span closes nothing when GitHub
- * renders it, so it is left where the reporter put it.
+ * The tags are counted where they stand in the text, with no reading of how
+ * GitHub would render them. A `</details>` shown inside a code sample counts
+ * like any other: it can be dropped out of the sample, and it can take the
+ * count of an opener, leaving a tag that does close the wrapper in place. That
+ * is the accepted cost of not modelling GitHub's renderer.
  *
  * @param {string} text
  * @returns {string}
  */
 function balanceDetails(text) {
   let depth = 0;
-
-  /**
-   * @param {string} line
-   * @returns {string} `line` with its unmatched closing tags removed.
-   */
-  function scan(line) {
-    let out = '';
-    let at = 0;
-    while (at < line.length) {
-      const rest = line.slice(at);
-      const ticks = /^`+/.exec(rest);
-      if (ticks !== null) {
-        const run = ticks[0];
-        const close = line.indexOf(run, at + run.length);
-        const end = close === -1 ? line.length : close + run.length;
-        out += line.slice(at, end);
-        at = end;
-        continue;
-      }
-      if (rest.startsWith('<')) {
-        const opener = /^<details(\s[^>]*)?>/i.exec(rest);
-        if (opener !== null) {
-          depth += 1;
-          out += opener[0];
-          at += opener[0].length;
-          continue;
-        }
-        const closer = /^<\/details\s*>/i.exec(rest);
-        if (closer !== null) {
-          if (depth > 0) {
-            depth -= 1;
-            out += closer[0];
-          }
-          at += closer[0].length;
-          continue;
-        }
-      }
-      out += rest[0];
-      at += 1;
+  return text.replace(/<details(\s[^>]*)?>|<\/details\s*>/gi, (tag) => {
+    if (tag[1] === '/') {
+      if (depth === 0) return '';
+      depth -= 1;
+      return tag;
     }
-    return out;
-  }
-
-  /** @type {{ char: string, length: number } | null} */
-  let fence = null;
-  const lines = text.split('\n').map((line) => {
-    const marker = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
-    if (fence !== null) {
-      if (
-        marker !== null &&
-        /** @type {string} */ (marker[1])[0] === fence.char &&
-        /** @type {string} */ (marker[1]).length >= fence.length &&
-        /** @type {string} */ (marker[2]).trim() === ''
-      ) {
-        fence = null;
-      }
-      return line;
-    }
-    if (marker !== null) {
-      const run = /** @type {string} */ (marker[1]);
-      fence = { char: /** @type {string} */ (run[0]), length: run.length };
-      return line;
-    }
-    return scan(line);
+    depth += 1;
+    return tag;
   });
-  return lines.join('\n');
 }
 
 /**
- * The comment the button writes: one collapsed block holding what this
- * extension knows about where the title and description came from, and then
- * the advisory's title and description.
+ * The comment the button writes: one collapsed block holding the marker and
+ * then the advisory's title and description under their labels.
  *
- * This extension's own sentences come first, immediately under the summary, so
- * that no reporter text can render above them or swallow them.
+ * The marker comes first, immediately under the summary, so that no reporter
+ * text can render above it or swallow it.
+ *
+ * A description whose provenance did not read builds nothing. The comment no
+ * longer says which case it is, and the extension still declines to write
+ * where it cannot tell whether the description is the reporter's own text.
  *
  * @param {ParsedDetail} advisory
- * @returns {string | null} null when a value the comment states is not in
- *   hand, because the comment makes a durable claim in front of the reporter.
+ * @param {string} marker The marker for this press.
+ * @returns {string | null} null when the title, the description, or the
+ *   description's provenance is not in hand.
  */
-function buildBody(advisory) {
+function buildBody(advisory, marker) {
   const { title, description, descriptionOriginal } = advisory;
   if (title === null || description === null || descriptionOriginal === null) return null;
   return [
     '<details>',
     `<summary>${PRESERVE_SUMMARY}</summary>`,
     '',
-    TITLE_NOTE,
+    `\`${marker}\``,
     '',
-    descriptionOriginal ? ORIGINAL_NOTE : REVISED_NOTE,
-    '',
-    '---',
-    '',
-    '**Title**',
+    TITLE_LABEL,
     '',
     balanceDetails(title),
     '',
-    '**Description**',
+    DESCRIPTION_LABEL,
     '',
     balanceDetails(description),
     '',
     '</details>',
     '',
   ].join('\n');
-}
-
-/**
- * The rendered text the response must carry for a write to count as done: the
- * fixed summary and both sentences this extension wrote under it.
- *
- * @param {ParsedDetail} advisory
- * @returns {string[]}
- */
-function writtenText(advisory) {
-  return [
-    PRESERVE_SUMMARY,
-    TITLE_NOTE,
-    advisory.descriptionOriginal ? ORIGINAL_NOTE : REVISED_NOTE,
-  ];
 }
 
 /**
@@ -372,8 +329,8 @@ function failed(reason, status, message) {
  *
  * The whole write runs against a document fetched at press time: the comment
  * this advisory may already carry, the form the request clones, and the title
- * and description the comment states all come from that document, so the
- * comment's sentences hold for the moment it was written.
+ * and description the comment holds all come from that document, so the
+ * comment holds the report as it stood when it was written.
  *
  * The advisory is held from the first press until that write settles, because
  * a second one would put a second permanent comment on a real report.
@@ -437,7 +394,8 @@ async function preserve(advisory, options) {
     else attempts.delete(key);
     return refused(current);
   }
-  const body = buildBody(fresh);
+  const marker = newMarker();
+  const body = buildBody(fresh, marker);
   if (body === null) {
     attempts.delete(key);
     return failed(
@@ -452,7 +410,7 @@ async function preserve(advisory, options) {
     doc: page,
     ref: fresh.ref,
     body,
-    contains: writtenText(fresh),
+    contains: [marker],
     fetch: send,
     parseDocument: toDocument,
     beforeSend: () => {
@@ -468,15 +426,15 @@ async function preserve(advisory, options) {
 globalThis.bghsa.preserve = {
   PRESERVE_SUMMARY,
   attempts,
-  TITLE_NOTE,
-  ORIGINAL_NOTE,
-  REVISED_NOTE,
+  TITLE_LABEL,
+  DESCRIPTION_LABEL,
+  MARKER_PREFIX,
   PENDING_MESSAGE,
   ATTEMPTED_MESSAGE,
+  newMarker,
   balanceDetails,
   hasPreservationComment,
   buildBody,
-  writtenText,
   detailUrl,
   offered,
   preserve,

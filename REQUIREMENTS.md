@@ -210,10 +210,12 @@ nested inside the enclosing one. A closing `</details>` with no matching opener
 is removed, because it would end the enclosing block early and spill the rest
 of the report into the thread.
 
-A description that has never been revised is the reporter's original text, and
-the comment records it as such. Otherwise the comment records the description as
-it stood when the button was pressed. The comment records the title as the text
-at that moment, because no revision signal exists for the title.
+The summary line is what records that the comment holds the original report.
+The body carries the title and the description under plain labels and says
+nothing further about them.
+
+The extension refuses to write where it cannot tell whether the description is
+the reporter's original text.
 
 Pressing the button before a maintainer rewrites the report is what preserves
 the original. Nothing recovers it afterward.

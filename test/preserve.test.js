@@ -8,6 +8,7 @@ const { parseHTML } = require('linkedom');
 
 const parse = require('../src/common/parse-detail.js');
 const preserve = require('../src/detail/preserve.js');
+const write = require('../src/common/write.js');
 
 /**
  * @param {string} name
@@ -27,18 +28,19 @@ function document(markup) {
 }
 
 /**
+ * @param {Document} doc
  * @param {string} name
  * @returns {import('../src/common/parse-detail.js').ParsedDetail}
  */
-function record(name) {
-  const parsed = parse.parseDetail(fixture(name));
+function detail(doc, name) {
+  const parsed = parse.parseDetail(doc);
   if (parsed === null) throw new Error(`${name} is not an advisory detail page`);
   return parsed;
 }
 
 /** The one parse of each large fixture in this file. */
-const triage = record('triage-thread.html');
-const draft = record('draft.html');
+const triageDoc = fixture('triage-thread.html');
+const draft = detail(fixture('draft.html'), 'draft.html');
 
 /** The advisory the fixtures come from, which is on the allowlist. */
 const REF = { owner: 'git-utensils', repo: 'Spoon-Knife', ghsaId: 'GHSA-jmvx-2wfw-xfgj' };
@@ -51,6 +53,9 @@ const TITLE = 'Path traversal in the drawer handler';
 
 /** The description the built page carries. */
 const DESCRIPTION = '### Summary\n\nThe handler joins a path without normalizing it.';
+
+/** A marker standing in for one a press draws. */
+const MARKER = `${preserve.MARKER_PREFIX}0123456789abcdef`;
 
 /**
  * @param {string} value
@@ -95,7 +100,8 @@ function pageHtml(options) {
     settings.preserved === true
       ? '<div class="timeline-comment-group" id="advisory-comment-42">' +
         '<div class="comment-body markdown-body js-comment-body">' +
-        `${preserve.PRESERVE_SUMMARY} Title ${escape(TITLE)}</div></div>`
+        `${preserve.PRESERVE_SUMMARY}<code>${MARKER}</code>` +
+        `${preserve.TITLE_LABEL} ${escape(TITLE)}</div></div>`
       : '';
   return [
     '<!doctype html><html><body>',
@@ -148,24 +154,34 @@ const advisory = pageRecord();
 
 /**
  * A response holding the comment a write claims to have made, as GitHub
- * renders it.
+ * renders it: the code span survives the sanitizer, so the marker is in the
+ * document the write is read back out of.
  *
- * @param {boolean} original Whether the description was the reporter's own.
+ * @param {string} marker The marker the press wrote.
+ * @param {string} [title] The title the comment carries.
  * @returns {string}
  */
-function wroteHtml(original) {
+function wroteHtml(marker, title) {
   return (
     '<!doctype html><html><body>' +
     '<div class="comment-body markdown-body js-comment-body"><details>' +
     `<summary>${preserve.PRESERVE_SUMMARY}</summary>` +
-    `<p>${preserve.TITLE_NOTE}</p>` +
-    `<p>${original ? preserve.ORIGINAL_NOTE : preserve.REVISED_NOTE}</p>` +
+    `<p><code>${escape(marker)}</code></p>` +
+    `<p>${preserve.TITLE_LABEL}</p><p>${escape(title ?? TITLE)}</p>` +
+    `<p>${preserve.DESCRIPTION_LABEL}</p><p>${escape(DESCRIPTION)}</p>` +
     '</details></div></body></html>'
   );
 }
 
-/** The answer to a press on an advisory whose description is the original. */
-const WROTE = wroteHtml(true);
+/**
+ * @param {RequestInit} init The write request.
+ * @returns {string} the marker the body of that request carries.
+ */
+function markerOf(init) {
+  const sent = /** @type {URLSearchParams} */ (/** @type {unknown} */ (init.body));
+  const found = new RegExp(`${preserve.MARKER_PREFIX}[0-9a-f]+`).exec(String(sent.get('body')));
+  return found === null ? '' : found[0];
+}
 
 /**
  * @typedef {object} Exchange
@@ -181,7 +197,9 @@ const WROTE = wroteHtml(true);
  * @param {object} [options]
  * @param {string} [options.page] The detail page markup.
  * @param {number} [options.pageStatus]
- * @param {string} [options.answer] The markup the write is answered with.
+ * @param {string} [options.answer] The markup the write is answered with. By
+ *   default the comment the press wrote, as GitHub renders it.
+ * @param {string} [options.answerTitle] The title that comment carries.
  * @param {number} [options.status] The status the write is answered with.
  * @param {Promise<void>} [options.holdPage] Awaited before the page answers.
  * @param {Promise<void>} [options.holdWrite] Awaited before the write answers.
@@ -202,7 +220,7 @@ function exchange(options) {
         return { status: settings.pageStatus ?? 200, text: async () => page };
       }
       if (settings.holdWrite !== undefined) await settings.holdWrite;
-      const answer = settings.answer ?? WROTE;
+      const answer = settings.answer ?? wroteHtml(markerOf(init), settings.answerTitle);
       return { status: settings.status ?? 200, text: async () => answer };
     },
   };
@@ -223,24 +241,18 @@ function tick() {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-/** The comment an advisory whose description has never been revised gets. */
-const ORIGINAL_BODY = [
+/** The comment an advisory gets. */
+const BODY = [
   '<details>',
   '<summary>Original report preserved by Better GHSA</summary>',
   '',
-  'The title below is the advisory title as it stood when this comment was written,' +
-    ' because GitHub records no revision signal for a title.',
+  `\`${MARKER}\``,
   '',
-  "The description below is the reporter's original text: the advisory description" +
-    ' carried no revision when this comment was written.',
-  '',
-  '---',
-  '',
-  '**Title**',
+  'Title:',
   '',
   'Path traversal in the drawer handler',
   '',
-  '**Description**',
+  'Description:',
   '',
   '### Summary',
   '',
@@ -250,65 +262,39 @@ const ORIGINAL_BODY = [
   '',
 ].join('\n');
 
-/** The comment an advisory whose description has been revised gets. */
-const REVISED_BODY = ORIGINAL_BODY.replace(
-  "The description below is the reporter's original text: the advisory description" +
-    ' carried no revision when this comment was written.',
-  'The description below is the text as it stood when this comment was written.' +
-    ' The advisory description has been revised since it was reported.'
-);
-
-test('a description that has never been revised is recorded as the original', () => {
-  const body = preserve.buildBody(advisory);
-  assert.ok(body === ORIGINAL_BODY, `the comment body reads:\n${String(body)}`);
+test('the comment is the summary, the marker, and the title and description', () => {
+  const body = preserve.buildBody(advisory, MARKER);
+  assert.ok(body === BODY, `the comment body reads:\n${String(body)}`);
 });
 
-test('a description that has been revised is recorded as the text of the moment', () => {
-  const body = preserve.buildBody(pageRecord({ revised: true }));
-  assert.ok(body === REVISED_BODY, `the comment body reads:\n${String(body)}`);
-});
-
-test("this extension's own sentences come before any text the reporter wrote", () => {
-  const body = /** @type {string} */ (preserve.buildBody(advisory));
-  const summary = body.indexOf(preserve.PRESERVE_SUMMARY);
-  const note = body.indexOf(preserve.TITLE_NOTE);
-  const provenance = body.indexOf(preserve.ORIGINAL_NOTE);
-  const title = body.indexOf(TITLE);
-  const description = body.indexOf('The handler joins a path');
-  assert.ok(summary < note, 'the title note is above the summary');
-  assert.ok(note < provenance, 'the provenance sentences are out of order');
-  assert.ok(provenance < title, 'the reporter title is above this extension\'s sentences');
-  assert.ok(title < description, 'the description is above the title');
-});
-
-test('the comment is one collapsed block carrying the fixed summary', () => {
-  const body = /** @type {string} */ (preserve.buildBody(advisory));
-  assert.strictEqual(body.startsWith('<details>\n'), true);
-  assert.strictEqual(body.trimEnd().endsWith('</details>'), true);
-  assert.strictEqual(
-    body.includes('<summary>Original report preserved by Better GHSA</summary>'),
-    true
-  );
-  assert.strictEqual(preserve.PRESERVE_SUMMARY, 'Original report preserved by Better GHSA');
-});
-
-test('an advisory whose description was edited gets the revised wording', () => {
-  const body = /** @type {string} */ (preserve.buildBody(draft));
+test('an advisory whose description was edited is preserved the same way', () => {
+  const body = /** @type {string} */ (preserve.buildBody(draft, MARKER));
   assert.strictEqual(draft.descriptionOriginal, false);
-  assert.strictEqual(body.includes(preserve.REVISED_NOTE), true);
-  assert.strictEqual(body.includes(preserve.ORIGINAL_NOTE), false);
+  assert.strictEqual(body.includes(/** @type {string} */ (draft.title)), true);
+  assert.strictEqual(body.includes(/** @type {string} */ (draft.description)), true);
 });
 
 test('no comment is built for a description whose provenance did not read', () => {
-  assert.strictEqual(preserve.buildBody({ ...advisory, descriptionOriginal: null }), null);
-  assert.strictEqual(preserve.buildBody({ ...advisory, title: null }), null);
-  assert.strictEqual(preserve.buildBody({ ...advisory, description: null }), null);
+  assert.strictEqual(preserve.buildBody({ ...advisory, descriptionOriginal: null }, MARKER), null);
+  assert.strictEqual(preserve.buildBody({ ...advisory, title: null }, MARKER), null);
+  assert.strictEqual(preserve.buildBody({ ...advisory, description: null }, MARKER), null);
+});
+
+test('every press draws a marker of its own under the fixed prefix', () => {
+  const first = preserve.newMarker();
+  const second = preserve.newMarker();
+  assert.strictEqual(first.startsWith(preserve.MARKER_PREFIX), true);
+  assert.strictEqual(second.startsWith(preserve.MARKER_PREFIX), true);
+  assert.strictEqual(/^[0-9a-f]{16}$/.test(first.slice(preserve.MARKER_PREFIX.length)), true);
+  assert.notStrictEqual(first, second);
 });
 
 test('a report carrying its own collapsed blocks keeps them', () => {
   const nested = '<details>\n<summary>Proof of concept</summary>\n\nA log.\n\n</details>';
   assert.strictEqual(preserve.balanceDetails(nested), nested);
-  const body = /** @type {string} */ (preserve.buildBody({ ...advisory, description: nested }));
+  const body = /** @type {string} */ (
+    preserve.buildBody({ ...advisory, description: nested }, MARKER)
+  );
   assert.strictEqual(body.includes(nested), true);
 });
 
@@ -321,22 +307,15 @@ test('a closing tag that closes nothing is taken out of the report', () => {
     '<details open>\n</details>\n'
   );
   const body = /** @type {string} */ (
-    preserve.buildBody({ ...advisory, description: 'Report.\n</details>\nSpilled.' })
+    preserve.buildBody({ ...advisory, description: 'Report.\n</details>\nSpilled.' }, MARKER)
   );
   assert.strictEqual(body.includes('Report.\n\nSpilled.'), true);
   assert.strictEqual(body.split('</details>').length - 1, 1);
 });
 
-test('a closing tag inside code is the reporter showing markup, and stays', () => {
-  const fenced = '```html\n</details>\n```';
-  assert.strictEqual(preserve.balanceDetails(fenced), fenced);
-  assert.strictEqual(preserve.balanceDetails('write `</details>` there'), 'write `</details>` there');
-  assert.strictEqual(preserve.balanceDetails('~~~\n</details>\n~~~'), '~~~\n</details>\n~~~');
-});
-
 test('a title carrying a closing tag cannot close the block either', () => {
   const body = /** @type {string} */ (
-    preserve.buildBody({ ...advisory, title: 'Bug</details>Spilled' })
+    preserve.buildBody({ ...advisory, title: 'Bug</details>Spilled' }, MARKER)
   );
   assert.strictEqual(body.includes('BugSpilled'), true);
   assert.strictEqual(body.split('</details>').length - 1, 1);
@@ -415,8 +394,12 @@ test('pressing on an advisory whose provenance did not read sends nothing', asyn
 test('a press reads the advisory page and writes what that page says', async () => {
   preserve.attempts.clear();
   const fake = exchange({
-    page: pageHtml({ title: 'The title as it stands now', revised: true }),
-    answer: wroteHtml(false),
+    page: pageHtml({
+      title: 'The title as it stands now',
+      description: 'The description as it stands now.',
+      revised: true,
+    }),
+    answerTitle: 'The title as it stands now',
   });
   const outcome = await preserve.preserve(advisory, run(fake));
 
@@ -436,13 +419,17 @@ test('a press reads the advisory page and writes what that page says', async () 
   const body = String(sent.get('body'));
   assert.ok(
     body.includes('The title as it stands now'),
-    'the comment carries the title from page load, not from the press'
+    'the comment carries the title the panel loaded with'
   );
   assert.ok(
-    body.includes(preserve.REVISED_NOTE),
-    'the comment states the provenance from page load, not from the press'
+    body.includes('The description as it stands now.'),
+    'the comment carries the description the panel loaded with'
   );
   assert.ok(!body.includes(TITLE), 'the comment carries the title the panel loaded with');
+  assert.ok(
+    !body.includes('The handler joins a path'),
+    'the comment carries the description the panel loaded with'
+  );
   preserve.attempts.clear();
 });
 
@@ -529,15 +516,39 @@ test('a second press while the first is still reading the page sends nothing', a
   preserve.attempts.clear();
 });
 
-test('an advisory whose own description quotes the summary is not confirmation', async () => {
+test('the write is confirmed by the marker that press drew, and nothing else', async () => {
   preserve.attempts.clear();
-  const quoted =
-    '<!doctype html><html><body><div class="comment-body markdown-body js-comment-body">' +
-    `<p>${preserve.PRESERVE_SUMMARY}</p></div></body></html>`;
-  const fake = exchange({ answer: quoted });
+  const fake = exchange();
   const outcome = await preserve.preserve(advisory, run(fake));
-  assert.strictEqual(outcome.ok, false);
-  assert.strictEqual(outcome.reason, 'unwritten');
+  assert.strictEqual(outcome.ok, true);
+
+  const wrote = /** @type {{ url: string, init: RequestInit }} */ (fake.posts()[0]);
+  const marker = markerOf(wrote.init);
+  assert.strictEqual(marker.startsWith(preserve.MARKER_PREFIX), true);
+  assert.notStrictEqual(marker, MARKER);
+
+  const stale = exchange({ answer: wroteHtml(marker) });
+  preserve.attempts.clear();
+  const second = await preserve.preserve(advisory, run(stale));
+  assert.ok(second.ok === false, 'an answer holding an earlier marker confirmed this write');
+  assert.strictEqual(second.reason, 'unwritten');
+  preserve.attempts.clear();
+});
+
+test('one advisory spelled two ways is one advisory', async () => {
+  preserve.attempts.clear();
+  const fake = exchange();
+  const first = await preserve.preserve(advisory, run(fake));
+  assert.strictEqual(first.ok, true);
+
+  const shouted = {
+    ...advisory,
+    ref: { owner: 'GIT-Utensils', repo: 'spoon-knife', ghsaId: 'ghsa-JMVX-2wfw-xfgj' },
+  };
+  const second = await preserve.preserve(shouted, run(fake));
+  assert.ok(second.ok === false, 'a second comment was written onto the same advisory');
+  assert.strictEqual(second.reason, 'preserved');
+  assert.strictEqual(fake.posts().length, 1, 'a second comment was posted');
   preserve.attempts.clear();
 });
 

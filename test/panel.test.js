@@ -334,18 +334,36 @@ const ADVISORY_PAGE = [
   '</form></body></html>',
 ].join('\n');
 
-/** A response holding the comment the write claims to have made. */
-const WROTE =
-  '<!doctype html><html><body><div class="comment-body markdown-body js-comment-body"><details>' +
-  `<summary>${preserve.PRESERVE_SUMMARY}</summary><p>${preserve.TITLE_NOTE}</p>` +
-  `<p>${preserve.ORIGINAL_NOTE}</p></details></div></body></html>`;
+/**
+ * A response holding the comment the write claims to have made, carrying the
+ * marker that write drew.
+ *
+ * @param {RequestInit} init The write request.
+ * @returns {string}
+ */
+function wroteHtml(init) {
+  const sent = /** @type {URLSearchParams} */ (/** @type {unknown} */ (init.body));
+  const found = new RegExp(`${preserve.MARKER_PREFIX}[0-9a-f]+`).exec(String(sent.get('body')));
+  return (
+    '<!doctype html><html><body><div class="comment-body markdown-body js-comment-body"><details>' +
+    `<summary>${preserve.PRESERVE_SUMMARY}</summary>` +
+    `<p><code>${found === null ? '' : found[0]}</code></p>` +
+    `<p>${preserve.TITLE_LABEL}</p><p>Path traversal in the drawer handler</p>` +
+    `<p>${preserve.DESCRIPTION_LABEL}</p><p>The handler joins a path.</p>` +
+    '</details></div></body></html>'
+  );
+}
+
+/** Answering a write with the comment it wrote. */
+const WROTE = null;
 
 /**
  * A stand-in for `fetch` answering the advisory page with `page` and the write
  * with `body`.
  *
  * @param {number} status The status the write is answered with.
- * @param {string} body The markup the write is answered with.
+ * @param {string | null} body The markup the write is answered with, or null
+ *   for the comment that write wrote.
  * @param {string} [page] The markup the advisory page is answered with.
  * @returns {{ send: import('../src/common/write.js').WriteFetch, calls: Array<{ url: string, init: RequestInit }>, posts: () => Array<{ url: string, init: RequestInit }> }}
  */
@@ -361,7 +379,8 @@ function fakeFetch(status, body, page) {
         const answer = page ?? ADVISORY_PAGE;
         return { status: 200, text: async () => answer };
       }
-      return { status, text: async () => body };
+      const answer = body ?? wroteHtml(init);
+      return { status, text: async () => answer };
     },
   };
 }
@@ -388,7 +407,7 @@ const preserved = {
       ...(/** @type {import('../src/common/parse-detail.js').ParsedComment} */ (
         triage.comments[0]
       )),
-      text: 'Original report preserved by Better GHSA Title Path traversal',
+      text: `Original report preserved by Better GHSA ${preserve.MARKER_PREFIX}0f0f0f0f0f0f0f0f`,
     },
   ],
 };
@@ -530,7 +549,8 @@ test('a press that read the comment already on the advisory takes the button awa
     '<form class="js-advisory-comment-form"',
     '<div class="timeline-comment-group" id="advisory-comment-42">' +
       '<div class="comment-body markdown-body js-comment-body">' +
-      `${preserve.PRESERVE_SUMMARY}</div></div>` +
+      `${preserve.PRESERVE_SUMMARY}<code>${preserve.MARKER_PREFIX}0f0f0f0f0f0f0f0f</code>` +
+      '</div></div>' +
       '<form class="js-advisory-comment-form"'
   );
   const built = build(triage);
