@@ -26,7 +26,10 @@ function document(markup) {
 }
 
 /** The advisory the fixtures come from, which is on the allowlist. */
-const REPO = 'git-utensils/Spoon-Knife';
+const REF = { owner: 'git-utensils', repo: 'Spoon-Knife', ghsaId: 'GHSA-jmvx-2wfw-xfgj' };
+
+/** That advisory's repository, as the allowlist names it. */
+const REPO = `${REF.owner}/${REF.repo}`;
 
 /** The one parse of each large fixture in this file. */
 const triageDoc = fixture('triage-thread.html');
@@ -86,9 +89,9 @@ const WROTE_NOTHING = '<!doctype html><html><body><div>Something went wrong.</di
 function options(overrides) {
   return {
     doc: triageDoc,
-    nameWithOwner: REPO,
+    ref: REF,
     body: 'a comment',
-    contains: 'Original report preserved by Better GHSA',
+    contains: ['Original report preserved by Better GHSA'],
     parseDocument: document,
     ...overrides,
   };
@@ -148,12 +151,105 @@ test('a disabled field, and a field inside a template, are not submitted', () =>
   assert.strictEqual(params.get('checked'), 'y');
 });
 
-test('a captured page is scanned whole, wherever the parse put its content', () => {
-  assert.strictEqual(write.documentContains(triageDoc, 'Better GHSA tracking state'), true);
+test('what a page renders in a comment is what confirms a write', () => {
+  assert.strictEqual(write.commentContains(triageDoc, ['Better GHSA tracking state']), true);
   assert.strictEqual(
-    write.documentContains(triageDoc, 'Original report preserved by Better GHSA'),
+    write.commentContains(triageDoc, ['Original report preserved by Better GHSA']),
     false
   );
+  assert.strictEqual(write.commentContains(triageDoc, []), false);
+});
+
+test('a body echoed back into the comment box does not confirm a write', () => {
+  const echoed = document(
+    '<!doctype html><html><body>' +
+      '<div class="comment-body markdown-body js-comment-body">' +
+      '<form action="/git-utensils/Spoon-Knife/security/advisories/GHSA-jmvx-2wfw-xfgj/comments">' +
+      '<textarea name="body">Original report preserved by Better GHSA and both notes</textarea>' +
+      '</form></div></body></html>'
+  );
+  assert.ok(
+    write.commentContains(echoed, ['Original report preserved by Better GHSA']) === false,
+    'a body echoed into the comment box confirmed a write'
+  );
+});
+
+test('the strings a write put in one comment must come back in one comment', () => {
+  const scattered = document(
+    '<!doctype html><html><body>' +
+      '<div class="comment-body">Original report preserved by Better GHSA</div>' +
+      '<div class="comment-body">The title below is the advisory title.</div>' +
+      '</body></html>'
+  );
+  const together = document(
+    '<!doctype html><html><body><div class="comment-body">' +
+      'Original report preserved by Better GHSA. The title below is the advisory title.' +
+      '</div></body></html>'
+  );
+  const needles = [
+    'Original report preserved by Better GHSA',
+    'The title below is the advisory title.',
+  ];
+  assert.strictEqual(write.commentContains(scattered, needles), false);
+  assert.strictEqual(write.commentContains(together, needles), true);
+});
+
+test('a form action names the advisory the reference names', () => {
+  assert.strictEqual(
+    write.commentPath(REF),
+    '/git-utensils/Spoon-Knife/security/advisories/GHSA-jmvx-2wfw-xfgj/comments'
+  );
+  for (const action of [
+    '/git-utensils/Spoon-Knife/security/advisories/GHSA-jmvx-2wfw-xfgj/comments',
+    'https://github.com/git-utensils/Spoon-Knife/security/advisories/GHSA-jmvx-2wfw-xfgj/comments',
+    '/GIT-UTENSILS/spoon-knife/security/advisories/GHSA-JMVX-2WFW-XFGJ/comments',
+  ]) {
+    assert.strictEqual(write.actionMatchesRef(action, REF), true, action);
+  }
+  for (const action of [
+    '/someone/else/security/advisories/GHSA-jmvx-2wfw-xfgj/comments',
+    '/git-utensils/Spoon-Knife/security/advisories/GHSA-0000-0000-0000/comments',
+    'https://example.invalid/git-utensils/Spoon-Knife/security/advisories/GHSA-jmvx-2wfw-xfgj/comments',
+    'comments',
+    '',
+  ]) {
+    assert.strictEqual(write.actionMatchesRef(action, REF), false, action);
+  }
+});
+
+test('a comment form posting to another advisory is not written to', async () => {
+  const elsewhere = document(
+    '<!doctype html><html><body>' +
+      '<form action="/someone/else/security/advisories/GHSA-0000-0000-0000/comments">' +
+      '<input type="hidden" name="authenticity_token" value="t">' +
+      '<textarea name="body"></textarea></form></body></html>'
+  );
+  const fake = fakeFetch(200, WROTE);
+  const outcome = await write.createComment(options({ doc: elsewhere, fetch: fake.send }));
+  assert.ok(outcome.ok === false, 'the write went to a form naming another advisory');
+  assert.strictEqual(outcome.reason, 'mismatch');
+  assert.strictEqual(fake.calls.length, 0, 'a request went out');
+  assert.strictEqual(
+    outcome.message,
+    'Nothing was written: the comment form on this page posts somewhere other than' +
+      ' git-utensils/Spoon-Knife GHSA-jmvx-2wfw-xfgj.'
+  );
+});
+
+test('the caller is told the request is going out before the answer is awaited', async () => {
+  /** @type {string[]} */
+  const order = [];
+  const outcome = await write.createComment(
+    options({
+      beforeSend: () => order.push('held'),
+      fetch: async () => {
+        order.push('sent');
+        return { status: 200, text: async () => WROTE };
+      },
+    })
+  );
+  assert.strictEqual(outcome.ok, true);
+  assert.deepStrictEqual(order, ['held', 'sent']);
 });
 
 test('a write GitHub answered with the whole advisory page is confirmed', async () => {
@@ -163,7 +259,7 @@ test('a write GitHub answered with the whole advisory page is confirmed', async 
   );
   const fake = fakeFetch(200, answer);
   const outcome = await write.createComment(
-    options({ contains: 'Better GHSA tracking state', fetch: fake.send })
+    options({ contains: ['Better GHSA tracking state'], fetch: fake.send })
   );
   assert.strictEqual(outcome.ok, true);
   assert.strictEqual(outcome.status, 200);
@@ -172,7 +268,10 @@ test('a write GitHub answered with the whole advisory page is confirmed', async 
 test('a repository off the allowlist is refused before a request is built', async () => {
   const fake = fakeFetch(200, WROTE);
   const outcome = await write.createComment(
-    options({ nameWithOwner: 'someone/else', fetch: fake.send })
+    options({
+      ref: { owner: 'someone', repo: 'else', ghsaId: 'GHSA-0000-0000-0000' },
+      fetch: fake.send,
+    })
   );
   assert.strictEqual(outcome.ok, false);
   assert.strictEqual(outcome.reason, 'allowlist');
@@ -258,7 +357,7 @@ test('a write this extension could not confirm is not sent', async () => {
   const empty = await write.createComment(options({ body: '  ', fetch: fake.send }));
   assert.strictEqual(empty.ok, false);
   assert.strictEqual(empty.reason, 'unverifiable');
-  const blind = await write.createComment(options({ contains: '', fetch: fake.send }));
+  const blind = await write.createComment(options({ contains: [''], fetch: fake.send }));
   assert.strictEqual(blind.ok, false);
   assert.strictEqual(blind.reason, 'unverifiable');
   assert.strictEqual(fake.calls.length, 0);

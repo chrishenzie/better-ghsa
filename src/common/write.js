@@ -23,7 +23,8 @@ require('./allowlist.js');
  * @typedef {object} WriteResult
  * @property {boolean} ok
  * @property {string | null} reason One of `allowlist`, `unverifiable`,
- *   `no-form`, `status`, `unwritten`, `unreachable`, and null on success.
+ *   `no-form`, `mismatch`, `status`, `unwritten`, `unreachable`, and null on
+ *   success.
  * @property {number | null} status The response status, when there was one.
  * @property {string} message What happened, in the words the panel shows.
  */
@@ -149,19 +150,98 @@ function findCommentForm(root) {
 }
 
 /**
- * Whether `doc` holds `needle` as text. Both roots are read: a document parsed
- * from a fragment carries its content under the document element and leaves
- * the body empty.
+ * The path the create-comment form of one advisory posts to.
  *
- * @param {Document} doc
- * @param {string} needle
+ * @param {import('./parse-detail.js').AdvisoryRef} ref
+ * @returns {string}
+ */
+function commentPath(ref) {
+  return `/${ref.owner}/${ref.repo}/security/advisories/${ref.ghsaId}/comments`;
+}
+
+/**
+ * Whether a form action posts to the advisory the reference names. The
+ * allowlist gates on the reference read from the page, so the request target
+ * carries the same owner, repository, and advisory id, on `github.com`. An
+ * action this cannot resolve to that one path is refused.
+ *
+ * @param {string} action
+ * @param {import('./parse-detail.js').AdvisoryRef} ref
  * @returns {boolean}
  */
-function documentContains(doc, needle) {
-  const wanted = collapse(needle);
+function actionMatchesRef(action, ref) {
+  /** @type {URL} */
+  let url;
+  try {
+    url = new URL(action, 'https://github.com/');
+  } catch {
+    return false;
+  }
+  if (url.origin !== 'https://github.com') return false;
+  return url.pathname.replace(/\/+$/, '').toLowerCase() === commentPath(ref).toLowerCase();
+}
+
+/** Elements whose text a reader of the page never sees as comment content. */
+const NOT_RENDERED = [
+  'TEXTAREA',
+  'INPUT',
+  'SELECT',
+  'OPTION',
+  'BUTTON',
+  'TEMPLATE',
+  'SCRIPT',
+  'STYLE',
+];
+
+/** The elements GitHub renders a comment's markdown into. */
+const COMMENT_BODY = '.comment-body, .js-comment-body, .markdown-body';
+
+/**
+ * The text of `node` as a reader sees it: the content of a form field is the
+ * value of a control, not rendered comment content, and is left out.
+ *
+ * @param {Node} node
+ * @returns {string}
+ */
+function renderedText(node) {
+  if (node.nodeType === 3) return node.textContent ?? '';
+  if (node.nodeType !== 1) return '';
+  const element = /** @type {Element} */ (node);
+  if (NOT_RENDERED.includes(element.tagName)) return '';
+  let text = '';
+  for (const child of element.childNodes) text += renderedText(child);
+  return text;
+}
+
+/**
+ * Whether `doc` renders one comment holding every one of `needles`. Both roots
+ * are read: a document parsed from a fragment carries its content under the
+ * document element and leaves the body empty.
+ *
+ * A response that echoes a rejected body back into the comment box holds what
+ * was written as the value of a control, and an advisory whose own description
+ * quotes one of these strings holds it somewhere else on the page. One
+ * rendered comment carrying all of them is the write.
+ *
+ * @param {Document} doc
+ * @param {readonly string[]} needles
+ * @returns {boolean}
+ */
+function commentContains(doc, needles) {
+  const wanted = needles.map((needle) => collapse(needle)).filter((needle) => needle !== '');
+  if (wanted.length === 0) return false;
+
+  /** @type {Set<Element>} */
+  const bodies = new Set();
   for (const root of [doc.documentElement, doc.body]) {
     if (root === null) continue;
-    if (collapse(root.textContent).includes(wanted)) return true;
+    if (root.matches(COMMENT_BODY)) bodies.add(root);
+    for (const body of root.querySelectorAll(COMMENT_BODY)) bodies.add(body);
+  }
+
+  for (const body of bodies) {
+    const text = collapse(renderedText(body));
+    if (wanted.every((needle) => text.includes(needle))) return true;
   }
   return false;
 }
@@ -169,12 +249,15 @@ function documentContains(doc, needle) {
 /**
  * @typedef {object} CreateCommentOptions
  * @property {Document} doc The page carrying the form the write clones.
- * @property {string} nameWithOwner The repository, as `owner/repo`.
+ * @property {import('./parse-detail.js').AdvisoryRef} ref The advisory the
+ *   comment goes on, read from that page.
  * @property {string} body The comment's markdown.
- * @property {string} contains Text the response must hold for the write to
- *   count as done.
+ * @property {readonly string[]} contains Text the response must render in one
+ *   comment for the write to count as done.
  * @property {WriteFetch} [fetch]
  * @property {(html: string) => Document} [parseDocument]
+ * @property {() => void} [beforeSend] Called once the request is built and
+ *   before it goes out, so the caller holds the advisory for the flight.
  */
 
 /**
@@ -200,7 +283,8 @@ function result(ok, reason, status, message) {
  * @returns {Promise<WriteResult>}
  */
 async function createComment(options) {
-  const { doc, nameWithOwner, body, contains } = options;
+  const { doc, ref, body, contains } = options;
+  const nameWithOwner = `${ref.owner}/${ref.repo}`;
 
   if (!globalThis.bghsa.allowlist.isAllowed(nameWithOwner)) {
     return result(
@@ -213,7 +297,7 @@ async function createComment(options) {
   if (collapse(body) === '') {
     return result(false, 'unverifiable', null, 'Nothing was written: the comment is empty.');
   }
-  if (collapse(contains) === '') {
+  if (contains.every((needle) => collapse(needle) === '')) {
     return result(
       false,
       'unverifiable',
@@ -232,6 +316,15 @@ async function createComment(options) {
     );
   }
   const action = form.getAttribute('action') ?? '';
+  if (!actionMatchesRef(action, ref)) {
+    return result(
+      false,
+      'mismatch',
+      null,
+      'Nothing was written: the comment form on this page posts somewhere other than' +
+        ` ${nameWithOwner} ${ref.ghsaId}.`
+    );
+  }
 
   const params = cloneForm(form);
   params.set('body', body);
@@ -243,6 +336,7 @@ async function createComment(options) {
   const send = options.fetch ?? /** @type {WriteFetch} */ (globalThis.fetch.bind(globalThis));
   /** @type {WriteResponse} */
   let response;
+  if (options.beforeSend !== undefined) options.beforeSend();
   try {
     response = await send(action, {
       method: 'POST',
@@ -265,7 +359,7 @@ async function createComment(options) {
     ((html) => new DOMParser().parseFromString(html, 'text/html'));
   let written = false;
   try {
-    written = documentContains(toDocument(await response.text()), contains);
+    written = commentContains(toDocument(await response.text()), contains);
   } catch (error) {
     return result(false, 'unwritten', status, `The write could not be confirmed: ${String(error)}`);
   }
@@ -284,7 +378,10 @@ globalThis.bghsa.write = {
   formEntries,
   cloneForm,
   findCommentForm,
-  documentContains,
+  commentPath,
+  actionMatchesRef,
+  renderedText,
+  commentContains,
   createComment,
 };
 

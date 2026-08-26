@@ -310,27 +310,61 @@ test('advisory content swapped in after load gets a panel with no reload', () =>
   assert.strictEqual(panel.outOfPlace(triageDoc), false);
 });
 
+/** The advisory the fixtures come from, which is on the allowlist. */
+const DETAIL = '/git-utensils/Spoon-Knife/security/advisories/GHSA-jmvx-2wfw-xfgj';
+
+/** An advisory detail page holding what a write reads from one. */
+const ADVISORY_PAGE = [
+  '<!doctype html><html><body>',
+  '<div class="gh-header-meta"><span class="State">Triage</span>',
+  '<span class="Label--large" title="Severity: High">High</span>',
+  '<span class="user-select-contain">GHSA-jmvx-2wfw-xfgj</span></div>',
+  `<div class="js-socket-channel js-updatable-content" data-url="${DETAIL}/repository_advisory/body">`,
+  '<div class="Box"><div class="js-repository-advisory-details">',
+  '<div class="Box-header timeline-comment-header">',
+  '<a class="author" href="/prakleumas">prakleumas</a>',
+  '<span class="js-comment-edit-history"></span></div>',
+  '<form><input name="repository_advisory[title]" value="Path traversal in the drawer handler">',
+  '<textarea name="repository_advisory[description]">The handler joins a path.</textarea>',
+  '</form></div></div></div>',
+  `<form class="js-advisory-comment-form" action="${DETAIL}/comments">`,
+  '<input type="hidden" name="authenticity_token" value="a-token">',
+  '<textarea name="body"></textarea>',
+  '<button type="submit" name="comment" value="1" disabled>Comment</button>',
+  '</form></body></html>',
+].join('\n');
+
+/** A response holding the comment the write claims to have made. */
+const WROTE =
+  '<!doctype html><html><body><div class="comment-body markdown-body js-comment-body"><details>' +
+  `<summary>${preserve.PRESERVE_SUMMARY}</summary><p>${preserve.TITLE_NOTE}</p>` +
+  `<p>${preserve.ORIGINAL_NOTE}</p></details></div></body></html>`;
+
 /**
- * @param {number} status
- * @param {string} body
- * @returns {{ send: import('../src/common/write.js').WriteFetch, calls: Array<{ url: string, init: RequestInit }> }}
+ * A stand-in for `fetch` answering the advisory page with `page` and the write
+ * with `body`.
+ *
+ * @param {number} status The status the write is answered with.
+ * @param {string} body The markup the write is answered with.
+ * @param {string} [page] The markup the advisory page is answered with.
+ * @returns {{ send: import('../src/common/write.js').WriteFetch, calls: Array<{ url: string, init: RequestInit }>, posts: () => Array<{ url: string, init: RequestInit }> }}
  */
-function fakeFetch(status, body) {
+function fakeFetch(status, body, page) {
   /** @type {Array<{ url: string, init: RequestInit }>} */
   const calls = [];
   return {
     calls,
+    posts: () => calls.filter((call) => call.init.method === 'POST'),
     send: async (url, init) => {
       calls.push({ url, init });
+      if (init.method === 'GET') {
+        const answer = page ?? ADVISORY_PAGE;
+        return { status: 200, text: async () => answer };
+      }
       return { status, text: async () => body };
     },
   };
 }
-
-/** A response holding the comment the write claims to have made. */
-const WROTE =
-  '<!doctype html><html><body><div class="comment-body"><details>' +
-  '<summary>Original report preserved by Better GHSA</summary></details></div></body></html>';
 
 /**
  * @param {string} markup
@@ -404,7 +438,6 @@ test('a press that could not tell the provenance writes nothing and says why', a
   const button = preserveButton(built);
   const fake = fakeFetch(200, WROTE);
   const outcome = await panel.press(blank, { ...triage, descriptionOriginal: null }, button, {
-    doc: triageDoc,
     fetch: fake.send,
     parseDocument: asDocument,
   });
@@ -424,13 +457,12 @@ test('a press that wrote the comment takes the button away and says so', async (
   const button = preserveButton(built);
   const fake = fakeFetch(200, WROTE);
   const outcome = await panel.press(blank, triage, button, {
-    doc: triageDoc,
     fetch: fake.send,
     parseDocument: asDocument,
   });
 
   assert.strictEqual(outcome.ok, true);
-  assert.strictEqual(fake.calls.length, 1);
+  assert.strictEqual(fake.posts().length, 1);
   assert.strictEqual(built.querySelector('button.bghsa-preserve'), null);
   assert.strictEqual(rowText(built, 'Original report'), 'The original report is preserved.');
   assert.deepStrictEqual(texts(built, '.bghsa-preserve-result'), []);
@@ -442,7 +474,6 @@ test('a press whose result GitHub did not confirm leaves the button pressed', as
   const button = preserveButton(built);
   const fake = fakeFetch(200, '<!doctype html><html><body>nothing</body></html>');
   const outcome = await panel.press(blank, triage, button, {
-    doc: triageDoc,
     fetch: fake.send,
     parseDocument: asDocument,
   });
@@ -461,7 +492,6 @@ test('a panel rebuilt after a press that wrote offers no button', async () => {
   const built = build(triage);
   const fake = fakeFetch(200, WROTE);
   const outcome = await panel.press(blank, triage, preserveButton(built), {
-    doc: triageDoc,
     fetch: fake.send,
     parseDocument: asDocument,
   });
@@ -473,3 +503,72 @@ test('a panel rebuilt after a press that wrote offers no button', async () => {
   preserve.attempts.clear();
 });
 
+test('a failed press leaves one result, not one per press', async () => {
+  preserve.attempts.clear();
+  const built = build(elsewhere);
+  const button = preserveButton(built);
+  for (const round of [1, 2, 3]) {
+    const outcome = await panel.press(blank, elsewhere, button, {
+      fetch: fakeFetch(200, WROTE).send,
+      parseDocument: asDocument,
+    });
+    assert.strictEqual(outcome.reason, 'allowlist', `round ${round}`);
+    assert.strictEqual(
+      built.querySelectorAll('.bghsa-preserve-result').length,
+      1,
+      `round ${round} left more than one result`
+    );
+  }
+  assert.deepStrictEqual(texts(built, '.bghsa-preserve-result'), [
+    "Nothing was written: someone/else is not on this extension's allowlist.",
+  ]);
+});
+
+test('a press that read the comment already on the advisory takes the button away', async () => {
+  preserve.attempts.clear();
+  const preservedPage = ADVISORY_PAGE.replace(
+    '<form class="js-advisory-comment-form"',
+    '<div class="timeline-comment-group" id="advisory-comment-42">' +
+      '<div class="comment-body markdown-body js-comment-body">' +
+      `${preserve.PRESERVE_SUMMARY}</div></div>` +
+      '<form class="js-advisory-comment-form"'
+  );
+  const built = build(triage);
+  const button = preserveButton(built);
+  const fake = fakeFetch(200, WROTE, preservedPage);
+  const outcome = await panel.press(blank, triage, button, {
+    fetch: fake.send,
+    parseDocument: asDocument,
+  });
+
+  assert.strictEqual(outcome.ok, false);
+  assert.strictEqual(outcome.reason, 'preserved');
+  assert.strictEqual(fake.posts().length, 0);
+  assert.strictEqual(built.querySelector('button.bghsa-preserve'), null);
+  assert.deepStrictEqual(texts(built, '.bghsa-preserve-result'), []);
+  assert.strictEqual(rowText(built, 'Original report'), 'The original report is already preserved.');
+  preserve.attempts.clear();
+});
+
+test('a press that could not read the advisory page can be pressed again', async () => {
+  preserve.attempts.clear();
+  const built = build(triage);
+  const button = preserveButton(built);
+  /** @type {Array<{ url: string, init: RequestInit }>} */
+  const calls = [];
+  const outcome = await panel.press(blank, triage, button, {
+    fetch: async (url, init) => {
+      calls.push({ url, init });
+      return { status: 503, text: async () => '' };
+    },
+    parseDocument: asDocument,
+  });
+
+  assert.strictEqual(outcome.reason, 'fetch');
+  assert.strictEqual(calls.length, 1);
+  assert.strictEqual(button.hasAttribute('disabled'), false);
+  assert.deepStrictEqual(texts(built, '.bghsa-preserve-result'), [
+    'Nothing was written: GitHub answered 503 for the advisory page.',
+  ]);
+  preserve.attempts.clear();
+});
