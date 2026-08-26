@@ -9,6 +9,7 @@ const { parseHTML } = require('linkedom');
 const parse = require('../src/common/parse-detail.js');
 const derive = require('../src/common/derive.js');
 const panel = require('../src/detail/panel.js');
+const preserve = require('../src/detail/preserve.js');
 
 /**
  * @param {string} name
@@ -308,3 +309,167 @@ test('advisory content swapped in after load gets a panel with no reload', () =>
   );
   assert.strictEqual(panel.outOfPlace(triageDoc), false);
 });
+
+/**
+ * @param {number} status
+ * @param {string} body
+ * @returns {{ send: import('../src/common/write.js').WriteFetch, calls: Array<{ url: string, init: RequestInit }> }}
+ */
+function fakeFetch(status, body) {
+  /** @type {Array<{ url: string, init: RequestInit }>} */
+  const calls = [];
+  return {
+    calls,
+    send: async (url, init) => {
+      calls.push({ url, init });
+      return { status, text: async () => body };
+    },
+  };
+}
+
+/** A response holding the comment the write claims to have made. */
+const WROTE =
+  '<!doctype html><html><body><div class="comment-body"><details>' +
+  '<summary>Original report preserved by Better GHSA</summary></details></div></body></html>';
+
+/**
+ * @param {string} markup
+ * @returns {Document}
+ */
+function asDocument(markup) {
+  return /** @type {Document} */ (/** @type {unknown} */ (parseHTML(markup).document));
+}
+
+/** An advisory in a repository writes are not permitted on. */
+const elsewhere = {
+  ...triage,
+  ref: { owner: 'someone', repo: 'else', ghsaId: 'GHSA-0000-0000-0000' },
+};
+
+/** The advisory as it stands once the preservation comment is on it. */
+const preserved = {
+  ...triage,
+  comments: [
+    {
+      ...(/** @type {import('../src/common/parse-detail.js').ParsedComment} */ (
+        triage.comments[0]
+      )),
+      text: 'Original report preserved by Better GHSA Title Path traversal',
+    },
+  ],
+};
+
+/**
+ * @param {Element} root
+ * @returns {Element} the preservation button in a panel.
+ */
+function preserveButton(root) {
+  const button = root.querySelector('button.bghsa-preserve');
+  if (button === null) throw new Error('the panel offers no preservation button');
+  return button;
+}
+
+/**
+ * @returns {Promise<void>} resolves once the click handler has run to the end.
+ */
+function settle() {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+test('an advisory that already carries the comment is offered no button', () => {
+  const built = build(preserved);
+  assert.strictEqual(built.querySelector('button.bghsa-preserve'), null);
+  assert.strictEqual(rowText(built, 'Original report'), 'The original report is already preserved.');
+});
+
+test('the button on a repository off the allowlist writes nothing and says why', async () => {
+  preserve.attempts.clear();
+  const built = build(elsewhere);
+  const button = /** @type {HTMLElement} */ (
+    /** @type {unknown} */ (preserveButton(built))
+  );
+  button.click();
+  await settle();
+
+  assert.deepStrictEqual(texts(built, '.bghsa-preserve-result'), [
+    "Nothing was written: someone/else is not on this extension's allowlist.",
+  ]);
+  assert.strictEqual(button.hasAttribute('disabled'), false);
+  assert.ok(built.contains(button), 'the button was taken out of the panel');
+});
+
+test('a press that could not tell the provenance writes nothing and says why', async () => {
+  preserve.attempts.clear();
+  const built = build({ ...triage, descriptionOriginal: null });
+  const button = preserveButton(built);
+  const fake = fakeFetch(200, WROTE);
+  const outcome = await panel.press(blank, { ...triage, descriptionOriginal: null }, button, {
+    doc: triageDoc,
+    fetch: fake.send,
+    parseDocument: asDocument,
+  });
+
+  assert.strictEqual(outcome.ok, false);
+  assert.strictEqual(outcome.reason, 'provenance');
+  assert.strictEqual(fake.calls.length, 0);
+  assert.deepStrictEqual(texts(built, '.bghsa-preserve-result'), [
+    "Nothing was written: this extension could not tell whether the description is the reporter's original text.",
+  ]);
+  assert.strictEqual(button.hasAttribute('disabled'), false);
+});
+
+test('a press that wrote the comment takes the button away and says so', async () => {
+  preserve.attempts.clear();
+  const built = build(triage);
+  const button = preserveButton(built);
+  const fake = fakeFetch(200, WROTE);
+  const outcome = await panel.press(blank, triage, button, {
+    doc: triageDoc,
+    fetch: fake.send,
+    parseDocument: asDocument,
+  });
+
+  assert.strictEqual(outcome.ok, true);
+  assert.strictEqual(fake.calls.length, 1);
+  assert.strictEqual(built.querySelector('button.bghsa-preserve'), null);
+  assert.strictEqual(rowText(built, 'Original report'), 'The original report is preserved.');
+  assert.deepStrictEqual(texts(built, '.bghsa-preserve-result'), []);
+});
+
+test('a press whose result GitHub did not confirm leaves the button pressed', async () => {
+  preserve.attempts.clear();
+  const built = build(triage);
+  const button = preserveButton(built);
+  const fake = fakeFetch(200, '<!doctype html><html><body>nothing</body></html>');
+  const outcome = await panel.press(blank, triage, button, {
+    doc: triageDoc,
+    fetch: fake.send,
+    parseDocument: asDocument,
+  });
+
+  assert.strictEqual(outcome.ok, false);
+  assert.strictEqual(outcome.reason, 'unwritten');
+  assert.strictEqual(button.hasAttribute('disabled'), true);
+  assert.deepStrictEqual(texts(built, '.bghsa-preserve-result'), [
+    'The write could not be confirmed: GitHub answered without the comment.' +
+      ' Reload the page to see whether the comment was created.',
+  ]);
+});
+
+test('a panel rebuilt after a press that wrote offers no button', async () => {
+  preserve.attempts.clear();
+  const built = build(triage);
+  const fake = fakeFetch(200, WROTE);
+  const outcome = await panel.press(blank, triage, preserveButton(built), {
+    doc: triageDoc,
+    fetch: fake.send,
+    parseDocument: asDocument,
+  });
+  assert.strictEqual(outcome.ok, true);
+
+  const again = build(triage);
+  assert.strictEqual(again.querySelector('button.bghsa-preserve'), null);
+  assert.strictEqual(rowText(again, 'Original report'), 'The original report is preserved.');
+  preserve.attempts.clear();
+});
+

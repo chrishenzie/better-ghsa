@@ -10,6 +10,8 @@ interface BghsaNamespace {
   trust: typeof import('../src/common/trust.js');
   parseDetail: typeof import('../src/common/parse-detail.js');
   derive: typeof import('../src/common/derive.js');
+  write: typeof import('../src/common/write.js');
+  preserve: typeof import('../src/detail/preserve.js');
   panel: typeof import('../src/detail/panel.js');
   content: typeof import('../src/content.js');
 }

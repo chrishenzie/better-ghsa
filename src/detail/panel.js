@@ -8,6 +8,7 @@ if (typeof require === 'function') {
   require('../common/trust.js');
   require('../common/parse-detail.js');
   require('../common/derive.js');
+  require('./preserve.js');
 }
 
 /** The id of the sentinel element the extension owns. */
@@ -141,9 +142,85 @@ function buildChips(doc, advisory, derived) {
 }
 
 /**
+ * The reasons a press left the advisory as it was, and so can be pressed again
+ * safely. Every other outcome may have created the comment, and pressing again
+ * would create a second one.
+ *
+ * @type {readonly string[]}
+ */
+const RETRYABLE = ['allowlist', 'provenance', 'unreadable', 'unverifiable', 'no-form'];
+
+/**
+ * Runs the write the button asks for and reports what happened. The button
+ * stays disabled once a press has reached GitHub, because a press whose result
+ * the extension could not confirm may still have created the comment.
+ *
+ * @param {Document} doc
+ * @param {import('../common/parse-detail.js').ParsedDetail} advisory
+ * @param {Element} button
+ * @param {import('./preserve.js').PreserveOptions} [options]
+ * @returns {Promise<import('../common/write.js').WriteResult>}
+ */
+async function press(doc, advisory, button, options) {
+  const note = button.parentElement?.querySelector('.bghsa-preserve-note') ?? null;
+  button.setAttribute('disabled', '');
+  button.setAttribute('aria-disabled', 'true');
+  if (note !== null) note.textContent = 'Writing the comment.';
+
+  const outcome = await globalThis.bghsa.preserve.preserve(advisory, { doc, ...options });
+
+  if (outcome.ok) {
+    button.remove();
+    if (note !== null) note.textContent = 'The original report is preserved.';
+    return outcome;
+  }
+  if (note !== null) note.textContent = '';
+  const retryable = outcome.reason !== null && RETRYABLE.includes(outcome.reason);
+  const banner = warning(
+    doc,
+    retryable
+      ? outcome.message
+      : `${outcome.message} Reload the page to see whether the comment was created.`
+  );
+  banner.classList.add('bghsa-preserve-result');
+  button.parentElement?.append(banner);
+  if (retryable) {
+    button.removeAttribute('disabled');
+    button.removeAttribute('aria-disabled');
+  }
+  return outcome;
+}
+
+/**
+ * The row the preservation button lives in. An advisory that already carries
+ * the comment gets no button, because the extension writes one per advisory.
+ *
+ * @param {Document} doc
+ * @param {import('../common/parse-detail.js').ParsedDetail} advisory
+ * @returns {Element}
+ */
+function buildPreserve(doc, advisory) {
+  const state = globalThis.bghsa.preserve.offered(advisory);
+  const built = row(doc, 'Original report');
+  if (!state.available) {
+    built.body.textContent = state.message;
+    return built.row;
+  }
+  const button = element(doc, 'button', 'btn btn-sm bghsa-preserve', 'Preserve original report');
+  button.setAttribute('type', 'button');
+  built.body.append(button);
+  built.body.append(element(doc, 'span', 'ml-2 bghsa-preserve-note', state.message));
+  button.addEventListener('click', () => {
+    void press(doc, advisory, button);
+  });
+  return built.row;
+}
+
+/**
  * The panel, built from a parsed advisory and its derived state. It reads
  * nothing from the document beyond the document itself, which creates the
- * nodes.
+ * nodes and, once the preservation button is pressed, carries the comment form
+ * the write clones.
  *
  * @param {Document} doc
  * @param {import('../common/parse-detail.js').ParsedDetail} advisory
@@ -182,6 +259,7 @@ function buildPanel(doc, advisory, derived) {
       : 'Edited since it was reported.';
   }
   panel.append(descriptionRow.row);
+  panel.append(buildPreserve(doc, advisory));
 
   return panel;
 }
@@ -317,6 +395,8 @@ globalThis.bghsa.panel = {
   STYLE_ID,
   MISSING,
   missingValues,
+  buildPreserve,
+  press,
   buildPanel,
   anchor,
   outOfPlace,

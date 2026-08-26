@@ -205,6 +205,11 @@ holding the advisory's current title and description inside a collapsed
 comment back, and offers the button only where no such comment exists on that
 advisory.
 
+A description carrying its own `<details>` blocks keeps them, and they render
+nested inside the enclosing one. A closing `</details>` with no matching opener
+is removed, because it would end the enclosing block early and spill the rest
+of the report into the thread.
+
 A description that has never been revised is the reporter's original text, and
 the comment records it as such. Otherwise the comment records the description as
 it stood when the button was pressed. The comment records the title as the text
@@ -219,9 +224,13 @@ Advisories a maintainer files are treated the same as any other.
 ## 8. Advisory detail page
 
 The extension adds a panel that displays derived state, displays and edits
-stored state, and warns on unconfirmed scoring, on confirmation drift, and on
-snapshots from untrusted authors. It offers the button that preserves the
-original report.
+stored state, and warns on unconfirmed scoring and on confirmation drift. It
+offers the button that preserves the original report.
+
+The panel shows what a maintainer has to act on. It does not restate what the
+advisory page already carries, and it does not list the snapshots it read. A
+snapshot from an untrusted author is marked on that comment in the thread,
+where section 4's author role labels already are.
 
 The extension writes nothing to GitHub beyond its two comment types. It does
 not change `summary`, `description`, severity, advisory state, or any other
