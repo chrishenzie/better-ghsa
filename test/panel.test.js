@@ -14,6 +14,10 @@ const dom = require('../src/common/dom.js');
 const panel = require('../src/detail/panel.js');
 const tracking = require('../src/detail/tracking.js');
 const preserve = require('../src/detail/preserve.js');
+const members = require('../src/common/members.js');
+const branches = require('../src/common/branches.js');
+
+const { fakeStorage } = require('../test-support/storage.js');
 
 /**
  * @param {string} name
@@ -743,6 +747,64 @@ test('a pass reads the document alone, and a request during one folds into one m
     assert.strictEqual(chipCount(), 1);
   } finally {
     globalThis.bghsa.tracking.fingerprints = fingerprints;
+  }
+});
+
+/**
+ * @param {Document} doc
+ * @param {string} name The class stem of the control to read.
+ * @returns {string[]} the values that control offers in the panel the document
+ *   carries.
+ */
+function offered(doc, name) {
+  const placed = doc.getElementById(panel.PANEL_ID);
+  if (placed === null) return [];
+  return Array.from(placed.querySelectorAll(`datalist.bghsa-${name}-candidates option`)).map(
+    (option) => String(option.getAttribute('value') ?? '')
+  );
+}
+
+test('a member storage holds and this page does not reaches the panel', async () => {
+  reset(triageDoc);
+  members.clear();
+  members.setStorage(fakeStorage({ [members.MEMBERS_KEY]: ['dmcgowan'] }));
+  try {
+    const drawn = await panel.render(triageDoc);
+    assert.ok(drawn !== null, 'the triage fixture offered no anchor');
+    await until(() => offered(triageDoc, 'owner').includes('dmcgowan'));
+    assert.strictEqual(
+      offered(triageDoc, 'owner').join(' '),
+      'samuelkarp dmcgowan',
+      'the stored login is not offered as an owner'
+    );
+    assert.strictEqual(triageDoc.querySelectorAll(`#${panel.PANEL_ID}`).length, 1);
+  } finally {
+    members.setStorage(null);
+    members.clear();
+    reset(triageDoc);
+  }
+});
+
+test('a branch storage holds and this page does not reaches the panel', async () => {
+  reset(triageDoc);
+  branches.clear();
+  const key = branches.keyOf({ owner: 'git-utensils', repo: 'Spoon-Knife' });
+  assert.ok(key !== null, 'the repository has no branch key');
+  branches.setStorage(fakeStorage({ [branches.BRANCHES_KEY]: { [key]: ['release/2.10'] } }));
+  try {
+    const drawn = await panel.render(triageDoc);
+    assert.ok(drawn !== null, 'the triage fixture offered no anchor');
+    await until(() => offered(triageDoc, 'backport').includes('release/2.10'));
+    assert.strictEqual(
+      offered(triageDoc, 'backport').join(' '),
+      'release/2.10 release/1.0',
+      'the stored branch is not offered as a backport target'
+    );
+    assert.strictEqual(triageDoc.querySelectorAll(`#${panel.PANEL_ID}`).length, 1);
+  } finally {
+    branches.setStorage(null);
+    branches.clear();
+    reset(triageDoc);
   }
 });
 

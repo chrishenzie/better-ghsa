@@ -11,6 +11,7 @@ if (typeof require === 'function') {
   require('../common/parse-detail.js');
   require('../common/derive.js');
   require('../common/members.js');
+  require('../common/branches.js');
   require('./tracking.js');
   require('./state.js');
 }
@@ -70,6 +71,7 @@ const SUPERSEDE_LABEL =
  * @typedef {object} Pending
  * @property {string | null} [triage]
  * @property {string[]} [owners]
+ * @property {string[]} [backports]
  * @property {boolean} [embargo]
  * @property {string | null} [embargoLift]
  * @property {string | null} [closureReason]
@@ -138,6 +140,13 @@ const opened = new Set();
 const drafts = new Map();
 
 /**
+ * The half-typed backport branches, held as {@link drafts} holds a login.
+ *
+ * @type {Map<string, string>}
+ */
+const branchDrafts = new Map();
+
+/**
  * The advisories a save from this panel is on its way to GitHub for. A pass
  * during the flight builds the controls again, and this is what the pass reads
  * to build them held still: a value staged against a request already out is a
@@ -194,15 +203,24 @@ function discard(key) {
   edits.delete(key);
   results.delete(key);
   drafts.delete(key);
+  branchDrafts.delete(key);
 }
 
 /**
+ * Owners and backport targets are sets: REQUIREMENTS.md section 6 has owners be
+ * org members and backports be release branches, and neither carries an order
+ * that means anything. A value taken off and put back leaves the same set in a
+ * different order, and that is not a change.
+ *
  * @param {string[]} left
  * @param {string[]} right
- * @returns {boolean} whether both name the same logins in the same order.
+ * @returns {boolean} whether both name the same values.
  */
-function sameLogins(left, right) {
-  return left.length === right.length && left.every((login, index) => login === right[index]);
+function sameList(left, right) {
+  if (left.length !== right.length) return false;
+  const one = [...left].sort();
+  const two = [...right].sort();
+  return one.every((value, index) => value === two[index]);
 }
 
 /**
@@ -233,8 +251,11 @@ function staged(tracking, pending) {
   if (pending.triage !== undefined && pending.triage !== tracking.triage) {
     kept.triage = pending.triage;
   }
-  if (pending.owners !== undefined && !sameLogins(pending.owners, tracking.owners)) {
+  if (pending.owners !== undefined && !sameList(pending.owners, tracking.owners)) {
     kept.owners = pending.owners;
+  }
+  if (pending.backports !== undefined && !sameList(pending.backports, tracking.backports)) {
+    kept.backports = pending.backports;
   }
   if (pending.embargo !== undefined && pending.embargo !== tracking.embargo) {
     kept.embargo = pending.embargo;
@@ -412,6 +433,7 @@ function changedTracks(tracking, fingerprints, pending) {
   const names = [];
   if (diff.triage !== undefined) names.push('triage');
   if (diff.owners !== undefined) names.push('owners');
+  if (diff.backports !== undefined) names.push('backport targets');
   if (diff.embargo !== undefined || diff.embargoLift !== undefined) names.push('embargo');
   if (diff.closureReason !== undefined || diff.closureDuplicateOf !== undefined) {
     names.push('closure reason');
@@ -468,9 +490,16 @@ function release(key, captured) {
   if (
     captured.owners !== undefined &&
     kept.owners !== undefined &&
-    sameLogins(kept.owners, captured.owners)
+    sameList(kept.owners, captured.owners)
   ) {
     delete kept.owners;
+  }
+  if (
+    captured.backports !== undefined &&
+    kept.backports !== undefined &&
+    sameList(kept.backports, captured.backports)
+  ) {
+    delete kept.backports;
   }
   if (captured.embargo !== undefined && kept.embargo === captured.embargo) delete kept.embargo;
   if (captured.embargoLift !== undefined && kept.embargoLift === captured.embargoLift) {
@@ -526,6 +555,7 @@ function optional(key, value, stored) {
 const PENDING_FIELDS = [
   'triage',
   'owners',
+  'backports',
   'embargo',
   'embargoLift',
   'closureReason',
@@ -638,6 +668,9 @@ function changesOf(tracking, fingerprints, pending, envelope) {
 
   if (diff.triage !== undefined) changes['triage'] = diff.triage;
   if (diff.owners !== undefined) changes['owners'] = diff.owners.length === 0 ? null : diff.owners;
+  if (diff.backports !== undefined) {
+    changes['backports'] = diff.backports.length === 0 ? null : diff.backports;
+  }
 
   if (diff.embargo !== undefined || diff.embargoLift !== undefined) {
     const embargo = pick(pending.embargo, tracking.embargo);
@@ -1128,75 +1161,124 @@ function triageField(doc, context, key, update) {
 }
 
 /**
- * @param {Document} doc
+ * The branches the panel offers as backport targets: the release branches this
+ * extension has seen on this repository, together with the ones this advisory
+ * already carries, ordered by version descending. Version order puts
+ * `release/2.10` before `release/2.9`; string order puts it after.
+ *
+ * A typed branch is accepted whether or not it is offered here, so a
+ * repository whose branches this extension has never read still has a usable
+ * control.
+ *
  * @param {EditorContext} context
+ * @returns {string[]}
+ */
+function backportCandidates(context) {
+  const branches = globalThis.bghsa.branches;
+  const held = context.tracking.backports.filter((branch) => branches.isRelease(branch));
+  return branches.order([...new Set([...branches.known(context.advisory.ref), ...held])]);
+}
+
+/**
+ * One list of values a maintainer adds to and removes from: a chip per value
+ * carrying a Remove button, a text field with the candidates behind it, and an
+ * Add button. Owners and backport targets are one control over two sets of
+ * values.
+ *
+ * @typedef {object} ChipList
+ * @property {string} label The row's label.
+ * @property {string} name The stem of the `bghsa-` class every part carries.
+ * @property {string} noun What one value is, as the Remove button names it.
+ * @property {string} placeholder
+ * @property {string[]} candidates The values offered behind the text field, in
+ *   the order they are offered.
+ * @property {(value: string) => string} fold Two values folding alike are one
+ *   value. A login names one account whatever its case; a git branch name is
+ *   case-sensitive and names one branch only as it is spelled.
+ * @property {string | null} unknown What a value outside the candidates is
+ *   marked with, and null where a value outside them is unremarkable.
+ * @property {Map<string, string>} drafts Where the half-typed value lives
+ *   between passes.
+ * @property {() => string[]} held What the control holds now.
+ * @property {(values: string[]) => void} put Records what it holds.
+ */
+
+/**
+ * @param {Document} doc
  * @param {string} key
  * @param {() => void} update
+ * @param {ChipList} list
  * @returns {Element}
  */
-function ownersField(doc, context, key, update) {
-  const { field, body } = fieldRow(doc, 'Owners');
-  const candidates = ownerCandidates(context);
-  const list = element(doc, 'div', 'd-flex flex-wrap flex-items-center bghsa-owner-list');
-  body.append(list);
+function chipListField(doc, key, update, list) {
+  const { field, body } = fieldRow(doc, list.label);
+  const chips = element(doc, 'div', `d-flex flex-wrap flex-items-center bghsa-${list.name}-list`);
+  body.append(chips);
 
-  /** @returns {string[]} */
-  const owners = () => pick(editsFor(key).owners, context.tracking.owners);
+  /** @param {string} value @returns {boolean} whether the candidates offer it. */
+  const offered = (value) =>
+    list.candidates.some((candidate) => list.fold(candidate) === list.fold(value));
 
   const draw = () => {
-    list.textContent = '';
-    for (const login of owners()) {
-      const held = element(doc, 'span', 'd-inline-flex flex-items-center mr-2 bghsa-owner');
-      held.append(element(doc, 'span', 'Label Label--secondary', login));
-      if (!candidates.some((known) => known.toLowerCase() === login.toLowerCase())) {
-        held.append(
+    chips.textContent = '';
+    for (const value of list.held()) {
+      const chip = element(doc, 'span', `d-inline-flex flex-items-center mr-2 bghsa-${list.name}`);
+      chip.append(element(doc, 'span', 'Label Label--secondary', value));
+      if (list.unknown !== null && !offered(value)) {
+        chip.append(
           element(
             doc,
             'span',
-            'Label Label--secondary ml-1 bghsa-tone-attention bghsa-owner-unknown',
-            'not a known member'
+            `Label Label--secondary ml-1 bghsa-tone-attention bghsa-${list.name}-unknown`,
+            list.unknown
           )
         );
       }
-      const remove = element(doc, 'button', 'btn-link ml-1 bghsa-owner-remove', 'Remove');
+      const remove = element(doc, 'button', `btn-link ml-1 bghsa-${list.name}-remove`, 'Remove');
       remove.setAttribute('type', 'button');
-      remove.setAttribute('aria-label', `Remove ${login} as an owner`);
+      remove.setAttribute('aria-label', `Remove ${value} as ${list.noun}`);
       remove.addEventListener('click', () => {
-        stage(key, { owners: owners().filter((name) => name !== login) });
+        list.put(list.held().filter((one) => one !== value));
         draw();
         update();
       });
-      held.append(remove);
-      list.append(held);
+      chip.append(remove);
+      chips.append(chip);
     }
   };
   draw();
 
-  const typed = textControl(doc, 'bghsa-owner-input', 'text', drafts.get(key) ?? null, 'login');
+  const typed = textControl(
+    doc,
+    `bghsa-${list.name}-input`,
+    'text',
+    list.drafts.get(key) ?? null,
+    list.placeholder
+  );
   onValue(typed, () => {
-    const held = valueOf(typed);
-    if (held === '') drafts.delete(key);
-    else drafts.set(key, held);
+    const value = valueOf(typed);
+    if (value === '') list.drafts.delete(key);
+    else list.drafts.set(key, value);
   });
-  const candidateList = element(doc, 'datalist', 'bghsa-owner-candidates');
-  candidateList.id = `bghsa-owner-candidates-${key.replace(/[^a-z0-9-]/g, '-')}`;
+  const candidateList = element(doc, 'datalist', `bghsa-${list.name}-candidates`);
+  candidateList.id = `bghsa-${list.name}-candidates-${key.replace(/[^a-z0-9-]/g, '-')}`;
   typed.setAttribute('list', candidateList.id);
-  for (const login of candidates) {
+  for (const value of list.candidates) {
     const option = element(doc, 'option', '');
-    option.setAttribute('value', login);
+    option.setAttribute('value', value);
     candidateList.append(option);
   }
-  const add = element(doc, 'button', 'btn btn-sm ml-2 bghsa-owner-add', 'Add');
+  const add = element(doc, 'button', `btn btn-sm ml-2 bghsa-${list.name}-add`, 'Add');
   add.setAttribute('type', 'button');
   add.addEventListener('click', () => {
-    const login = orNull(valueOf(typed));
-    if (login === null) return;
-    if (!owners().some((name) => name.toLowerCase() === login.toLowerCase())) {
-      stage(key, { owners: [...owners(), login] });
+    const value = orNull(valueOf(typed));
+    if (value === null) return;
+    if (!list.held().some((one) => list.fold(one) === list.fold(value))) {
+      list.put([...list.held(), value]);
     }
     typed.setAttribute('value', '');
     /** @type {{ value?: unknown }} */ (/** @type {unknown} */ (typed)).value = '';
-    drafts.delete(key);
+    list.drafts.delete(key);
     draw();
     update();
   });
@@ -1204,6 +1286,50 @@ function ownersField(doc, context, key, update) {
   body.append(candidateList);
   body.append(add);
   return field;
+}
+
+/**
+ * @param {Document} doc
+ * @param {EditorContext} context
+ * @param {string} key
+ * @param {() => void} update
+ * @returns {Element}
+ */
+function ownersField(doc, context, key, update) {
+  return chipListField(doc, key, update, {
+    label: 'Owners',
+    name: 'owner',
+    noun: 'an owner',
+    placeholder: 'login',
+    candidates: ownerCandidates(context),
+    fold: (login) => login.toLowerCase(),
+    unknown: 'not a known member',
+    drafts,
+    held: () => pick(editsFor(key).owners, context.tracking.owners),
+    put: (owners) => stage(key, { owners }),
+  });
+}
+
+/**
+ * @param {Document} doc
+ * @param {EditorContext} context
+ * @param {string} key
+ * @param {() => void} update
+ * @returns {Element}
+ */
+function backportsField(doc, context, key, update) {
+  return chipListField(doc, key, update, {
+    label: 'Backport targets',
+    name: 'backport',
+    noun: 'a backport target',
+    placeholder: 'release/2.1',
+    candidates: backportCandidates(context),
+    fold: (branch) => branch,
+    unknown: null,
+    drafts: branchDrafts,
+    held: () => pick(editsFor(key).backports, context.tracking.backports),
+    put: (backports) => stage(key, { backports }),
+  });
 }
 
 /**
@@ -1387,6 +1513,7 @@ function buildEditor(doc, context) {
 
   controls.append(triageField(doc, context, key, update));
   controls.append(ownersField(doc, context, key, update));
+  controls.append(backportsField(doc, context, key, update));
   controls.append(embargoField(doc, context, key, update));
   controls.append(closureField(doc, context, key, update));
   controls.append(confirmationField(doc, context, key, update));
@@ -1495,6 +1622,7 @@ globalThis.bghsa.edit = {
   opened,
   saving,
   drafts,
+  branchDrafts,
   keyOf,
   editsFor,
   stage,
@@ -1525,6 +1653,7 @@ globalThis.bghsa.edit = {
   afterWrite,
   save,
   ownerCandidates,
+  backportCandidates,
   buildEditor,
 };
 

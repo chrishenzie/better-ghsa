@@ -11,6 +11,7 @@ if (typeof require === 'function') {
   require('../common/parse-detail.js');
   require('../common/derive.js');
   require('../common/members.js');
+  require('../common/branches.js');
   require('./tracking.js');
   require('./comments.js');
   require('./preserve.js');
@@ -586,6 +587,15 @@ async function render(doc) {
   // place it appears. Holding the logins is synchronous, so the panel draws
   // with the members this advisory shows however slow storage is.
   globalThis.bghsa.members.remember(derived.members);
+  // A release branch this advisory names is one the repository has, and every
+  // advisory on the repository offers the same branches. The pull requests in
+  // the private fork name the branches they are patching, and the backport
+  // targets name the branches a maintainer has asked for. Holding them is
+  // synchronous for the same reason holding a member is.
+  globalThis.bghsa.branches.remember(advisory.ref, [
+    ...derived.patch.branches.map((patch) => patch.branch),
+    ...tracking.backports,
+  ]);
   const placed = injectPanel(doc, advisory, derived, tracking, {
     advisory,
     derived,
@@ -598,11 +608,14 @@ async function render(doc) {
   // panel no anchor still gets them.
   ensureStyle(doc);
   globalThis.bghsa.comments.markComments(doc, merged);
-  // The stored logins reach the panel through a pass of its own, because a
-  // member seen on another advisory is worth drawing again and is not worth
-  // holding this pass up for.
-  void globalThis.bghsa.members.sync().then((grew) => {
-    if (grew) void passFor(doc)();
+  // What storage holds reaches the panel through a pass of its own, because a
+  // member and a branch seen on another advisory are worth drawing again and
+  // are not worth holding this pass up for.
+  void Promise.all([
+    globalThis.bghsa.members.sync(),
+    globalThis.bghsa.branches.sync(),
+  ]).then((grew) => {
+    if (grew.includes(true)) void passFor(doc)();
   });
   return placed;
 }

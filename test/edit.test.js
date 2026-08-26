@@ -14,6 +14,7 @@ const write = require('../src/common/write.js');
 const tracking = require('../src/detail/tracking.js');
 const edit = require('../src/detail/edit.js');
 const members = require('../src/common/members.js');
+const branches = require('../src/common/branches.js');
 const panel = require('../src/detail/panel.js');
 
 /** The write time every save below stamps, so the snapshot it writes is exact. */
@@ -180,8 +181,10 @@ function forget() {
   edit.results.clear();
   edit.opened.clear();
   edit.drafts.clear();
+  edit.branchDrafts.clear();
   edit.saving.clear();
   members.clear();
+  branches.clear();
 }
 
 /**
@@ -726,12 +729,13 @@ test('a schema this extension does not read leaves the panel read-only', async (
 
 /**
  * @param {Element} editor
- * @returns {(string | null)[]} the logins the owner control offers.
+ * @param {string} name The class stem of the control to read.
+ * @returns {(string | null)[]} the values that control offers.
  */
-function candidates(editor) {
-  return Array.from(editor.querySelectorAll('datalist option')).map((option) =>
-    option.getAttribute('value')
-  );
+function candidates(editor, name = 'owner') {
+  return Array.from(
+    editor.querySelectorAll(`datalist.bghsa-${name}-candidates option`)
+  ).map((option) => option.getAttribute('value'));
 }
 
 test('the owner candidates are the members, and the reporter is not one', async () => {
@@ -799,6 +803,168 @@ test('a typed login matching no candidate is taken and flagged', async () => {
 
   await edit.save(context);
   assert.deepStrictEqual(sentSnapshot(talk.calls)['owners'], ['samuelkarp', 'yaroslavk']);
+});
+
+/**
+ * @param {Element} editor
+ * @returns {string[]} the logins the owner control holds.
+ */
+function ownersHeld(editor) {
+  return Array.from(editor.querySelectorAll('.bghsa-owner')).map((owner) =>
+    text(control(owner, '.Label'))
+  );
+}
+
+test('an owner taken off and put back holds no change', async () => {
+  forget();
+  const page = fixture('triage-thread.html');
+  const base = await contextFor(page);
+  const editor = edit.buildEditor(page, {
+    ...base,
+    tracking: { ...base.tracking, owners: ['samuelkarp', 'dmcgowan'] },
+  });
+  assert.strictEqual(ownersHeld(editor).join(' '), 'samuelkarp dmcgowan');
+  press(editor, 'button.bghsa-owner-remove');
+  type(control(editor, 'input.bghsa-owner-input'), 'samuelkarp');
+  press(editor, 'button.bghsa-owner-add');
+
+  assert.strictEqual(ownersHeld(editor).join(' '), 'dmcgowan samuelkarp');
+  assert.strictEqual(note(editor), 'No unsaved changes.');
+  assert.strictEqual(control(editor, 'button.bghsa-save').hasAttribute('disabled'), true);
+});
+
+/** The repository every fixture below carries an advisory of. */
+const REPO = { owner: 'git-utensils', repo: 'Spoon-Knife' };
+
+/**
+ * @param {Element} editor
+ * @returns {string[]} the branches the backport control holds.
+ */
+function backports(editor) {
+  return Array.from(editor.querySelectorAll('.bghsa-backport .Label')).map((label) => text(label));
+}
+
+/**
+ * @param {Element} editor
+ * @param {string} selector
+ * @returns {void} presses one button of the editor.
+ */
+function press(editor, selector) {
+  /** @type {HTMLElement} */ (/** @type {unknown} */ (control(editor, selector))).click();
+}
+
+test('the backport candidates are offered by version, newest first', async () => {
+  forget();
+  // release/0.9 sorts below the release/1.0 this advisory already carries, so
+  // the two sources are ordered together and not one after the other.
+  branches.remember(REPO, ['release/2.9', 'release/2.10', 'release/0.9', 'main']);
+  const { editor } = await editorFor(fixture('triage-thread.html'));
+
+  const offered = candidates(editor, 'backport');
+  assert.strictEqual(
+    offered.join(' '),
+    'release/2.10 release/2.9 release/1.0 release/0.9',
+    'the branches were not offered by version'
+  );
+  assert.strictEqual(
+    offered.indexOf('release/2.10') < offered.indexOf('release/2.9'),
+    true,
+    'release/2.10 was offered after release/2.9'
+  );
+});
+
+test('a branch this advisory already carries is offered on it', async () => {
+  forget();
+  const { editor, context } = await editorFor(fixture('triage-thread.html'));
+  assert.strictEqual(context.tracking.backports.join(' '), 'release/1.0');
+  assert.strictEqual(candidates(editor, 'backport').join(' '), 'release/1.0');
+  assert.strictEqual(backports(editor).join(' '), 'release/1.0');
+});
+
+test('a typed branch is taken and is written on the save', async () => {
+  forget();
+  const { page, talk } = pair('triage-thread.html');
+  const { editor, context } = await editorFor(page, {
+    fetch: talk.fetch,
+    parseDocument: talk.parseDocument,
+  });
+  type(control(editor, 'input.bghsa-backport-input'), 'release/2.10');
+  press(editor, 'button.bghsa-backport-add');
+
+  assert.strictEqual(backports(editor).join(' '), 'release/1.0 release/2.10');
+  assert.strictEqual(note(editor), 'Unsaved changes: backport targets.');
+  assert.strictEqual(talk.calls.length, 0, 'the staged branch reached GitHub before the save');
+
+  await edit.save(context);
+  const written = /** @type {string[]} */ (sentSnapshot(talk.calls)['backports']);
+  assert.strictEqual(written.join(' '), 'release/1.0 release/2.10');
+});
+
+test('the same branch is not taken twice', async () => {
+  forget();
+  const { editor } = await editorFor(fixture('triage-thread.html'));
+  const field = control(editor, 'input.bghsa-backport-input');
+  type(field, 'release/2.10');
+  press(editor, 'button.bghsa-backport-add');
+  type(field, 'release/2.10');
+  press(editor, 'button.bghsa-backport-add');
+
+  assert.strictEqual(backports(editor).join(' '), 'release/1.0 release/2.10');
+});
+
+test('taking the last branch off clears the track', async () => {
+  forget();
+  const { page, talk } = pair('triage-thread.html');
+  const { editor, context } = await editorFor(page, {
+    fetch: talk.fetch,
+    parseDocument: talk.parseDocument,
+  });
+  press(editor, 'button.bghsa-backport-remove');
+  assert.strictEqual(backports(editor).length === 0, true, 'the branch is still held');
+  assert.strictEqual(note(editor), 'Unsaved changes: backport targets.');
+
+  await edit.save(context);
+  assert.strictEqual(
+    sentSnapshot(talk.calls)['backports'],
+    undefined,
+    'the backports field survived a save that cleared it'
+  );
+});
+
+test('a branch taken off and put back holds no change', async () => {
+  forget();
+  const page = fixture('triage-thread.html');
+  const base = await contextFor(page);
+  const editor = edit.buildEditor(page, {
+    ...base,
+    tracking: { ...base.tracking, backports: ['release/1.0', 'release/2.10'] },
+  });
+  assert.strictEqual(backports(editor).join(' '), 'release/1.0 release/2.10');
+  press(editor, 'button.bghsa-backport-remove');
+  type(control(editor, 'input.bghsa-backport-input'), 'release/1.0');
+  press(editor, 'button.bghsa-backport-add');
+
+  assert.strictEqual(backports(editor).join(' '), 'release/2.10 release/1.0');
+  assert.strictEqual(note(editor), 'No unsaved changes.');
+  assert.strictEqual(control(editor, 'button.bghsa-save').hasAttribute('disabled'), true);
+});
+
+test('a repository whose branches went unread still takes a typed branch', async () => {
+  forget();
+  const page = fixture('draft.html');
+  const { editor, context } = await editorFor(page);
+  assert.strictEqual(context.tracking.backports.length === 0, true, 'the advisory holds a branch');
+  assert.strictEqual(
+    edit.backportCandidates(context).length === 0,
+    true,
+    'a repository nothing has read the branches of offered one'
+  );
+  assert.strictEqual(candidates(editor, 'backport').length === 0, true);
+
+  type(control(editor, 'input.bghsa-backport-input'), 'release/2.1');
+  press(editor, 'button.bghsa-backport-add');
+  assert.strictEqual(backports(editor).join(' '), 'release/2.1');
+  assert.strictEqual(note(editor), 'Unsaved changes: backport targets.');
 });
 
 test('an owner taken off the list is written without them', async () => {
