@@ -261,18 +261,40 @@ unconfirmed, and the embargo. Each row shows the time its data was observed.
 Rows are sortable and filterable on every value the extension holds, including
 blocked on us, blocked on the reporter, waiting duration, owner, and severity.
 
-Default ordering is by tier, and within a tier by the stated rule:
+Default ordering is by state first. A draft advisory has been accepted and
+needs active work, so every draft sorts above every advisory in triage.
 
-1. Never reviewed, longest waiting first.
-2. New activity, longest waiting first.
-3. Blocked on us. An advisory with an overdue embargo sorts at the top of this
-   tier. The rest sort by confirmed severity descending, then by unconfirmed
-   severity descending, then by longest waiting.
-4. Blocked on the reporter, longest waiting first.
+Within draft:
 
-Severity in tier 3 is two keys, not one. Every severity a maintainer confirmed
-ranks above every severity nobody has confirmed, so a confirmed low sorts above
-a severity the reporter claimed and no maintainer has checked.
+1. Overdue embargo.
+2. New activity.
+3. Blocked on us.
+4. Blocked on the reporter.
+
+Never reviewed cannot arise in draft, because a maintainer moved the advisory
+there.
+
+Within triage:
+
+1. Overdue embargo.
+2. Blocked on us.
+3. Never reviewed.
+4. New activity.
+5. Blocked on the reporter.
+
+An advisory that answers to more than one group takes the first it matches.
+
+An advisory carrying no stored triage value is not blocked on anyone, because
+the classification is of triage values and it has none. In triage it takes the
+never reviewed group. In draft, where never reviewed cannot arise, it takes
+blocked on us: a maintainer accepted it and has not said where it stands.
+
+Within each group, by confirmed severity descending, then by unconfirmed
+severity descending, then by longest waiting.
+
+Severity is two keys, not one. Every severity a maintainer confirmed ranks
+above every severity nobody has confirmed, so a confirmed low sorts above a
+severity the reporter claimed and no maintainer has checked.
 
 Published and closed advisories are excluded from this table and appear on the
 done page described in section 10.

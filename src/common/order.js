@@ -10,6 +10,8 @@ if (typeof require === 'function') {
 /**
  * @typedef {object} OrderEntry
  * @property {string | null} ghsaId
+ * @property {string | null} state The state GitHub holds the advisory in, as it
+ *   names it.
  * @property {boolean} neverReviewed No org member has commented on or acted on
  *   the advisory.
  * @property {boolean} newActivity The reporter has spoken since the last member
@@ -27,17 +29,60 @@ if (typeof require === 'function') {
 
 (() => {
   /**
-   * The tiers the list table orders by, most urgent first.
+   * The groups the list table orders within a state by, as REQUIREMENTS.md
+   * section 9 names them.
    */
-  const TIERS = {
-    NEVER_REVIEWED: 1,
-    NEW_ACTIVITY: 2,
-    BLOCKED_ON_US: 3,
-    BLOCKED_ON_REPORTER: 4,
+  const GROUPS = {
+    EMBARGO_OVERDUE: 'overdue embargo',
+    NEW_ACTIVITY: 'new activity',
+    BLOCKED_ON_US: 'blocked on us',
+    NEVER_REVIEWED: 'never reviewed',
+    BLOCKED_ON_REPORTER: 'blocked on the reporter',
   };
 
-  /** @type {readonly string[]} */
-  const TIER_NAMES = ['never reviewed', 'new activity', 'blocked on us', 'blocked on the reporter'];
+  /**
+   * The groups of a draft advisory, most urgent first. Never reviewed is not
+   * among them: a maintainer moved the advisory to draft, so it has been
+   * reviewed.
+   *
+   * @type {readonly string[]}
+   */
+  const DRAFT_GROUPS = [
+    GROUPS.EMBARGO_OVERDUE,
+    GROUPS.NEW_ACTIVITY,
+    GROUPS.BLOCKED_ON_US,
+    GROUPS.BLOCKED_ON_REPORTER,
+  ];
+
+  /**
+   * The groups of an advisory in triage, most urgent first. This is a different
+   * order from {@link DRAFT_GROUPS} and not the same order with an exception:
+   * blocked on us and new activity swap ends, and never reviewed sits between
+   * them.
+   *
+   * @type {readonly string[]}
+   */
+  const TRIAGE_GROUPS = [
+    GROUPS.EMBARGO_OVERDUE,
+    GROUPS.BLOCKED_ON_US,
+    GROUPS.NEVER_REVIEWED,
+    GROUPS.NEW_ACTIVITY,
+    GROUPS.BLOCKED_ON_REPORTER,
+  ];
+
+  /**
+   * The waiting state one row's chip carries, in the order the chip prefers
+   * them. This says what an advisory is waiting on, which the filter and the
+   * chip show; it is not what the default order sorts by.
+   *
+   * @type {readonly string[]}
+   */
+  const WAITING_STATES = [
+    GROUPS.NEVER_REVIEWED,
+    GROUPS.NEW_ACTIVITY,
+    GROUPS.BLOCKED_ON_US,
+    GROUPS.BLOCKED_ON_REPORTER,
+  ];
 
   /**
    * Which side each triage value leaves the advisory waiting on. `evaluating` and
@@ -73,44 +118,125 @@ if (typeof require === 'function') {
   /**
    * Which side a triage value leaves the advisory waiting on.
    *
-   * An advisory carrying no triage value, or one this reader does not know, is
-   * waiting on us: it takes a maintainer to say otherwise.
+   * A value this reader does not know is waiting on us: it takes a maintainer
+   * to say otherwise. An advisory carrying no stored triage value is waiting on
+   * nobody, because this reads triage values and it has none.
    *
    * @param {string | null | undefined} triage
-   * @returns {'us' | 'reporter'}
+   * @returns {'us' | 'reporter' | null} null where no triage value is stored.
    */
   function classifyTriage(triage) {
-    if (typeof triage !== 'string') return 'us';
+    if (typeof triage !== 'string' || triage.trim() === '') return null;
     return BLOCKED_ON[triage.trim().toLowerCase()] ?? 'us';
   }
 
   /**
-   * @param {OrderEntry} entry
-   * @returns {boolean} whether the advisory is waiting on a maintainer.
-   */
-  function blockedOnUs(entry) {
-    return classifyTriage(entry.triage) === 'us';
-  }
-
-  /**
-   * The tier an advisory sorts in.
+   * Whether the advisory is waiting on a maintainer, by REQUIREMENTS.md section
+   * 9.
+   *
+   * An advisory carrying no stored triage value answers to this in draft alone,
+   * where a maintainer accepted it and has not said where it stands. In triage
+   * it answers to never reviewed, which draft does not hold.
    *
    * @param {OrderEntry} entry
-   * @returns {number} one of {@link TIERS}.
+   * @returns {boolean}
    */
-  function tierOf(entry) {
-    if (entry.neverReviewed) return TIERS.NEVER_REVIEWED;
-    if (entry.newActivity) return TIERS.NEW_ACTIVITY;
-    return blockedOnUs(entry) ? TIERS.BLOCKED_ON_US : TIERS.BLOCKED_ON_REPORTER;
+  function blockedOnUs(entry) {
+    const blocked = classifyTriage(entry.triage);
+    if (blocked === null) return stateOf(entry) === 'draft';
+    return blocked === 'us';
   }
 
   /**
-   * @param {number} tier
-   * @returns {string} what the tier is called, and the empty string for a number
-   *   that is not one.
+   * @param {OrderEntry} entry
+   * @returns {boolean} whether the advisory carries no stored triage value.
    */
-  function tierName(tier) {
-    return TIER_NAMES[tier - 1] ?? '';
+  function untriaged(entry) {
+    return classifyTriage(entry.triage) === null;
+  }
+
+  /**
+   * Which state's group order an advisory takes.
+   *
+   * Only draft and triage reach this table. A state this reader cannot read, and
+   * the published and closed states the done page holds, take the triage order,
+   * the way an unknown triage value counts as blocked on us.
+   *
+   * @param {OrderEntry} entry
+   * @returns {'draft' | 'triage'}
+   */
+  function stateOf(entry) {
+    if (typeof entry.state !== 'string') return 'triage';
+    return entry.state.trim().toLowerCase() === 'draft' ? 'draft' : 'triage';
+  }
+
+  /**
+   * @param {'draft' | 'triage'} state
+   * @returns {readonly string[]} the groups of that state, most urgent first.
+   */
+  function groupsFor(state) {
+    return state === 'draft' ? DRAFT_GROUPS : TRIAGE_GROUPS;
+  }
+
+  /**
+   * Whether an advisory answers to one group.
+   *
+   * @type {Readonly<Record<string, (entry: OrderEntry) => boolean>>}
+   */
+  const MEMBER_OF = {
+    [GROUPS.EMBARGO_OVERDUE]: (entry) => entry.embargoOverdue,
+    [GROUPS.NEW_ACTIVITY]: (entry) => entry.newActivity,
+    [GROUPS.BLOCKED_ON_US]: (entry) => blockedOnUs(entry),
+    [GROUPS.NEVER_REVIEWED]: (entry) => entry.neverReviewed || untriaged(entry),
+    [GROUPS.BLOCKED_ON_REPORTER]: (entry) => classifyTriage(entry.triage) === 'reporter',
+  };
+
+  /**
+   * The group an advisory sorts in, which is the first of its state's groups it
+   * answers to.
+   *
+   * Every advisory reaches a group. A triage value names us or the reporter,
+   * and those two are groups of both states; no triage value takes blocked on
+   * us in draft and never reviewed in triage.
+   *
+   * @param {OrderEntry} entry
+   * @returns {string} one of {@link GROUPS}.
+   */
+  function groupOf(entry) {
+    const groups = groupsFor(stateOf(entry));
+    const found = groups.find((group) => MEMBER_OF[group]?.(entry) === true);
+    return found ?? GROUPS.BLOCKED_ON_REPORTER;
+  }
+
+  /**
+   * @param {OrderEntry} entry
+   * @returns {number} how far down its state's groups the advisory sits, and the
+   *   length of that list for a group it does not hold.
+   */
+  function groupRank(entry) {
+    const groups = groupsFor(stateOf(entry));
+    const rank = groups.indexOf(groupOf(entry));
+    return rank === -1 ? groups.length : rank;
+  }
+
+  /**
+   * The waiting state one advisory shows, which is the first of
+   * {@link WAITING_STATES} it answers to.
+   *
+   * Never reviewed here is section 6's derived value, which member activity
+   * says, and the ordering group of the same name is the absence of a stored
+   * triage value. An advisory a member has touched and nobody has triaged shows
+   * blocked on us and sorts in never reviewed.
+   *
+   * @param {OrderEntry} entry
+   * @returns {string}
+   */
+  function waitingStateOf(entry) {
+    if (entry.neverReviewed) return GROUPS.NEVER_REVIEWED;
+    if (entry.newActivity) return GROUPS.NEW_ACTIVITY;
+    return classifyTriage(entry.triage) === 'reporter'
+      ? GROUPS.BLOCKED_ON_REPORTER
+      : GROUPS.BLOCKED_ON_US;
   }
 
   /**
@@ -201,31 +327,31 @@ if (typeof require === 'function') {
   }
 
   /**
-   * The default order of the list table: by tier, and within a tier by the rule
-   * in REQUIREMENTS.md section 9.
+   * The default order of the list table, by REQUIREMENTS.md section 9.
    *
-   * Inside the blocked-on-us tier an overdue embargo comes first, then the
-   * severities a maintainer confirmed, highest first, then the severities nobody
-   * has confirmed, highest first. Every tier then goes longest waiting first, and
-   * the identifier settles what is left.
+   * State comes first: every draft sorts above every advisory in triage. Within
+   * a state the advisory takes the first group it answers to, and the two states
+   * name their groups in different orders, so the group key is an index into the
+   * state's own list. Within a group the severities a maintainer confirmed come
+   * first, highest first, then the severities nobody has confirmed, highest
+   * first, then the longest waiting, and the identifier settles what is left.
    *
    * @param {OrderEntry} a
    * @param {OrderEntry} b
    * @returns {number}
    */
   function compare(a, b) {
-    const tier = tierOf(a);
-    const byTier = tier - tierOf(b);
-    if (byTier !== 0) return byTier;
+    const draft = Number(stateOf(b) === 'draft') - Number(stateOf(a) === 'draft');
+    if (draft !== 0) return draft;
 
-    if (tier === TIERS.BLOCKED_ON_US) {
-      const overdue = Number(b.embargoOverdue) - Number(a.embargoOverdue);
-      if (overdue !== 0) return overdue;
-      const confirmed = confirmedRank(b) - confirmedRank(a);
-      if (confirmed !== 0) return confirmed;
-      const unconfirmed = unconfirmedRank(b) - unconfirmedRank(a);
-      if (unconfirmed !== 0) return unconfirmed;
-    }
+    const group = groupRank(a) - groupRank(b);
+    if (group !== 0) return group;
+
+    const confirmed = confirmedRank(b) - confirmedRank(a);
+    if (confirmed !== 0) return confirmed;
+
+    const unconfirmed = unconfirmedRank(b) - unconfirmedRank(a);
+    if (unconfirmed !== 0) return unconfirmed;
 
     const waiting = byWaiting(a, b);
     if (waiting !== 0) return waiting;
@@ -243,15 +369,16 @@ if (typeof require === 'function') {
   }
 
   const exported = {
-    TIERS,
-    TIER_NAMES,
-    BLOCKED_ON,
-    SEVERITY_RANK,
+    GROUPS,
+    WAITING_STATES,
     severityRank,
     classifyTriage,
     blockedOnUs,
-    tierOf,
-    tierName,
+    stateOf,
+    groupsFor,
+    groupOf,
+    groupRank,
+    waitingStateOf,
     compareText,
     compareNumber,
     compare,

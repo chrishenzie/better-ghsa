@@ -7,7 +7,8 @@ const order = require('../src/common/order.js');
 
 /**
  * An advisory the table holds. The defaults are the least urgent thing an entry
- * can be: reviewed, quiet, unscored, and waiting on nobody in particular.
+ * can be: in triage, reviewed, quiet, unscored, and waiting on nobody in
+ * particular.
  *
  * @param {string} ghsaId
  * @param {Partial<import('../src/common/order.js').OrderEntry>} [fields]
@@ -16,6 +17,7 @@ const order = require('../src/common/order.js');
 function entry(ghsaId, fields = {}) {
   return {
     ghsaId,
+    state: 'Triage',
     neverReviewed: false,
     newActivity: false,
     triage: null,
@@ -43,24 +45,110 @@ function ordersAs(entries, wanted, what) {
   }
 }
 
-test('the four tiers come in the order section 9 states', () => {
-  const reviewed = entry('D', { triage: 'awaiting reporter' });
-  const ours = entry('C', { triage: 'evaluating' });
-  const activity = entry('B', { newActivity: true, triage: 'awaiting reporter' });
-  const fresh = entry('A', { neverReviewed: true, triage: 'awaiting reporter' });
-  assert.strictEqual(order.tierOf(fresh), 1);
-  assert.strictEqual(order.tierOf(activity), 2);
-  assert.strictEqual(order.tierOf(ours), 3);
-  assert.strictEqual(order.tierOf(reviewed), 4);
-  assert.strictEqual(order.tierName(order.tierOf(ours)), 'blocked on us');
-  ordersAs([reviewed, ours, activity, fresh], ['A', 'B', 'C', 'D'], 'the tiers');
+/**
+ * Two advisories a group boundary separates, named so that the identifier
+ * tie-break contradicts the order the boundary calls for: the one that belongs
+ * first is named `Z` and the one that belongs second is named `A`. A test built
+ * this way fails when the boundary goes the other way, and fails again when the
+ * boundary stops sorting at all.
+ *
+ * @param {string} state
+ * @param {Partial<import('../src/common/order.js').OrderEntry>} first The group
+ *   that belongs above.
+ * @param {Partial<import('../src/common/order.js').OrderEntry>} second The group
+ *   that belongs below.
+ * @param {string} what
+ */
+function boundary(state, first, second, what) {
+  const above = entry('GHSA-zzzz-zzzz-zzzz', { state, ...first });
+  const below = entry('GHSA-aaaa-aaaa-aaaa', { state, ...second });
+  assert.ok(
+    order.compare(above, below) < 0 && order.compare(below, above) > 0,
+    `${what}: the boundary does not hold`
+  );
+  ordersAs([below, above], ['GHSA-zzzz-zzzz-zzzz', 'GHSA-aaaa-aaaa-aaaa'], what);
+  ordersAs([above, below], ['GHSA-zzzz-zzzz-zzzz', 'GHSA-aaaa-aaaa-aaaa'], `${what}, reversed`);
+}
+
+/** What each group is answered by, on its own. */
+const OVERDUE = { embargoOverdue: true, triage: 'awaiting reporter' };
+const ACTIVITY = { newActivity: true, triage: 'awaiting reporter' };
+const OURS = { triage: 'evaluating' };
+const FRESH = { neverReviewed: true, triage: 'awaiting reporter' };
+const THEIRS = { triage: 'awaiting reporter' };
+/** An advisory nobody has triaged, which carries no stored triage value. */
+const UNTRIAGED = { triage: null };
+
+test('state comes before every group: a draft sorts above every advisory in triage', () => {
+  // The draft is the least urgent thing a draft can be and the advisory in
+  // triage is the most urgent thing triage holds, and the identifier disagrees
+  // with both.
+  const quiet = entry('GHSA-zzzz-zzzz-zzzz', { state: 'Draft', triage: 'awaiting reporter' });
+  const urgent = entry('GHSA-aaaa-aaaa-aaaa', {
+    state: 'Triage',
+    embargoOverdue: true,
+    severity: 'critical',
+    severityConfirmed: true,
+    waitingSince: '2020-01-01T00:00:00Z',
+  });
+  ordersAs([urgent, quiet], ['GHSA-zzzz-zzzz-zzzz', 'GHSA-aaaa-aaaa-aaaa'], 'draft above triage');
 });
 
-test('never reviewed outranks new activity on an advisory that is both', () => {
-  const both = entry('A', { neverReviewed: true, newActivity: true });
-  const activity = entry('B', { newActivity: true });
-  assert.strictEqual(order.tierOf(both), 1);
-  ordersAs([activity, both], ['A', 'B'], 'a never reviewed advisory with new activity');
+test('an advisory nobody has triaged is never reviewed in triage', () => {
+  // Nothing has been set on it: no triage value, no member activity, no score,
+  // no embargo, no waiting time.
+  const untouched = entry('GHSA-aaaa-aaaa-aaaa');
+  assert.strictEqual(untouched.triage, null);
+  assert.strictEqual(order.groupOf(untouched), 'never reviewed');
+  assert.strictEqual(order.groupRank(untouched), 2);
+  assert.strictEqual(order.blockedOnUs(untouched), false);
+  // An advisory no member has touched either answers to the same group.
+  assert.strictEqual(order.groupOf(entry('B', { neverReviewed: true })), 'never reviewed');
+  // The identifier tie-break argues for the wrong answer: the untriaged
+  // advisory is named first in the alphabet and belongs second, so a run that
+  // reads it as blocked on us puts it above.
+  boundary('Triage', OURS, UNTRIAGED, 'triage, blocked on us above an advisory nobody has triaged');
+  boundary(
+    'Triage',
+    UNTRIAGED,
+    ACTIVITY,
+    'triage, an advisory nobody has triaged above new activity'
+  );
+});
+
+test('an advisory nobody has triaged is blocked on us in draft', () => {
+  // Never reviewed cannot arise in draft, and a maintainer who accepted the
+  // advisory has not said where it stands, so it is ours.
+  const untouched = entry('GHSA-aaaa-aaaa-aaaa', { state: 'Draft' });
+  assert.strictEqual(order.groupOf(untouched), 'blocked on us');
+  assert.strictEqual(order.groupRank(untouched), 2);
+  assert.strictEqual(order.blockedOnUs(untouched), true);
+  assert.strictEqual(
+    order.groupOf(entry('B', { state: 'Draft', neverReviewed: true })),
+    'blocked on us'
+  );
+  boundary(
+    'Draft',
+    ACTIVITY,
+    UNTRIAGED,
+    'draft, new activity above an advisory nobody has triaged'
+  );
+  boundary(
+    'Draft',
+    UNTRIAGED,
+    THEIRS,
+    'draft, an advisory nobody has triaged above blocked on the reporter'
+  );
+});
+
+test('a state this reader does not know takes the triage order', () => {
+  assert.strictEqual(order.stateOf(entry('A', { state: 'Draft' })), 'draft');
+  assert.strictEqual(order.stateOf(entry('A', { state: 'draft' })), 'draft');
+  assert.strictEqual(order.stateOf(entry('A', { state: 'Triage' })), 'triage');
+  assert.strictEqual(order.stateOf(entry('A', { state: null })), 'triage');
+  assert.strictEqual(order.stateOf(entry('A', { state: 'Published' })), 'triage');
+  assert.strictEqual(order.stateOf(entry('A', { state: 'Closed' })), 'triage');
+  assert.strictEqual(order.groupOf(entry('A', { state: 'Closed', ...FRESH })), 'never reviewed');
 });
 
 test('every triage value says which side the advisory waits on', () => {
@@ -68,69 +156,45 @@ test('every triage value says which side the advisory waits on', () => {
   assert.strictEqual(order.classifyTriage('awaiting maintainer input'), 'us');
   assert.strictEqual(order.classifyTriage('awaiting reporter'), 'reporter');
   assert.strictEqual(order.classifyTriage('Awaiting Reporter'), 'reporter');
-  assert.strictEqual(order.classifyTriage(null), 'us', 'an advisory nobody has classified is ours');
+  assert.strictEqual(order.classifyTriage(null), null, 'an advisory nobody has triaged');
+  assert.strictEqual(order.classifyTriage(undefined), null, 'a field that never arrived');
+  assert.strictEqual(order.classifyTriage('   '), null, 'a value with no content');
   assert.strictEqual(order.classifyTriage('parked'), 'us', 'a value this reader does not know');
-  assert.strictEqual(order.tierOf(entry('A', { triage: 'awaiting maintainer input' })), 3);
-  assert.strictEqual(order.tierOf(entry('A', { triage: 'evaluating' })), 3);
-  assert.strictEqual(order.tierOf(entry('A', { triage: 'awaiting reporter' })), 4);
+  assert.strictEqual(order.groupOf(entry('A', { triage: 'awaiting maintainer input' })), 'blocked on us');
+  assert.strictEqual(order.groupOf(entry('A', { triage: 'evaluating' })), 'blocked on us');
+  assert.strictEqual(order.groupOf(entry('A', { triage: 'awaiting reporter' })), 'blocked on the reporter');
 });
 
-test('an overdue embargo sorts to the top of the blocked-on-us tier', () => {
-  const overdue = entry('A', {
-    triage: 'evaluating',
-    embargoOverdue: true,
-    severity: 'low',
-    waitingSince: '2026-08-20T00:00:00Z',
-  });
-  const critical = entry('B', {
-    triage: 'evaluating',
-    severity: 'critical',
-    severityConfirmed: true,
-    waitingSince: '2026-01-01T00:00:00Z',
-  });
-  ordersAs([critical, overdue], ['A', 'B'], 'an overdue embargo above a confirmed critical');
-});
-
-test('an overdue embargo does not lift an advisory out of its tier', () => {
-  // Section 9 puts an overdue embargo at the top of the blocked-on-us tier,
-  // and says nothing that moves one between tiers.
-  const overdue = entry('B', { triage: 'awaiting reporter', embargoOverdue: true });
-  const ours = entry('A', { triage: 'evaluating' });
-  ordersAs([overdue, ours], ['A', 'B'], 'an overdue embargo on the reporter');
-});
-
-test('an overdue embargo does not reorder the blocked-on-reporter tier', () => {
-  const overdue = entry('B', {
-    triage: 'awaiting reporter',
-    embargoOverdue: true,
-    waitingSince: '2026-08-01T00:00:00Z',
-  });
-  const older = entry('A', {
-    triage: 'awaiting reporter',
-    waitingSince: '2026-07-01T00:00:00Z',
-  });
-  ordersAs([overdue, older], ['A', 'B'], 'the longest waiting first whatever the embargo');
-});
-
-test('a confirmed severity outranks every unconfirmed one', () => {
-  const confirmedLow = entry('A', {
-    triage: 'evaluating',
-    severity: 'low',
-    severityConfirmed: true,
-  });
-  const claimedCritical = entry('B', { triage: 'evaluating', severity: 'critical' });
-  ordersAs([claimedCritical, confirmedLow], ['A', 'B'], 'a confirmed score above a claimed one');
+test('the waiting state a chip carries is not the ordering group', () => {
+  assert.deepStrictEqual(order.WAITING_STATES, [
+    'never reviewed',
+    'new activity',
+    'blocked on us',
+    'blocked on the reporter',
+  ]);
+  const fresh = entry('A', { neverReviewed: true, triage: 'evaluating' });
+  assert.strictEqual(order.waitingStateOf(fresh), 'never reviewed');
+  assert.strictEqual(order.groupOf(fresh), 'blocked on us');
+  const overdue = entry('B', { embargoOverdue: true, triage: 'evaluating' });
+  assert.strictEqual(order.waitingStateOf(overdue), 'blocked on us');
+  assert.strictEqual(order.groupOf(overdue), 'overdue embargo');
 });
 
 test('confirmed severities sort highest first, then unconfirmed severities', () => {
-  const entries = [
-    entry('D', { triage: 'evaluating', severity: 'low' }),
-    entry('B', { triage: 'evaluating', severity: 'high', severityConfirmed: true }),
-    entry('C', { triage: 'evaluating', severity: 'critical' }),
-    entry('A', { triage: 'evaluating', severity: 'critical', severityConfirmed: true }),
-    entry('E', { triage: 'evaluating' }),
-  ];
-  ordersAs(entries, ['A', 'B', 'C', 'D', 'E'], 'severity within the blocked-on-us tier');
+  for (const state of ['Draft', 'Triage']) {
+    // Named so the identifier tie-break argues against the order severity
+    // calls for, as `boundary` names its two: the entry that belongs first is
+    // named last. A comparator that stops scoring severity falls through to
+    // the identifier and lands on A B C D E, which is the reverse of this.
+    const entries = [
+      entry('B', { state, triage: 'evaluating', severity: 'low' }),
+      entry('D', { state, triage: 'evaluating', severity: 'high', severityConfirmed: true }),
+      entry('C', { state, triage: 'evaluating', severity: 'critical' }),
+      entry('E', { state, triage: 'evaluating', severity: 'critical', severityConfirmed: true }),
+      entry('A', { state, triage: 'evaluating' }),
+    ];
+    ordersAs(entries, ['E', 'D', 'C', 'B', 'A'], `severity within a group in ${state}`);
+  }
   assert.strictEqual(order.severityRank('critical'), 4);
   assert.strictEqual(order.severityRank('high'), 3);
   assert.strictEqual(order.severityRank('moderate'), 2);
@@ -139,77 +203,105 @@ test('confirmed severities sort highest first, then unconfirmed severities', () 
   assert.strictEqual(order.severityRank('unknown'), 0);
 });
 
-test('the longest waiting breaks a tie inside the blocked-on-us tier', () => {
+test('severity orders every group, not the blocked-on-us one alone', () => {
+  // The tie-breaks are the same in every group, which the flat tiers did not
+  // do: they scored the blocked-on-us tier and left the rest on waiting alone.
+  for (const state of ['Draft', 'Triage']) {
+    for (const group of [OVERDUE, ACTIVITY, THEIRS, FRESH]) {
+      if (state === 'Draft' && group === FRESH) continue;
+      const severe = entry('GHSA-zzzz-zzzz-zzzz', {
+        state,
+        ...group,
+        severity: 'critical',
+        severityConfirmed: true,
+        waitingSince: '2026-08-25T00:00:00Z',
+      });
+      const waited = entry('GHSA-aaaa-aaaa-aaaa', {
+        state,
+        ...group,
+        waitingSince: '2020-01-01T00:00:00Z',
+      });
+      ordersAs(
+        [waited, severe],
+        ['GHSA-zzzz-zzzz-zzzz', 'GHSA-aaaa-aaaa-aaaa'],
+        `severity above waiting in ${state} ${order.groupOf(severe)}`
+      );
+    }
+  }
+});
+
+test('the longest waiting breaks a tie inside a group, in both states', () => {
+  for (const state of ['Draft', 'Triage']) {
+    // The identifier argues against the waiting order: the shortest wait is
+    // named A and the longest C, so a comparator that stops reading the
+    // waiting time lands on A B C, which is the reverse of this.
+    const entries = [
+      entry('A', {
+        state,
+        triage: 'evaluating',
+        severity: 'high',
+        waitingSince: '2026-08-20T00:00:00Z',
+      }),
+      entry('C', {
+        state,
+        triage: 'evaluating',
+        severity: 'high',
+        waitingSince: '2026-06-01T00:00:00Z',
+      }),
+      entry('B', {
+        state,
+        triage: 'evaluating',
+        severity: 'high',
+        waitingSince: '2026-08-19T23:59:59Z',
+      }),
+    ];
+    ordersAs(entries, ['C', 'B', 'A'], `the longest waiting of three equal severities in ${state}`);
+  }
+});
+
+test('a waiting time that went unread sorts after every one that is known', () => {
+  // The unread waiting time is named A, so the identifier tie-break puts it
+  // first and the rule under test puts it last.
   const entries = [
-    entry('C', { triage: 'evaluating', severity: 'high', waitingSince: '2026-08-20T00:00:00Z' }),
-    entry('A', { triage: 'evaluating', severity: 'high', waitingSince: '2026-06-01T00:00:00Z' }),
-    entry('B', { triage: 'evaluating', severity: 'high', waitingSince: '2026-08-19T23:59:59Z' }),
+    entry('B', { ...THEIRS, waitingSince: '2026-08-01T00:00:00Z' }),
+    entry('C', { ...THEIRS, waitingSince: '2025-12-31T00:00:00Z' }),
+    entry('A', { ...THEIRS, waitingSince: null }),
   ];
-  ordersAs(entries, ['A', 'B', 'C'], 'the longest waiting of three equal severities');
+  ordersAs(entries, ['C', 'B', 'A'], 'a waiting time that went unread sorts last');
 });
 
-test('the never reviewed tier is the longest waiting first', () => {
-  const entries = [
-    entry('A', { neverReviewed: true, waitingSince: '2026-08-01T00:00:00Z' }),
-    entry('B', { neverReviewed: true, waitingSince: null }),
-    entry('C', { neverReviewed: true, waitingSince: '2025-12-31T00:00:00Z' }),
-  ];
-  ordersAs(entries, ['C', 'A', 'B'], 'never reviewed by waiting, not by identifier');
-});
-
-test('the new activity tier is the longest waiting first', () => {
-  const entries = [
-    entry('A', { newActivity: true, waitingSince: '2026-08-01T00:00:00Z' }),
-    entry('B', { newActivity: true, waitingSince: null }),
-    entry('C', { newActivity: true, waitingSince: '2025-12-31T00:00:00Z' }),
-  ];
-  ordersAs(entries, ['C', 'A', 'B'], 'new activity by waiting, not by identifier');
-});
-
-test('the blocked-on-reporter tier is the longest waiting first', () => {
-  const entries = [
-    entry('B', { triage: 'awaiting reporter', waitingSince: '2026-08-01T00:00:00Z' }),
-    entry('A', { triage: 'awaiting reporter', waitingSince: '2025-12-31T00:00:00Z' }),
-    entry('C', { triage: 'awaiting reporter', waitingSince: null }),
-  ];
-  ordersAs(entries, ['A', 'B', 'C'], 'a waiting time that went unread sorts last');
-});
-
-test('a severity outranks the longest wait inside the blocked-on-us tier', () => {
-  const waited = entry('B', { triage: 'evaluating', waitingSince: '2020-01-01T00:00:00Z' });
-  const severe = entry('A', {
-    triage: 'evaluating',
-    severity: 'moderate',
-    waitingSince: '2026-08-25T00:00:00Z',
-  });
-  ordersAs([waited, severe], ['A', 'B'], 'severity above waiting');
-});
-
-/** A grid of entries covering every combination the comparator branches on. */
+/**
+ * A grid of entries covering every combination the comparator branches on, in
+ * both states. A grid varying inside one state alone cannot see a wrong state
+ * key.
+ */
 function grid() {
   /** @type {import('../src/common/order.js').OrderEntry[]} */
   const entries = [];
-  for (const neverReviewed of [false, true]) {
-    for (const newActivity of [false, true]) {
-      for (const triage of [null, 'awaiting reporter']) {
-        for (const embargoOverdue of [false, true]) {
-          for (const score of [
-            { severity: null, severityConfirmed: false },
-            { severity: 'critical', severityConfirmed: false },
-            { severity: 'low', severityConfirmed: true },
-          ]) {
-            for (const waitingSince of [null, '2026-01-01T00:00:00Z', '2026-08-01T00:00:00Z']) {
-              const id = `GHSA-0000-0000-${String(entries.length).padStart(4, '0')}`;
-              entries.push(
-                entry(id, {
-                  neverReviewed,
-                  newActivity,
-                  triage,
-                  embargoOverdue,
-                  waitingSince,
-                  ...score,
-                })
-              );
+  for (const state of ['Draft', 'Triage']) {
+    for (const neverReviewed of [false, true]) {
+      for (const newActivity of [false, true]) {
+        for (const triage of [null, 'evaluating', 'awaiting reporter']) {
+          for (const embargoOverdue of [false, true]) {
+            for (const score of [
+              { severity: null, severityConfirmed: false },
+              { severity: 'critical', severityConfirmed: false },
+              { severity: 'low', severityConfirmed: true },
+            ]) {
+              for (const waitingSince of [null, '2026-01-01T00:00:00Z', '2026-08-01T00:00:00Z']) {
+                const id = `GHSA-0000-0000-${String(entries.length).padStart(4, '0')}`;
+                entries.push(
+                  entry(id, {
+                    state,
+                    neverReviewed,
+                    newActivity,
+                    triage,
+                    embargoOverdue,
+                    waitingSince,
+                    ...score,
+                  })
+                );
+              }
             }
           }
         }
@@ -219,9 +311,27 @@ function grid() {
   return entries;
 }
 
+test('the grid covers both states and every group in each', () => {
+  const entries = grid();
+  assert.strictEqual(entries.length, 432);
+  /** @type {Record<string, number>} */
+  const seen = {};
+  for (const each of entries) {
+    const key = `${order.stateOf(each)} ${order.groupOf(each)}`;
+    seen[key] = (seen[key] ?? 0) + 1;
+  }
+  for (const group of order.groupsFor('draft')) {
+    assert.ok((seen[`draft ${group}`] ?? 0) > 0, `the grid holds no draft in ${group}`);
+  }
+  for (const group of order.groupsFor('triage')) {
+    assert.ok((seen[`triage ${group}`] ?? 0) > 0, `the grid holds no triage advisory in ${group}`);
+  }
+  assert.strictEqual(seen['draft never reviewed'], undefined, 'never reviewed cannot arise in draft');
+});
+
 test('the comparator is a total order', () => {
   const entries = grid();
-  assert.strictEqual(entries.length, 144);
+  assert.strictEqual(entries.length, 432);
 
   // Transitivity is read off a witness rather than off every triple. `place`
   // numbers one sequence of the entries, and a comparator that agrees with that
@@ -250,6 +360,20 @@ test('the comparator is a total order', () => {
       }
     }
   }
+});
+
+test('the sorted grid holds each group whole and in its state order', () => {
+  const sorted = order.sort(grid());
+  /** @type {string[]} */
+  const runs = [];
+  for (const each of sorted) {
+    const key = `${order.stateOf(each)} ${order.groupOf(each)}`;
+    if (runs[runs.length - 1] !== key) runs.push(key);
+  }
+  assert.deepStrictEqual(runs, [
+    ...order.groupsFor('draft').map((group) => `draft ${group}`),
+    ...order.groupsFor('triage').map((group) => `triage ${group}`),
+  ]);
 });
 
 test('the answer does not depend on the order the entries arrived in', () => {

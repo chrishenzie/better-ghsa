@@ -575,12 +575,12 @@ if (typeof require === 'function') {
     // The waiting state is what an advisory read says, so it is absent until one
     // has been read. Nothing on the list page names it.
     if (row.read) {
-      const tier = order.tierOf(row);
+      const waitingState = order.waitingStateOf(row);
       /** @type {ChipSpec} */
-      const waiting = { text: sentenceCase(order.tierName(tier)) };
-      if (tier === order.TIERS.NEVER_REVIEWED) waiting.tone = 'danger';
-      else if (tier === order.TIERS.NEW_ACTIVITY) waiting.tone = 'attention';
-      else if (tier === order.TIERS.BLOCKED_ON_US) waiting.tone = 'danger';
+      const waiting = { text: sentenceCase(waitingState) };
+      if (waitingState === order.GROUPS.NEVER_REVIEWED) waiting.tone = 'danger';
+      else if (waitingState === order.GROUPS.NEW_ACTIVITY) waiting.tone = 'attention';
+      else if (waitingState === order.GROUPS.BLOCKED_ON_US) waiting.tone = 'danger';
       else waiting.tone = 'attention';
       chips.push(waiting);
     }
@@ -719,13 +719,12 @@ if (typeof require === 'function') {
   /**
    * @param {TableRow} row
    * @returns {string[]} which side the advisory is waiting on, and nothing while
-   *   nothing has been read: the tier is what an advisory read says, and a row
-   *   the extension has not reached yet holds no answer either way.
+   *   nothing has been read: the waiting state is what an advisory read says,
+   *   and a row the extension has not reached yet holds no answer either way.
    */
   function waitingValuesOf(row) {
     if (!row.read) return [];
-    const order = globalThis.bghsa.order;
-    return [sentenceCase(order.tierName(order.tierOf(row)))];
+    return [sentenceCase(globalThis.bghsa.order.waitingStateOf(row))];
   }
 
   /**
@@ -742,7 +741,7 @@ if (typeof require === 'function') {
       label: 'Waiting',
       sortLabel: 'Longest waiting',
       filter: true,
-      values: globalThis.bghsa.order.TIER_NAMES.map(sentenceCase),
+      values: globalThis.bghsa.order.WAITING_STATES.map(sentenceCase),
       valuesOf: waitingValuesOf,
       compare: (a, b) =>
         globalThis.bghsa.order.compareNumber(instantOf(a.waitingSince), instantOf(b.waitingSince)),

@@ -1897,13 +1897,18 @@ test('every sort key orders by the value it names', () => {
 test('returning to the default order undoes a sort and a filter', () => {
   const rows = [
     sortRow('A', { read: true, triage: 'awaiting reporter', waitingSince: '2026-08-20T00:00:00Z' }),
-    sortRow('B', { read: true, neverReviewed: true, waitingSince: '2026-08-24T00:00:00Z' }),
+    sortRow('B', {
+      read: true,
+      neverReviewed: true,
+      triage: 'awaiting reporter',
+      waitingSince: '2026-08-24T00:00:00Z',
+    }),
     sortRow('C', { read: true, triage: 'evaluating', waitingSince: '2026-08-22T00:00:00Z' }),
   ];
   const picked = viewOrder(rows, 'title', { waiting: 'Blocked on us' });
   assert.ok(picked === 'C', `a sort and a filter together: ${picked}`);
   const back = table.applyView(rows, table.defaultViewState()).map((row) => row.ghsaId).join(' ');
-  assert.ok(back === 'B C A', `the default order after picking another: ${back}`);
+  assert.ok(back === 'C B A', `the default order after picking another: ${back}`);
 });
 
 test('a filter on a value some rows do not have keeps only those that do', () => {
@@ -2384,7 +2389,7 @@ test('a read landing leaves the sort and the filter a maintainer picked alone', 
   assert.ok(applied, 'no row was replaced');
 
   // The read turns the row into one the owner filter does not match and one the
-  // default order would put in another tier. It keeps its place and it keeps
+  // default order would put in another group. It keeps its place and it keeps
   // showing: the view a maintainer is reading is not rearranged under them.
   assert.ok(shownIds(doc) === `${ghsaId} GHSA-aaaa-aaaa-aaaa`, `after the read: ${shownIds(doc)}`);
   const row = /** @type {Element} */ (tableRows(doc)[0]);
@@ -2436,10 +2441,12 @@ test('a re-render keeps the view a maintainer picked', async () => {
   table.setViewState(doc, table.defaultViewState());
   /** @type {Record<string, unknown>} */
   const held = {
-    [keyFor(low)]: entryOf(storedDetail(low, 'Triage', 'Low'), 'triage'),
+    [keyFor(low)]: entryOf(storedDetail(low, 'Draft', 'Low'), 'triage'),
     [keyFor(high)]: entryOf(storedDetail(high, 'Triage', 'High'), 'triage'),
   };
   await render(doc, held);
+  // The default order leads with the draft, and the severity sort leads with
+  // the high, so the two disagree and a picked sort is visible.
   assert.ok(shownIds(doc) === `${low} ${high}`, `the default order: ${shownIds(doc)}`);
 
   choose(one(doc, `#${table.ROOT_ID} .bghsa-list-sort`), 'severity');
