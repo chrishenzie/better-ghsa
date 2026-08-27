@@ -64,6 +64,37 @@ if (typeof require === 'function') {
  *   advisory title and the advisory description.
  * @property {string | null} cve What the CVE chip reads, and null where the
  *   advisory has no CVE state to show.
+ * @property {import('../common/derive.js').CveState['state'] | null} cveState
+ *   Which CVE state the advisory is in, and null while nothing has been read.
+ *   The chip carries the identifier once one is assigned, so the state is held
+ *   beside it for the control that filters on it.
+ */
+
+/**
+ * One value the table holds about an advisory, as the controls read it.
+ *
+ * @typedef {object} Facet
+ * @property {string} key What the control stores.
+ * @property {string} label What the filter control reads while it is holding the
+ *   table to nothing.
+ * @property {string} [sortLabel] What the sort control reads for this facet,
+ *   where the label on its own would not say which way the rows go.
+ * @property {boolean} [filter] Whether the facet enumerates, so a filter can
+ *   offer its values. A facet over a time or a title does not.
+ * @property {readonly string[]} [values] The order its values belong in, for the
+ *   ones this reader knows. Anything else follows them alphabetically.
+ * @property {(row: TableRow) => string[]} valuesOf What this row holds for the
+ *   facet. Empty where it holds nothing, which a read can still fill in.
+ * @property {(a: TableRow, b: TableRow) => number} compare
+ */
+
+/**
+ * The view a maintainer chose over the rows the table holds.
+ *
+ * @typedef {object} ViewState
+ * @property {string} sort A facet key, or the key of the default order.
+ * @property {Record<string, string>} filters What each filter is holding the
+ *   table to, by facet key. A facet with no entry is holding it to nothing.
  */
 
 /**
@@ -128,6 +159,7 @@ if (typeof require === 'function') {
     '.bghsa-list-owners { display: flex; flex-wrap: wrap; gap: 2px; align-items: center; }',
     '.bghsa-list-observed { color: var(--fgColor-muted); white-space: nowrap; }',
     '.bghsa-list-meta { color: var(--fgColor-muted); }',
+    '.bghsa-list-empty { color: var(--fgColor-muted); }',
     '.bghsa-tone-attention { color: var(--fgColor-default);' +
       ' background-color: var(--bgColor-attention);' +
       ' border-color: var(--bgColor-attention); }',
@@ -135,6 +167,18 @@ if (typeof require === 'function') {
       ' background-color: var(--bgColor-danger);' +
       ' border-color: var(--bgColor-danger); }',
   ].join('\n');
+
+  /** What the sort control reads while the table is in its default order. */
+  const DEFAULT_SORT_LABEL = 'Default order';
+
+  /** What the control that goes back to the default order reads. */
+  const RESET_LABEL = 'Reset';
+
+  /** What stands in the table where a filter keeps no row. */
+  const EMPTY_TEXT = 'No advisory matches the filter';
+
+  /** What names the facet one filter control holds the table to. */
+  const FACET_ATTRIBUTE = 'data-bghsa-facet';
 
   /** What the toggle reads while the extension's table is showing. */
   const SHOW_GITHUB = "Show GitHub's view";
@@ -445,6 +489,7 @@ if (typeof require === 'function') {
       backportsDone: 0,
       textConfirmed: false,
       cve: null,
+      cveState: null,
     };
   }
 
@@ -493,6 +538,7 @@ if (typeof require === 'function') {
       textConfirmed:
         tracking.title.status === 'confirmed' && tracking.description.status === 'confirmed',
       cve: cveTextOf(derived.cve),
+      cveState: derived.cve.state,
     };
   }
 
@@ -631,6 +677,380 @@ if (typeof require === 'function') {
     }
 
     return chips;
+  }
+
+  /**
+   * What a filter offers for a row that holds no value for its facet.
+   */
+  const NO_VALUE = 'None';
+
+  /**
+   * The sort key of the default order. It is the tiering in REQUIREMENTS.md
+   * section 9, which is what the table shows until a maintainer picks another
+   * value to order by, and what the sort control comes back to.
+   */
+  const DEFAULT_SORT = 'default';
+
+  /**
+   * The last tie-break under every sort, so that no order depends on the order
+   * the rows arrived in. It is `order.byId`, reached through the comparator
+   * that file holds, so the two sorts settle a row whose identifier went unread
+   * the same way: below every row whose identifier is known.
+   *
+   * @param {TableRow} a
+   * @param {TableRow} b
+   * @returns {number}
+   */
+  function byGhsaId(a, b) {
+    return globalThis.bghsa.order.compareText(a.ghsaId, b.ghsaId);
+  }
+
+  /**
+   * @param {TableRow} row
+   * @param {boolean} confirmed
+   * @returns {number} the severity's rank where its confirmation is the one
+   *   asked for, and 0 where it is not. This is the two-key rule the default
+   *   order uses: every severity a maintainer confirmed ranks above every
+   *   severity nobody has confirmed.
+   */
+  function severityScore(row, confirmed) {
+    if (row.severityConfirmed !== confirmed) return 0;
+    return globalThis.bghsa.order.severityRank(row.severity);
+  }
+
+  /**
+   * @param {TableRow} row
+   * @returns {number} how far the advisory's CVE has come, highest first.
+   */
+  function cveRank(row) {
+    if (row.cveState === 'assigned') return 3;
+    if (row.cveState === 'requested') return 2;
+    if (row.cveState === 'not applicable') return 1;
+    return 0;
+  }
+
+  /**
+   * @param {TableRow} row
+   * @returns {number} how pressing the embargo is, highest first.
+   */
+  function embargoRank(row) {
+    if (row.embargoOverdue) return 2;
+    return row.embargo ? 1 : 0;
+  }
+
+  /**
+   * @param {TableRow} row
+   * @returns {string[]} which of the two tracks a maintainer confirmed.
+   */
+  function confirmedValuesOf(row) {
+    /** @type {string[]} */
+    const held = [];
+    if (row.textConfirmed) held.push('Text');
+    if (row.severityConfirmed) held.push('Scoring');
+    return held;
+  }
+
+  /**
+   * @param {TableRow} row
+   * @returns {string[]} where the branches a maintainer asked for stand, and
+   *   nothing for an advisory nobody asked for a backport on.
+   */
+  function backportValuesOf(row) {
+    if (row.backportTargets === 0) return [];
+    return [row.backportsDone >= row.backportTargets ? 'Complete' : 'Outstanding'];
+  }
+
+  /**
+   * @param {TableRow} row
+   * @returns {string[]} the patch state without the word the chip repeats.
+   */
+  function patchValuesOf(row) {
+    if (row.patch === null) return [];
+    return [sentenceCase(row.patch.replace(/^Patch /, ''))];
+  }
+
+  /**
+   * @param {TableRow} row
+   * @returns {string[]} which side the advisory is waiting on, and nothing while
+   *   nothing has been read: the tier is what an advisory read says, and a row
+   *   the extension has not reached yet holds no answer either way.
+   */
+  function waitingValuesOf(row) {
+    if (!row.read) return [];
+    const order = globalThis.bghsa.order;
+    return [sentenceCase(order.tierName(order.tierOf(row)))];
+  }
+
+  /**
+   * Every value a row holds, as the sort control and the filter controls read
+   * it. A facet's sort puts what a maintainer is looking for at the top: the
+   * longest waiting, the highest severity, the most pressing embargo, the
+   * stalest read.
+   *
+   * @type {readonly Facet[]}
+   */
+  const FACETS = [
+    {
+      key: 'waiting',
+      label: 'Waiting',
+      sortLabel: 'Longest waiting',
+      filter: true,
+      values: globalThis.bghsa.order.TIER_NAMES.map(sentenceCase),
+      valuesOf: waitingValuesOf,
+      compare: (a, b) =>
+        globalThis.bghsa.order.compareNumber(instantOf(a.waitingSince), instantOf(b.waitingSince)),
+    },
+    {
+      key: 'severity',
+      label: 'Severity',
+      sortLabel: 'Highest severity',
+      filter: true,
+      values: ['Critical', 'High', 'Moderate', 'Low'],
+      valuesOf: (row) => (row.severityLabel === null ? [] : [sentenceCase(row.severityLabel)]),
+      compare: (a, b) =>
+        severityScore(b, true) - severityScore(a, true) ||
+        severityScore(b, false) - severityScore(a, false),
+    },
+    {
+      key: 'owner',
+      label: 'Owner',
+      filter: true,
+      valuesOf: (row) => row.owners.slice(),
+      compare: (a, b) => compareText(a.owners[0] ?? null, b.owners[0] ?? null),
+    },
+    {
+      key: 'reporter',
+      label: 'Reporter',
+      filter: true,
+      valuesOf: (row) => (row.reporter === null ? [] : [row.reporter]),
+      compare: (a, b) => compareText(a.reporter, b.reporter),
+    },
+    {
+      key: 'state',
+      label: 'State',
+      filter: true,
+      valuesOf: (row) => (row.state === null ? [] : [row.state]),
+      compare: (a, b) => compareText(a.state, b.state),
+    },
+    {
+      key: 'patch',
+      label: 'Patch',
+      filter: true,
+      values: ['In review', 'Merged', 'Closed'],
+      valuesOf: patchValuesOf,
+      compare: (a, b) => compareText(a.patch, b.patch),
+    },
+    {
+      key: 'backports',
+      label: 'Backports',
+      filter: true,
+      values: ['Outstanding', 'Complete'],
+      valuesOf: backportValuesOf,
+      compare: (a, b) =>
+        b.backportTargets - b.backportsDone - (a.backportTargets - a.backportsDone),
+    },
+    {
+      key: 'cve',
+      label: 'CVE',
+      filter: true,
+      values: ['Assigned', 'Requested', 'Not applicable'],
+      valuesOf: (row) =>
+        row.cveState === null || row.cveState === 'none' ? [] : [sentenceCase(row.cveState)],
+      compare: (a, b) => cveRank(b) - cveRank(a),
+    },
+    {
+      key: 'embargo',
+      label: 'Embargo',
+      filter: true,
+      values: ['Overdue', 'Set'],
+      valuesOf: (row) => (row.embargoOverdue ? ['Set', 'Overdue'] : row.embargo ? ['Set'] : []),
+      compare: (a, b) => embargoRank(b) - embargoRank(a),
+    },
+    {
+      key: 'confirmed',
+      label: 'Confirmed',
+      filter: true,
+      values: ['Text', 'Scoring'],
+      valuesOf: confirmedValuesOf,
+      compare: (a, b) => confirmedValuesOf(b).length - confirmedValuesOf(a).length,
+    },
+    {
+      key: 'opened',
+      label: 'Opened',
+      sortLabel: 'Oldest opened',
+      valuesOf: () => [],
+      compare: (a, b) => compareNumber(instantOf(a.openedAt), instantOf(b.openedAt)),
+    },
+    {
+      key: 'observed',
+      label: 'Observed',
+      sortLabel: 'Stalest observed',
+      valuesOf: () => [],
+      compare: (a, b) => compareNumber(instantOf(a.observedAt), instantOf(b.observedAt)),
+    },
+    {
+      key: 'title',
+      label: 'Title',
+      valuesOf: () => [],
+      compare: (a, b) => compareText(a.title, b.title),
+    },
+  ];
+
+  /**
+   * @param {string} key
+   * @returns {Facet | null} the facet that key names, and null for a key this
+   *   reader does not know.
+   */
+  function facetFor(key) {
+    return FACETS.find((facet) => facet.key === key) ?? null;
+  }
+
+  /**
+   * @param {Facet} facet
+   * @returns {string} what the sort control reads for it.
+   */
+  function sortLabelOf(facet) {
+    return facet.sortLabel ?? facet.label;
+  }
+
+  /**
+   * @returns {ViewState} the view the table comes up in and the view the reset
+   *   goes back to: the default order, filtering nothing.
+   */
+  function defaultViewState() {
+    return { sort: DEFAULT_SORT, filters: {} };
+  }
+
+  /**
+   * Whether one row passes one filter.
+   *
+   * A row no advisory read backs holds less than one a read does, and a filter
+   * does not hide a row over a value nobody has looked up yet: such a row passes
+   * every filter over a facet a read supplies, and drops out of the ones it
+   * turns out not to match once its read lands. A row a read does back and that
+   * holds nothing for the facet passes only {@link NO_VALUE}.
+   *
+   * @param {Facet} facet
+   * @param {TableRow} row
+   * @param {string} wanted
+   * @returns {boolean}
+   */
+  function matchesFilter(facet, row, wanted) {
+    const held = facet.valuesOf(row);
+    if (held.length === 0) return row.read ? wanted === NO_VALUE : true;
+    return held.includes(wanted);
+  }
+
+  /**
+   * @param {TableRow} row
+   * @param {ViewState} state
+   * @returns {boolean} whether every filter the view is holding keeps this row.
+   */
+  function matchesView(row, state) {
+    for (const [key, wanted] of Object.entries(state.filters)) {
+      if (wanted === '') continue;
+      const facet = facetFor(key);
+      if (facet === null) continue;
+      if (!matchesFilter(facet, row, wanted)) return false;
+    }
+    return true;
+  }
+
+  /**
+   * The comparator one sort runs: the facet's own, and then the identifier, so
+   * that no sort depends on the order the rows arrived in.
+   *
+   * @param {string} key
+   * @returns {((a: TableRow, b: TableRow) => number) | null} null for the
+   *   default order, and for a key this reader does not know, both of which
+   *   `order.compare` settles.
+   */
+  function sortFor(key) {
+    const facet = key === DEFAULT_SORT ? null : facetFor(key);
+    if (facet === null) return null;
+    return (a, b) => facet.compare(a, b) || byGhsaId(a, b);
+  }
+
+  /**
+   * The view each document is showing. It is held here rather than read off the
+   * controls, because a pass takes the table out and puts a new one back, and a
+   * maintainer's chosen view has to survive that.
+   *
+   * @type {WeakMap<Document, ViewState>}
+   */
+  const viewStates = new WeakMap();
+
+  /**
+   * @param {Document} doc
+   * @returns {ViewState} the view that document is showing, which is the default
+   *   until a control says otherwise.
+   */
+  function viewStateOf(doc) {
+    return viewStates.get(doc) ?? defaultViewState();
+  }
+
+  /**
+   * @param {Document} doc
+   * @param {ViewState} state
+   * @returns {void}
+   */
+  function setViewState(doc, state) {
+    viewStates.set(doc, state);
+  }
+
+  /**
+   * The rows a view shows, in the order it puts them in.
+   *
+   * This is a view over what the table already holds. Nothing is read again and
+   * nothing is fetched: filtering and sorting move rows the extension has, and a
+   * row it has not read yet is still a row.
+   *
+   * A sort key this reader does not know leaves the default order, so a view
+   * carrying one shows the table as it stands rather than showing nothing.
+   *
+   * @param {readonly TableRow[]} rows
+   * @param {ViewState} state
+   * @returns {TableRow[]}
+   */
+  function applyView(rows, state) {
+    const kept = rows.filter((row) => matchesView(row, state));
+    const compare = sortFor(state.sort);
+    return compare === null ? globalThis.bghsa.order.sort(kept) : kept.sort(compare);
+  }
+
+  /**
+   * The values one filter offers: what the rows hold for that facet, followed by
+   * {@link NO_VALUE} where a row a read backs holds none.
+   *
+   * A value the filter is already holding to stays on offer even after the last
+   * row carrying it leaves, so a read landing cannot take the control out from
+   * under the view a maintainer is looking at.
+   *
+   * @param {readonly TableRow[]} rows
+   * @param {Facet} facet
+   * @param {string} selected What the filter is holding to, and the empty string
+   *   for one holding to nothing.
+   * @returns {string[]}
+   */
+  function filterOptions(rows, facet, selected) {
+    /** @type {Set<string>} */
+    const held = new Set();
+    let absent = false;
+    for (const row of rows) {
+      const values = facet.valuesOf(row);
+      if (values.length === 0) absent = absent || row.read;
+      for (const value of values) held.add(value);
+    }
+    const known = facet.values ?? [];
+    const offered = [...held].sort((a, b) => {
+      const left = known.indexOf(a);
+      const right = known.indexOf(b);
+      if (left !== right) return (left === -1 ? known.length : left) - (right === -1 ? known.length : right);
+      return globalThis.bghsa.order.compareText(a, b);
+    });
+    if (absent) offered.push(NO_VALUE);
+    if (selected !== '' && !offered.includes(selected)) offered.push(selected);
+    return offered;
   }
 
   /**
@@ -778,19 +1198,215 @@ if (typeof require === 'function') {
   }
 
   /**
-   * The extension's surface: a bar carrying the toggle, which is visible in
-   * either view, and the table, which the toggle holds out of view.
+   * @param {Element} field
+   * @returns {string} what a control holds. The live property is read where the
+   *   host offers one, because that is what the maintainer picked.
+   */
+  function controlValue(field) {
+    const live = /** @type {{ value?: unknown }} */ (/** @type {unknown} */ (field)).value;
+    return typeof live === 'string' ? live : (field.getAttribute('value') ?? '');
+  }
+
+  /**
+   * @param {Document} doc
+   * @param {string} value
+   * @param {string} label
+   * @param {string} selected
+   * @returns {Element}
+   */
+  function option(doc, value, label, selected) {
+    const node = element(doc, 'option', '', label);
+    node.setAttribute('value', value);
+    if (value === selected) node.setAttribute('selected', '');
+    return node;
+  }
+
+  /**
+   * @param {Document} doc
+   * @param {Facet} facet
+   * @param {readonly TableRow[]} rows
+   * @param {string} selected
+   * @returns {Element[]} what one filter offers: the facet's own label for a
+   *   filter holding the table to nothing, then the values the rows hold.
+   */
+  function filterOptionNodes(doc, facet, rows, selected) {
+    const nodes = [option(doc, '', facet.label, selected)];
+    for (const value of filterOptions(rows, facet, selected)) {
+      nodes.push(option(doc, value, value, selected));
+    }
+    return nodes;
+  }
+
+  /**
+   * The controls the table carries: what the rows are ordered by, what each
+   * value is holding the table to, and the way back to the default.
+   *
+   * They take the place GitHub's segmented control and query form are held out
+   * of, and they carry none of the classes `parse-list` keys on.
+   *
+   * The default order is not one sort among others. It is the tiering in
+   * REQUIREMENTS.md section 9, it is what the sort control comes up on, and the
+   * reset is what gets back to it along with everything the filters are holding.
+   *
+   * @param {Document} doc
+   * @param {readonly TableRow[]} rows What the table holds, which is what the
+   *   filters offer the values of.
+   * @param {ViewState} state
+   * @returns {Element}
+   */
+  function buildControls(doc, rows, state) {
+    const box = element(doc, 'div', 'd-flex flex-wrap flex-items-center bghsa-list-controls');
+
+    const sort = element(doc, 'select', 'form-select select-sm mr-2 mb-1 bghsa-list-sort');
+    sort.setAttribute('aria-label', 'Sort');
+    sort.append(option(doc, DEFAULT_SORT, DEFAULT_SORT_LABEL, state.sort));
+    for (const facet of FACETS) sort.append(option(doc, facet.key, sortLabelOf(facet), state.sort));
+    sort.addEventListener('change', () => {
+      setViewState(doc, { ...viewStateOf(doc), sort: controlValue(sort) });
+      refreshBody(doc);
+    });
+    box.append(sort);
+
+    for (const facet of FACETS) {
+      if (facet.filter !== true) continue;
+      const selected = state.filters[facet.key] ?? '';
+      const control = element(doc, 'select', 'form-select select-sm mr-2 mb-1 bghsa-list-filter');
+      control.setAttribute('aria-label', facet.label);
+      control.setAttribute(FACET_ATTRIBUTE, facet.key);
+      control.append(...filterOptionNodes(doc, facet, rows, selected));
+      control.addEventListener('change', () => {
+        const held = viewStateOf(doc);
+        const filters = { ...held.filters, [facet.key]: controlValue(control) };
+        setViewState(doc, { ...held, filters });
+        refreshBody(doc);
+      });
+      box.append(control);
+    }
+
+    const reset = element(doc, 'button', 'btn btn-sm mb-1 bghsa-list-reset', RESET_LABEL);
+    reset.setAttribute('type', 'button');
+    reset.addEventListener('click', () => {
+      setViewState(doc, defaultViewState());
+      resetControls(doc);
+      refreshBody(doc);
+    });
+    box.append(reset);
+    return box;
+  }
+
+  /**
+   * @param {Document} doc
+   * @returns {void} draws the controls again from the view the document is now
+   *   showing, which is what puts every one of them back on its blank option.
+   */
+  function resetControls(doc) {
+    const root = doc.getElementById(ROOT_ID);
+    const view = views.get(doc);
+    if (root === null || view === undefined) return;
+    const held = root.querySelector('.bghsa-list-controls');
+    if (held === null) return;
+    held.replaceWith(buildControls(doc, view.rows, viewStateOf(doc)));
+  }
+
+  /**
+   * Puts the values the table now holds on offer, leaving what every filter is
+   * holding to alone. A read landing can turn up an owner or a patch state no
+   * row carried before, and the control offers it from then on.
+   *
+   * @param {Document} doc
+   * @returns {void}
+   */
+  function syncFilterOptions(doc) {
+    const root = doc.getElementById(ROOT_ID);
+    const view = views.get(doc);
+    if (root === null || view === undefined) return;
+    for (const control of root.querySelectorAll(`[${FACET_ATTRIBUTE}]`)) {
+      const facet = facetFor(control.getAttribute(FACET_ATTRIBUTE) ?? '');
+      if (facet === null) continue;
+      const selected = controlValue(control);
+      const wanted = filterOptionNodes(doc, facet, view.rows, selected);
+      const held = [...control.querySelectorAll('option')];
+      const same =
+        held.length === wanted.length &&
+        held.every((each, at) => each.getAttribute('value') === wanted[at]?.getAttribute('value'));
+      if (same) continue;
+      while (control.firstChild !== null) control.removeChild(control.firstChild);
+      control.append(...wanted);
+    }
+  }
+
+  /**
+   * @param {number} shown
+   * @param {number} held
+   * @returns {string} what the header says is showing, which names both counts
+   *   while a filter is keeping rows out.
+   */
+  function viewCountText(shown, held) {
+    return shown === held ? countTextOf(held) : `${shown} of ${countTextOf(held)}`;
+  }
+
+  /**
+   * The rows the table shows. A filter that keeps nothing says so, so that a
+   * table holding rows a filter is hiding does not read as a broken one.
+   *
+   * @param {Document} doc
+   * @param {readonly TableRow[]} shown
+   * @param {number} held How many rows the table holds.
+   * @returns {Element}
+   */
+  function buildBody(doc, shown, held) {
+    const list = element(doc, 'ul', 'bghsa-list-rows');
+    if (shown.length === 0 && held > 0) {
+      list.append(element(doc, 'li', 'Box-row bghsa-list-empty', EMPTY_TEXT));
+      return list;
+    }
+    for (const row of shown) list.append(buildRow(doc, row));
+    return list;
+  }
+
+  /**
+   * Draws the rows again under the view the document is showing. The controls
+   * are left as they are, so changing one does not take the focus off it.
+   *
+   * @param {Document} doc
+   * @returns {void}
+   */
+  function refreshBody(doc) {
+    const root = doc.getElementById(ROOT_ID);
+    const view = views.get(doc);
+    if (root === null || view === undefined) return;
+    const box = root.querySelector('.bghsa-list-box');
+    if (box === null) return;
+    const shown = applyView(view.rows, viewStateOf(doc));
+    const count = root.querySelector('.bghsa-list-count');
+    if (count !== null) count.textContent = viewCountText(shown.length, view.rows.length);
+    const body = buildBody(doc, shown, view.rows.length);
+    const held = root.querySelector('.bghsa-list-rows');
+    if (held === null) box.append(body);
+    else held.replaceWith(body);
+  }
+
+  /**
+   * The extension's surface: a bar carrying the controls and the toggle, which
+   * is visible in either view, and the table, which the toggle holds out of
+   * view along with the controls that act on it.
    *
    * @param {Document} doc
    * @param {TableView} view
    * @returns {Element}
    */
   function buildTable(doc, view) {
+    const state = viewStateOf(doc);
     const root = element(doc, 'div', 'bghsa-list-root');
     root.id = ROOT_ID;
     root.setAttribute('data-bghsa-list', '1');
 
-    const bar = element(doc, 'div', 'd-flex flex-items-center flex-justify-end mb-2 bghsa-list-bar');
+    const bar = element(
+      doc,
+      'div',
+      'd-flex flex-wrap flex-items-center flex-justify-between mb-2 bghsa-list-bar'
+    );
+    bar.append(buildControls(doc, view.rows, state));
     const toggle = element(doc, 'button', 'btn btn-sm bghsa-list-toggle', SHOW_GITHUB);
     toggle.setAttribute('type', 'button');
     toggle.addEventListener('click', () => {
@@ -807,12 +1423,17 @@ if (typeof require === 'function') {
       'Box-header d-flex flex-items-center flex-justify-between bghsa-list-header'
     );
     header.append(element(doc, 'strong', '', 'Better GHSA'));
-    header.append(element(doc, 'span', 'text-normal', countTextOf(view.rows.length)));
+    const shown = applyView(view.rows, state);
+    header.append(
+      element(
+        doc,
+        'span',
+        'text-normal bghsa-list-count',
+        viewCountText(shown.length, view.rows.length)
+      )
+    );
     box.append(header);
-
-    const list = element(doc, 'ul', 'bghsa-list-rows');
-    for (const row of view.rows) list.append(buildRow(doc, row));
-    box.append(list);
+    box.append(buildBody(doc, shown, view.rows.length));
     root.append(box);
     return root;
   }
@@ -895,6 +1516,9 @@ if (typeof require === 'function') {
     if (root === null) return;
     const box = root.querySelector('.bghsa-list-box');
     if (box !== null) setHidden(box, native);
+    // The controls act on the extension's table, so they go out of view with it.
+    const controls = root.querySelector('.bghsa-list-controls');
+    if (controls !== null) setHidden(controls, native);
     const toggle = root.querySelector('.bghsa-list-toggle');
     if (toggle !== null) toggle.textContent = native ? SHOW_TABLE : SHOW_GITHUB;
   }
@@ -929,15 +1553,17 @@ if (typeof require === 'function') {
   }
 
   /**
-   * Places the table. Placement is keyed on the sentinel element, so injecting
-   * twice leaves one table and re-injecting after GitHub replaced the subtree
-   * puts one back.
+   * Places the table, and holds the view it drew, which is what a read landing
+   * and a control changing draw from afterwards. Placement is keyed on the
+   * sentinel element, so injecting twice leaves one table and re-injecting after
+   * GitHub replaced the subtree puts one back.
    *
    * @param {Document} doc
    * @param {TableView} view
    * @returns {Element | null} the table, or null when the page offers no anchor.
    */
   function injectTable(doc, view) {
+    views.set(doc, view);
     const root = buildTable(doc, view);
     const existing = doc.getElementById(ROOT_ID);
     const place = anchor(doc);
@@ -970,12 +1596,13 @@ if (typeof require === 'function') {
   }
 
   /**
-   * What the last render of each document read from the list markup, by GHSA
-   * identifier. A read landing afterwards rebuilds one row from it.
+   * What the last render of each document assembled. A read landing afterwards
+   * rebuilds one row from it, and a control changing draws the rows again from
+   * it, so neither goes back to storage or to the page.
    *
-   * @type {WeakMap<Document, Map<string, import('../common/parse-list.js').ListRow>>}
+   * @type {WeakMap<Document, TableView>}
    */
-  const sources = new WeakMap();
+  const views = new WeakMap();
 
   /**
    * Reads the page and places the table. Returns null when the document is not
@@ -989,7 +1616,6 @@ if (typeof require === 'function') {
     const parsed = globalThis.bghsa.parseList.parseList(doc);
     if (parsed === null) return null;
     const view = await readView(parsed, options);
-    sources.set(doc, view.sources);
     return injectTable(doc, view);
   }
 
@@ -1014,22 +1640,33 @@ if (typeof require === 'function') {
    * the table is left alone: a pass reads one advisory a second, and rebuilding
    * every row for each of them would throw away what the reader was looking at.
    *
-   * The row keeps its place. Its tier can change when a read lands, and the
-   * order is settled by the render that follows the pass.
+   * The row keeps its place and it keeps showing. A read can change the tier the
+   * row sorts in and it can turn up a value the filter that is holding the table
+   * does not match, and neither moves the row nor takes it away: the sort and the
+   * filter a maintainer picked are settled by the render that follows the pass,
+   * so a view is not rearranged under whoever is reading it. The values the
+   * filters offer take the read in at once, because a control is not a place to
+   * be reading a value the table no longer holds.
    *
    * @param {Document} doc
    * @param {string} ghsaId
    * @param {import('../common/cache.js').CacheEntry} entry
    * @param {ViewOptions} [options]
    * @returns {Promise<boolean>} whether a row was replaced. An advisory the
-   *   table is not showing has none.
+   *   table is not showing has none, and neither has one a filter is holding out
+   *   of view, whose row the table still takes in.
    */
   async function applyEntry(doc, ghsaId, entry, options = {}) {
-    const source = sources.get(doc)?.get(ghsaId);
-    if (source === undefined) return false;
+    const view = views.get(doc);
+    const source = view?.sources.get(ghsaId);
+    if (view === undefined || source === undefined) return false;
+    const row = await viewRow(source, entry, options.at ?? globalThis.bghsa.cache.now());
+    const at = view.rows.findIndex((held) => held.ghsaId === ghsaId);
+    if (at === -1) view.rows.push(row);
+    else view.rows[at] = row;
+    syncFilterOptions(doc);
     const item = rowNode(doc, ghsaId);
     if (item === null) return false;
-    const row = await viewRow(source, entry, options.at ?? globalThis.bghsa.cache.now());
     item.replaceWith(buildRow(doc, row));
     return true;
   }
@@ -1072,6 +1709,18 @@ if (typeof require === 'function') {
       }
       ensureRefresh(doc);
     };
+  }
+
+  /**
+   * @param {Document} doc
+   * @returns {{ owner: string, repo: string } | null} the repository the page
+   *   names, and null where it names none. It is the reading the last render
+   *   took, so asking costs no second parse of the page.
+   */
+  function refOf(doc) {
+    const parsed = pageOf(doc);
+    if (parsed === null || parsed.owner === null || parsed.repo === null) return null;
+    return { owner: parsed.owner, repo: parsed.repo };
   }
 
   /**
@@ -1273,18 +1922,6 @@ if (typeof require === 'function') {
   }
 
   /**
-   * @param {Document} doc
-   * @returns {{ owner: string, repo: string } | null} the repository the page
-   *   names, and null where it names none. It is the reading the last render
-   *   took, so asking costs no second parse of the page.
-   */
-  function refOf(doc) {
-    const parsed = pageOf(doc);
-    if (parsed === null || parsed.owner === null || parsed.repo === null) return null;
-    return { owner: parsed.owner, repo: parsed.repo };
-  }
-
-  /**
    * @returns {void} renders the table into this page and keeps it there. The
    *   first pass and every pass the observer asks for run through one loop, so
    *   no two of them read and write the document together.
@@ -1318,6 +1955,28 @@ if (typeof require === 'function') {
     viewRow,
     readView,
     chipsFor,
+    NO_VALUE,
+    DEFAULT_SORT,
+    FACETS,
+    facetFor,
+    sortLabelOf,
+    defaultViewState,
+    matchesFilter,
+    matchesView,
+    sortFor,
+    applyView,
+    filterOptions,
+    DEFAULT_SORT_LABEL,
+    RESET_LABEL,
+    EMPTY_TEXT,
+    FACET_ATTRIBUTE,
+    viewStateOf,
+    setViewState,
+    viewCountText,
+    buildControls,
+    buildBody,
+    refreshBody,
+    syncFilterOptions,
     metaTextOf,
     countTextOf,
     buildOwners,

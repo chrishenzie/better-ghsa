@@ -9,6 +9,7 @@ const { parseHTML, DOMParser } = require('linkedom');
 const parseList = require('../src/common/parse-list.js');
 const parseDetail = require('../src/common/parse-detail.js');
 const cache = require('../src/common/cache.js');
+const order = require('../src/common/order.js');
 const table = require('../src/list/table.js');
 
 const { fakeStorage } = require('../test-support/storage.js');
@@ -583,16 +584,32 @@ function listHtml(page) {
  *
  * @param {string} ghsaId
  * @param {string} state
+ * @param {string} [severity]
  * @returns {string}
  */
-function detailHtml(ghsaId, state) {
+function detailHtml(ghsaId, state, severity = 'High') {
   return (
     '<!doctype html><html><body><div class="gh-header-meta">' +
     `<span class="State">${state}</span>` +
-    '<span class="Label Label--large" title="Severity: High">High</span>' +
+    `<span class="Label Label--large" title="Severity: ${severity}">${severity}</span>` +
     `<span class="user-select-contain">${ghsaId}</span>` +
     '</div></body></html>'
   );
+}
+
+/**
+ * @param {string} ghsaId
+ * @param {string} state
+ * @param {string} [severity]
+ * @returns {unknown} that advisory as the cache holds it.
+ */
+function storedDetail(ghsaId, state, severity) {
+  const doc = /** @type {Document} */ (
+    /** @type {unknown} */ (parseHTML(detailHtml(ghsaId, state, severity)).document)
+  );
+  const record = parseDetail.parseDetail(doc);
+  if (record === null) throw new Error(`${ghsaId} did not read as an advisory`);
+  return JSON.parse(JSON.stringify(record));
 }
 
 /**
@@ -793,4 +810,752 @@ test('one repository has one refresh queue', () => {
   assert.ok(spelled === first, 'another spelling of one repository made a second queue');
   const other = table.queueFor({ owner: 'crawl-two', repo: 'repo' });
   assert.ok(other !== first, 'two repositories shared one queue');
+});
+
+/**
+ * @param {string} ghsaId
+ * @param {Partial<import('../src/list/table.js').TableRow>} [changes]
+ * @returns {import('../src/list/table.js').TableRow} a row carrying the list
+ *   markup's defaults, with the values one case turns on.
+ */
+function sortRow(ghsaId, changes = {}) {
+  return { ...table.unreadRow(listRow(ghsaId, '2026-08-01T00:00:00Z'), AT), ...changes };
+}
+
+/**
+ * @param {readonly import('../src/list/table.js').TableRow[]} rows
+ * @param {string} sort
+ * @param {Record<string, string>} [filters]
+ * @returns {string} the identifiers the view shows, in the order it shows them.
+ */
+function viewOrder(rows, sort, filters = {}) {
+  return table
+    .applyView(rows, { sort, filters })
+    .map((row) => row.ghsaId ?? '')
+    .join(' ');
+}
+
+/**
+ * One sort key, and three rows it ranks C first, A second, B third.
+ *
+ * Every case is handed to the sort as A, B, C, and every case wants C, A, B. So
+ * neither the order the rows arrive in nor the order of their identifiers can
+ * stand in for the key under test: a comparator that ignored the key would
+ * answer A B C through the identifier tie-break and fail.
+ *
+ * @type {readonly { sort: string, what: string, rows: import('../src/list/table.js').TableRow[] }[]}
+ */
+const SORT_CASES = [
+  {
+    sort: 'waiting',
+    what: 'longest waiting first, and a wait that went unread last',
+    rows: [
+      sortRow('A', { waitingSince: '2026-08-20T00:00:00Z' }),
+      sortRow('B', { waitingSince: null }),
+      sortRow('C', { waitingSince: '2026-06-01T00:00:00Z' }),
+    ],
+  },
+  {
+    sort: 'severity',
+    what: 'every confirmed severity above every unconfirmed one',
+    rows: [
+      sortRow('A', { severity: 'critical', severityLabel: 'Critical' }),
+      sortRow('B', {}),
+      sortRow('C', { severity: 'low', severityLabel: 'Low', severityConfirmed: true }),
+    ],
+  },
+  {
+    sort: 'owner',
+    what: 'by owner, and an unowned advisory last',
+    rows: [
+      sortRow('A', { read: true, owners: ['zoe'] }),
+      sortRow('B', { read: true, owners: [] }),
+      sortRow('C', { read: true, owners: ['ada'] }),
+    ],
+  },
+  {
+    sort: 'reporter',
+    what: 'by reporter, and one nobody read last',
+    rows: [
+      sortRow('A', { reporter: 'zoe' }),
+      sortRow('B', { reporter: null }),
+      sortRow('C', { reporter: 'ada' }),
+    ],
+  },
+  {
+    sort: 'state',
+    what: 'by state, and one GitHub did not name last',
+    rows: [
+      sortRow('A', { state: 'Triage' }),
+      sortRow('B', { state: null }),
+      sortRow('C', { state: 'Draft' }),
+    ],
+  },
+  {
+    sort: 'patch',
+    what: 'by patch state, and an advisory with no patch last',
+    rows: [
+      sortRow('A', { read: true, patch: 'Patch in review' }),
+      sortRow('B', { read: true, patch: null }),
+      sortRow('C', { read: true, patch: 'Patch closed' }),
+    ],
+  },
+  {
+    sort: 'backports',
+    what: 'the most branches still outstanding first',
+    rows: [
+      sortRow('A', { read: true, backportTargets: 2, backportsDone: 1 }),
+      sortRow('B', { read: true, backportTargets: 0, backportsDone: 0 }),
+      sortRow('C', { read: true, backportTargets: 3, backportsDone: 0 }),
+    ],
+  },
+  {
+    sort: 'cve',
+    what: 'the furthest along CVE first',
+    rows: [
+      sortRow('A', { read: true, cveState: 'requested', cve: 'CVE requested' }),
+      sortRow('B', { read: true, cveState: 'none' }),
+      sortRow('C', { read: true, cveState: 'assigned', cve: 'CVE-2026-0001' }),
+    ],
+  },
+  {
+    sort: 'embargo',
+    what: 'an overdue embargo above one still running, above none',
+    rows: [
+      sortRow('A', { read: true, embargo: true, embargoLift: '2026-09-30' }),
+      sortRow('B', { read: true }),
+      sortRow('C', { read: true, embargo: true, embargoLift: '2026-01-01', embargoOverdue: true }),
+    ],
+  },
+  {
+    sort: 'confirmed',
+    what: 'the most tracks a maintainer confirmed first',
+    rows: [
+      sortRow('A', { read: true, severityConfirmed: true }),
+      sortRow('B', { read: true }),
+      sortRow('C', { read: true, textConfirmed: true, severityConfirmed: true }),
+    ],
+  },
+  {
+    sort: 'opened',
+    what: 'the oldest report first',
+    rows: [
+      sortRow('A', { openedAt: '2026-01-01T00:00:00Z' }),
+      sortRow('B', { openedAt: null }),
+      sortRow('C', { openedAt: '2020-01-01T00:00:00Z' }),
+    ],
+  },
+  {
+    sort: 'observed',
+    what: 'the stalest read first',
+    rows: [
+      sortRow('A', { observedAt: AT - 60 * MINUTE }),
+      sortRow('B', { observedAt: AT }),
+      sortRow('C', { observedAt: AT - 180 * MINUTE }),
+    ],
+  },
+  {
+    sort: 'title',
+    what: 'by title, and one GitHub did not name last',
+    rows: [
+      sortRow('A', { title: 'Zoe' }),
+      sortRow('B', { title: null }),
+      sortRow('C', { title: 'Ada' }),
+    ],
+  },
+];
+
+test('every sort key orders by the value it names', () => {
+  const covered = SORT_CASES.map((each) => each.sort).sort();
+  const facets = table.FACETS.map((facet) => facet.key).sort();
+  assert.deepStrictEqual(covered, facets, 'a facet with no case');
+
+  for (const each of SORT_CASES) {
+    const got = viewOrder(each.rows, each.sort);
+    assert.ok(got === 'C A B', `${each.sort}, ${each.what}: ${got}`);
+  }
+});
+
+test('returning to the default order undoes a sort and a filter', () => {
+  const rows = [
+    sortRow('A', { read: true, triage: 'awaiting reporter', waitingSince: '2026-08-20T00:00:00Z' }),
+    sortRow('B', { read: true, neverReviewed: true, waitingSince: '2026-08-24T00:00:00Z' }),
+    sortRow('C', { read: true, triage: 'evaluating', waitingSince: '2026-08-22T00:00:00Z' }),
+  ];
+  const picked = viewOrder(rows, 'title', { waiting: 'Blocked on us' });
+  assert.ok(picked === 'C', `a sort and a filter together: ${picked}`);
+  const back = table.applyView(rows, table.defaultViewState()).map((row) => row.ghsaId).join(' ');
+  assert.ok(back === 'B C A', `the default order after picking another: ${back}`);
+});
+
+test('a filter on a value some rows do not have keeps only those that do', () => {
+  const rows = [
+    sortRow('A', { read: true, severity: 'high', severityLabel: 'High' }),
+    sortRow('B', { read: true }),
+    sortRow('C', { read: true, severity: 'low', severityLabel: 'Low' }),
+  ];
+  const high = viewOrder(rows, 'title', { severity: 'High' });
+  assert.ok(high === 'A', `the rows carrying a high severity: ${high}`);
+  const none = viewOrder(rows, 'title', { severity: table.NO_VALUE });
+  assert.ok(none === 'B', `the rows a read left with no severity: ${none}`);
+});
+
+/**
+ * @param {string} key
+ * @returns {import('../src/list/table.js').Facet}
+ */
+function facet(key) {
+  const found = table.facetFor(key);
+  if (found === null) throw new Error(`no facet named ${key}`);
+  return found;
+}
+
+test('a filter offers the values the rows hold, in the order they belong in', () => {
+  // Alphabetically these read Critical, High, Low, Moderate, so an option list
+  // in rank order is one the alphabet cannot produce.
+  const rows = [
+    sortRow('A', { read: true, severity: 'low', severityLabel: 'Low' }),
+    sortRow('B', { read: true, severity: 'critical', severityLabel: 'Critical' }),
+    sortRow('C', { read: true, severity: 'high', severityLabel: 'High' }),
+    sortRow('D', { read: true, severity: 'moderate', severityLabel: 'Moderate' }),
+  ];
+  const offered = table.filterOptions(rows, facet('severity'), '').join(' ');
+  assert.ok(
+    offered === 'Critical High Moderate Low',
+    `severity is offered by rank, not alphabetically: ${offered}`
+  );
+
+  const withNone = table.filterOptions([...rows, sortRow('E', { read: true })], facet('severity'), '');
+  assert.ok(
+    withNone.join(' ') === `Critical High Moderate Low ${table.NO_VALUE}`,
+    `a read row holding no severity: ${withNone.join(' ')}`
+  );
+
+  // A row nobody has read holds nothing, and that is not a value to offer.
+  const unread = table.filterOptions([...rows, sortRow('E')], facet('severity'), '');
+  assert.ok(unread.join(' ') === 'Critical High Moderate Low', `an unread row: ${unread.join(' ')}`);
+
+  // A login this reader has no rank for falls back to the alphabet.
+  const logins = [
+    sortRow('A', { read: true, owners: ['zoe'] }),
+    sortRow('B', { read: true, owners: ['ada'] }),
+  ];
+  const byName = table.filterOptions(logins, facet('owner'), '').join(' ');
+  assert.ok(byName === 'ada zoe', `owners are offered alphabetically: ${byName}`);
+});
+
+test('a value a filter is holding to stays on offer after the last row carrying it leaves', () => {
+  const rows = [sortRow('A', { read: true, owners: ['ada'] })];
+  const offered = table.filterOptions(rows, facet('owner'), 'zoe').join(' ');
+  assert.ok(offered === 'ada zoe', `the filtered value is still offered: ${offered}`);
+});
+
+/**
+ * Rows covering every branch of every facet's comparator. The identifier
+ * descends as the grid is built, so the order the rows arrive in and the order
+ * of their identifiers contradict each other.
+ *
+ * @returns {import('../src/list/table.js').TableRow[]}
+ */
+function viewGrid() {
+  const reads = [false, true];
+  const scores = [
+    { severity: null, severityLabel: null, severityConfirmed: false },
+    { severity: 'critical', severityLabel: 'Critical', severityConfirmed: false },
+    { severity: 'low', severityLabel: 'Low', severityConfirmed: true },
+  ];
+  const owners = [[], ['ada'], ['zoe', 'ada']];
+  const waits = [null, '2026-01-01T00:00:00Z', '2026-08-01T00:00:00Z', '2020-06-01T00:00:00Z'];
+  const states = ['Triage', 'Draft', null];
+  const reporters = ['prakleumas', 'zoe', null];
+  const patches = ['Patch in review', 'Patch merged', 'Patch closed', null];
+  const backports = [
+    { backportTargets: 0, backportsDone: 0 },
+    { backportTargets: 2, backportsDone: 0 },
+    { backportTargets: 2, backportsDone: 2 },
+  ];
+  /** @type {(import('../src/list/table.js').TableRow['cveState'])[]} */
+  const cves = ['assigned', 'requested', 'not applicable', 'none', null];
+  const embargoes = [
+    { embargo: false, embargoOverdue: false },
+    { embargo: true, embargoOverdue: false },
+    { embargo: true, embargoOverdue: true },
+  ];
+  const tiers = [
+    { neverReviewed: true, newActivity: false, triage: null },
+    { neverReviewed: false, newActivity: true, triage: null },
+    { neverReviewed: false, newActivity: false, triage: 'evaluating' },
+    { neverReviewed: false, newActivity: false, triage: 'awaiting reporter' },
+  ];
+  const titles = ['Ada', 'Zoe', null];
+  const opened = ['2020-01-01T00:00:00Z', '2026-01-01T00:00:00Z', null];
+
+  const size = 60;
+  /** @type {import('../src/list/table.js').TableRow[]} */
+  const rows = [];
+  for (let i = 0; i < size; i += 1) {
+    const at = /** @type {<T>(list: readonly T[]) => T} */ (
+      (list) => /** @type {any} */ (list[i % list.length])
+    );
+    rows.push(
+      sortRow(`GHSA-${String(size - i).padStart(4, '0')}`, {
+        read: at(reads),
+        owners: at(owners).slice(),
+        waitingSince: at(waits),
+        state: at(states),
+        reporter: at(reporters),
+        patch: at(patches),
+        cveState: at(cves),
+        title: at(titles),
+        openedAt: at(opened),
+        observedAt: AT - (i % 7) * MINUTE,
+        textConfirmed: i % 2 === 0,
+        ...at(scores),
+        ...at(backports),
+        ...at(embargoes),
+        ...at(tiers),
+      })
+    );
+  }
+  return rows;
+}
+
+/**
+ * @param {(a: import('../src/list/table.js').TableRow, b: import('../src/list/table.js').TableRow) => number} compare
+ * @param {readonly import('../src/list/table.js').TableRow[]} rows
+ * @param {string} what
+ */
+function isTotalOrder(compare, rows, what) {
+  for (const a of rows) {
+    assert.ok(compare(a, a) === 0, `${what}: ${a.ghsaId} against itself`);
+    for (const b of rows) {
+      const forward = Math.sign(compare(a, b));
+      const back = Math.sign(compare(b, a));
+      assert.ok(forward === -back, `${what}: ${a.ghsaId} and ${b.ghsaId} disagree on which comes first`);
+      if (a !== b) assert.ok(forward !== 0, `${what}: ${a.ghsaId} and ${b.ghsaId} are distinct but tie`);
+    }
+  }
+  for (const a of rows) {
+    for (const b of rows) {
+      if (compare(a, b) > 0) continue;
+      for (const c of rows) {
+        if (compare(b, c) > 0) continue;
+        assert.ok(
+          compare(a, c) <= 0,
+          `${what}: ${a.ghsaId} before ${b.ghsaId} before ${c.ghsaId} does not carry through`
+        );
+      }
+    }
+  }
+}
+
+test('every sort is a total order over a grid of the values it branches on', () => {
+  const rows = viewGrid();
+  assert.ok(rows.length === 60, `grid size: ${rows.length}`);
+  for (const each of table.FACETS) {
+    const compare = table.sortFor(each.key);
+    if (compare === null) throw new Error(`${each.key} runs no comparator`);
+    isTotalOrder(compare, rows, each.key);
+  }
+  assert.ok(table.sortFor(table.DEFAULT_SORT) === null, 'the default order is a sort key among others');
+});
+
+test('a sort does not depend on the order the rows arrived in', () => {
+  const rows = viewGrid();
+  let seed = 12345;
+  /** @returns {import('../src/list/table.js').TableRow[]} */
+  const shuffle = () => {
+    const shuffled = rows.slice();
+    for (let i = shuffled.length - 1; i > 0; i -= 1) {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+      const j = seed % (i + 1);
+      const swap = /** @type {import('../src/list/table.js').TableRow} */ (shuffled[i]);
+      shuffled[i] = /** @type {import('../src/list/table.js').TableRow} */ (shuffled[j]);
+      shuffled[j] = swap;
+    }
+    return shuffled;
+  };
+
+  for (const each of [...table.FACETS.map((facet) => facet.key), table.DEFAULT_SORT]) {
+    const wanted = viewOrder(rows, each);
+    for (let round = 0; round < 5; round += 1) {
+      const got = viewOrder(shuffle(), each);
+      assert.ok(got === wanted, `${each}, shuffle ${round}, differs from the order of the grid`);
+    }
+    assert.ok(viewOrder(table.applyView(rows, { sort: each, filters: {} }), each) === wanted,
+      `${each}: a second pass moved something`);
+  }
+});
+
+test('a row whose identifier went unread sorts last under every sort', () => {
+  // The identifier is the last tie-break on both paths: the default order runs
+  // `order.compare`, and every other sort ends in this file's own tie-break.
+  // The two read a null identifier the same way, so the row nobody can open is
+  // at the bottom either way.
+  const unread = sortRow('GHSA-aaaa-aaaa-aaaa', {
+    ghsaId: null,
+    waitingSince: '2026-08-01T00:00:00Z',
+  });
+  const known = sortRow('GHSA-aaaa-aaaa-aaaa', { waitingSince: '2026-08-01T00:00:00Z' });
+  const waiting = table.applyView([unread, known], { sort: 'waiting', filters: {} });
+  assert.ok(waiting[0] === known, 'the waiting sort put the unread identifier first');
+  const byDefault = table.applyView([unread, known], table.defaultViewState());
+  assert.ok(byDefault[0] === known, 'the default order put the unread identifier first');
+});
+
+test('sorting and filtering leave the rows the table holds alone', () => {
+  const rows = [sortRow('B', { read: true, title: 'Zoe' }), sortRow('A', { read: true, title: 'Ada' })];
+  table.applyView(rows, { sort: 'title', filters: { owner: table.NO_VALUE } });
+  assert.ok(rows[0]?.ghsaId === 'B', 'the array the table holds was reordered');
+  assert.ok(rows.length === 2, 'the array the table holds lost a row');
+});
+
+/**
+ * @param {import('../src/list/table.js').TableRow} row
+ * @returns {string} what each facet reads for one row, as one line.
+ */
+function facetLine(row) {
+  return table.FACETS.filter((each) => each.filter === true)
+    .map((each) => `${each.key}=${each.valuesOf(row).join('+')}`)
+    .join(' ');
+}
+
+test('every filter reads the fixture the cache holds', async () => {
+  const parsed = parseList.parseList(listPage('list-page-triage.html'));
+  if (parsed === null) throw new Error('the fixture is not a list page');
+  const source = parsed.rows[0];
+  if (source === undefined) throw new Error('the fixture carries no row');
+
+  const read = await table.viewRow(source, entryOf(TRIAGE_RECORD, 'triage'), AT);
+  assert.ok(
+    facetLine(read) ===
+      'waiting=Blocked on the reporter severity=High owner=samuelkarp reporter=prakleumas' +
+        ' state=Triage patch=In review backports=Outstanding cve= embargo=Set confirmed=',
+    `the facets of the cached triage read: ${facetLine(read)}`
+  );
+
+  // The same advisory before anything has been read holds what GitHub's row
+  // said and nothing a read supplies, so a filter over those facets keeps it.
+  const unread = table.unreadRow(source, AT);
+  assert.ok(
+    facetLine(unread) ===
+      'waiting= severity=High owner= reporter=prakleumas state=Triage patch= backports=' +
+        ' cve= embargo= confirmed=',
+    `the facets before a read: ${facetLine(unread)}`
+  );
+  for (const each of table.FACETS) {
+    if (each.filter !== true) continue;
+    const held = each.valuesOf(read);
+    const wanted = held[0] ?? table.NO_VALUE;
+    assert.ok(
+      table.matchesFilter(each, unread, wanted),
+      `${each.key}: a filter on ${wanted} hides the row before it is read`
+    );
+  }
+});
+
+/**
+ * @param {Element} node
+ * @returns {void} tells the control's handler that its value moved.
+ */
+function changed(node) {
+  const view = node.ownerDocument?.defaultView;
+  if (view === null || view === undefined) throw new Error('the document has no view');
+  node.dispatchEvent(new view.Event('change', { bubbles: true }));
+}
+
+/**
+ * Picks an option the way a maintainer does. The selection is the `selected`
+ * attribute here, which is what this document model reads a select's value
+ * from.
+ *
+ * @param {Element} select
+ * @param {string} value
+ * @returns {void}
+ */
+function choose(select, value) {
+  let found = false;
+  for (const option of select.querySelectorAll('option')) {
+    const held = option.getAttribute('value') ?? '';
+    if (held === value) {
+      option.setAttribute('selected', '');
+      found = true;
+    } else {
+      option.removeAttribute('selected');
+    }
+  }
+  if (!found) throw new Error(`the control offers no ${value === '' ? 'blank option' : value}`);
+  changed(select);
+}
+
+/**
+ * @param {Document} doc
+ * @param {string} facet
+ * @returns {Element} the control holding the table to one value of that facet.
+ */
+function filterIn(doc, facet) {
+  for (const control of doc.querySelectorAll(`#${table.ROOT_ID} [${table.FACET_ATTRIBUTE}]`)) {
+    if (control.getAttribute(table.FACET_ATTRIBUTE) === facet) return control;
+  }
+  throw new Error(`the table offers no ${facet} filter`);
+}
+
+/**
+ * @param {Element} select
+ * @returns {string} what the control offers, as one line.
+ */
+function optionsOf(select) {
+  return Array.from(select.querySelectorAll('option'))
+    .map((option) => option.textContent ?? '')
+    .join(' | ');
+}
+
+/**
+ * @param {Document} doc
+ * @returns {string} the identifiers the table is showing, in the order it shows
+ *   them.
+ */
+function shownIds(doc) {
+  return tableRows(doc)
+    .map((row) => row.getAttribute('data-bghsa-ghsa') ?? '')
+    .join(' ');
+}
+
+/**
+ * A table drawn over rows a test made up, placed on a real list page so it has
+ * the anchor the page offers.
+ *
+ * @param {readonly import('../src/list/table.js').TableRow[]} rows
+ * @returns {{ doc: Document, root: Element }}
+ */
+function tableOver(rows) {
+  const doc = listPage('list-page-triage.html');
+  cache.setStorage(fakeStorage());
+  table.setViewState(doc, table.defaultViewState());
+  /** @type {Map<string, import('../src/common/parse-list.js').ListRow>} */
+  const sources = new Map();
+  for (const row of rows) {
+    if (row.ghsaId !== null) sources.set(row.ghsaId, listRow(row.ghsaId, '2026-08-01T00:00:00Z'));
+  }
+  const root = table.injectTable(doc, { rows: rows.slice(), at: AT, sources });
+  if (root === null) throw new Error('the page offered no anchor');
+  return { doc, root };
+}
+
+test('the controls offer every value the table holds', async () => {
+  const doc = listPage('list-page-triage.html');
+  table.setViewState(doc, table.defaultViewState());
+  await render(doc, { [keyFor('GHSA-jmvx-2wfw-xfgj')]: entryOf(TRIAGE_RECORD, 'triage') });
+
+  const sort = one(doc, `#${table.ROOT_ID} .bghsa-list-sort`);
+  const offered = optionsOf(sort);
+  const wanted = [table.DEFAULT_SORT_LABEL, ...table.FACETS.map(table.sortLabelOf)].join(' | ');
+  assert.ok(offered === wanted, `the sort offers: ${offered}`);
+  assert.ok(
+    offered ===
+      'Default order | Longest waiting | Highest severity | Owner | Reporter | State |' +
+        ' Patch | Backports | CVE | Embargo | Confirmed | Oldest opened | Stalest observed | Title',
+    `the sort labels: ${offered}`
+  );
+
+  const filters = Array.from(doc.querySelectorAll(`#${table.ROOT_ID} [${table.FACET_ATTRIBUTE}]`))
+    .map((control) => control.getAttribute(table.FACET_ATTRIBUTE) ?? '')
+    .join(' ');
+  assert.ok(
+    filters === 'waiting severity owner reporter state patch backports cve embargo confirmed',
+    `the filters offered: ${filters}`
+  );
+
+  // Every filter comes up holding the table to nothing, reading the facet it
+  // acts on, and offering what the rows of the table hold.
+  assert.ok(
+    optionsOf(filterIn(doc, 'owner')) === 'Owner | samuelkarp',
+    `the owner filter offers: ${optionsOf(filterIn(doc, 'owner'))}`
+  );
+  assert.ok(
+    optionsOf(filterIn(doc, 'waiting')) === 'Waiting | Blocked on the reporter',
+    `the waiting filter offers: ${optionsOf(filterIn(doc, 'waiting'))}`
+  );
+
+  const reset = one(doc, `#${table.ROOT_ID} .bghsa-list-reset`);
+  assert.ok((reset.textContent ?? '') === table.RESET_LABEL, `the reset reads: ${reset.textContent}`);
+});
+
+test('a filter that keeps nothing says so', () => {
+  const { doc } = tableOver([
+    sortRow('GHSA-aaaa-aaaa-aaaa', {
+      read: true,
+      owners: ['ada'],
+      severity: 'high',
+      severityLabel: 'High',
+    }),
+    sortRow('GHSA-bbbb-bbbb-bbbb', {
+      read: true,
+      owners: ['zoe'],
+      severity: 'low',
+      severityLabel: 'Low',
+    }),
+  ]);
+  choose(filterIn(doc, 'owner'), 'ada');
+  choose(filterIn(doc, 'severity'), 'Low');
+  assert.ok(shownIds(doc) === '', `rows under a filter nothing matches: ${shownIds(doc)}`);
+  const empty = textOf(doc, `#${table.ROOT_ID} .bghsa-list-empty`);
+  assert.ok(empty === table.EMPTY_TEXT, `what stands in for the rows: ${empty}`);
+  assert.ok(empty === 'No advisory matches the filter', `the wording: ${empty}`);
+  const count = textOf(doc, `#${table.ROOT_ID} .bghsa-list-count`);
+  assert.ok(count === '0 of 2 advisories', `the count: ${count}`);
+});
+
+test('a table holding no advisory at all says nothing about a filter', () => {
+  const { doc } = tableOver([]);
+  assert.ok(doc.querySelector(`#${table.ROOT_ID} .bghsa-list-empty`) === null, 'a filter was blamed');
+  assert.ok(textOf(doc, `#${table.ROOT_ID} .bghsa-list-count`) === '0 advisories', 'the count');
+});
+
+test('the reset goes back to the default order and drops every filter', () => {
+  const { doc } = tableOver([
+    sortRow('GHSA-aaaa-aaaa-aaaa', { read: true, owners: ['ada'], title: 'Zoe' }),
+    sortRow('GHSA-bbbb-bbbb-bbbb', { read: true, owners: ['zoe'], title: 'Ada' }),
+  ]);
+  choose(one(doc, `#${table.ROOT_ID} .bghsa-list-sort`), 'title');
+  choose(filterIn(doc, 'owner'), 'ada');
+  assert.ok(shownIds(doc) === 'GHSA-aaaa-aaaa-aaaa', `sorted and filtered: ${shownIds(doc)}`);
+
+  /** @type {HTMLElement} */ (
+    /** @type {unknown} */ (one(doc, `#${table.ROOT_ID} .bghsa-list-reset`))
+  ).click();
+
+  assert.ok(shownIds(doc) === 'GHSA-aaaa-aaaa-aaaa GHSA-bbbb-bbbb-bbbb', `back to the default: ${shownIds(doc)}`);
+  // The controls read the view that is showing, so the way back is not hidden
+  // behind controls still naming the view that was.
+  const sort = one(doc, `#${table.ROOT_ID} .bghsa-list-sort`);
+  assert.ok(
+    (sort.querySelector('option[selected]')?.textContent ?? '') === table.DEFAULT_SORT_LABEL,
+    'the sort control still names the sort that was'
+  );
+  assert.ok(
+    (filterIn(doc, 'owner').querySelector('option[selected]')?.getAttribute('value') ?? 'x') === '',
+    'the owner filter still names the owner it was holding'
+  );
+});
+
+test('a read landing leaves the sort and the filter a maintainer picked alone', async () => {
+  const ghsaId = 'GHSA-bbbb-bbbb-bbbb';
+  const { doc } = tableOver([
+    sortRow('GHSA-aaaa-aaaa-aaaa', { read: true, owners: ['ada'], title: 'Zoe' }),
+    sortRow(ghsaId, { title: 'Ada' }),
+  ]);
+  choose(one(doc, `#${table.ROOT_ID} .bghsa-list-sort`), 'title');
+  choose(filterIn(doc, 'owner'), 'ada');
+  // A row nobody has read is not hidden by a filter over a value a read
+  // supplies, so both are showing.
+  assert.ok(shownIds(doc) === `${ghsaId} GHSA-aaaa-aaaa-aaaa`, `by title under the owner filter: ${shownIds(doc)}`);
+
+  const detail = parseDetail.parseDetail(
+    /** @type {Document} */ (/** @type {unknown} */ (parseHTML(detailHtml(ghsaId, 'Triage')).document))
+  );
+  const applied = await table.applyEntry(doc, ghsaId, {
+    record: detail,
+    observedAt: AT - 30 * MINUTE,
+    state: 'triage',
+  });
+  assert.ok(applied, 'no row was replaced');
+
+  // The read turns the row into one the owner filter does not match and one the
+  // default order would put in another tier. It keeps its place and it keeps
+  // showing: the view a maintainer is reading is not rearranged under them.
+  assert.ok(shownIds(doc) === `${ghsaId} GHSA-aaaa-aaaa-aaaa`, `after the read: ${shownIds(doc)}`);
+  const row = /** @type {Element} */ (tableRows(doc)[0]);
+  assert.ok(
+    chipLine(row) === 'Never reviewed[danger] | High, unconfirmed',
+    `the row took the read in: ${chipLine(row)}`
+  );
+  // The read turned up a severity no row carried, and the control offers it.
+  assert.ok(
+    optionsOf(filterIn(doc, 'severity')) === 'Severity | High | None',
+    `the severity filter after the read: ${optionsOf(filterIn(doc, 'severity'))}`
+  );
+
+  // The render that follows the pass is what settles it, under the same view.
+  table.refreshBody(doc);
+  assert.ok(shownIds(doc) === 'GHSA-aaaa-aaaa-aaaa', `once the table settles: ${shownIds(doc)}`);
+});
+
+test('a read for a row a filter is holding out of view still reaches the table', async () => {
+  const ghsaId = 'GHSA-bbbb-bbbb-bbbb';
+  const { doc } = tableOver([
+    sortRow('GHSA-aaaa-aaaa-aaaa', { read: true, owners: ['ada'] }),
+    sortRow(ghsaId, { read: true, owners: ['zoe'] }),
+  ]);
+  choose(filterIn(doc, 'owner'), 'ada');
+  assert.ok(shownIds(doc) === 'GHSA-aaaa-aaaa-aaaa', `under the owner filter: ${shownIds(doc)}`);
+
+  const detail = parseDetail.parseDetail(
+    /** @type {Document} */ (/** @type {unknown} */ (parseHTML(detailHtml(ghsaId, 'Triage')).document))
+  );
+  const applied = await table.applyEntry(doc, ghsaId, {
+    record: detail,
+    observedAt: AT - 30 * MINUTE,
+    state: 'triage',
+  });
+  assert.ok(!applied, 'a row a filter is holding out of view was drawn');
+  // The table took the read in even so, which the filter shows once it is
+  // holding to what the read turned up.
+  choose(filterIn(doc, 'severity'), 'High');
+  choose(filterIn(doc, 'owner'), '');
+  assert.ok(shownIds(doc) === ghsaId, `the row the read filled in: ${shownIds(doc)}`);
+});
+
+test('a re-render keeps the view a maintainer picked', async () => {
+  const low = 'GHSA-aaaa-aaaa-aaaa';
+  const high = 'GHSA-bbbb-bbbb-bbbb';
+  const doc = pageOf(listHtml({ ...REF, state: 'triage', ids: [low, high] }));
+  table.setViewState(doc, table.defaultViewState());
+  /** @type {Record<string, unknown>} */
+  const held = {
+    [keyFor(low)]: entryOf(storedDetail(low, 'Triage', 'Low'), 'triage'),
+    [keyFor(high)]: entryOf(storedDetail(high, 'Triage', 'High'), 'triage'),
+  };
+  await render(doc, held);
+  assert.ok(shownIds(doc) === `${low} ${high}`, `the default order: ${shownIds(doc)}`);
+
+  choose(one(doc, `#${table.ROOT_ID} .bghsa-list-sort`), 'severity');
+  assert.ok(shownIds(doc) === `${high} ${low}`, `the highest severity first: ${shownIds(doc)}`);
+  choose(filterIn(doc, 'severity'), 'Low');
+  assert.ok(shownIds(doc) === low, `held to the low severity: ${shownIds(doc)}`);
+
+  // GitHub replacing the subtree, and the pass that follows a read, both draw
+  // the table again. The view a maintainer picked survives that.
+  await render(doc, held);
+  const sort = one(doc, `#${table.ROOT_ID} .bghsa-list-sort`);
+  assert.ok(
+    (sort.querySelector('option[selected]')?.getAttribute('value') ?? '') === 'severity',
+    'the sort was lost when the table was drawn again'
+  );
+  assert.ok(
+    (filterIn(doc, 'severity').querySelector('option[selected]')?.getAttribute('value') ?? '') === 'Low',
+    'the filter was lost when the table was drawn again'
+  );
+  assert.ok(shownIds(doc) === low, `the rows after the table was drawn again: ${shownIds(doc)}`);
+
+  choose(filterIn(doc, 'severity'), 'High');
+  assert.ok(shownIds(doc) === high, `the row the filter keeps: ${shownIds(doc)}`);
+});
+
+test("the controls go out of view with the table, and the toggle stays", async () => {
+  const doc = listPage('list-page-triage.html');
+  table.setViewState(doc, table.defaultViewState());
+  await render(doc);
+  const controls = one(doc, `#${table.ROOT_ID} .bghsa-list-controls`);
+  assert.ok(!controls.classList.contains(table.HIDDEN_CLASS), 'the controls came up hidden');
+
+  toggleIn(doc).click();
+  assert.ok(controls.classList.contains(table.HIDDEN_CLASS), "the controls stayed on GitHub's view");
+  assert.ok(
+    !one(doc, `#${table.ROOT_ID} .bghsa-list-toggle`).classList.contains(table.HIDDEN_CLASS),
+    'the toggle went out of view with them'
+  );
+
+  toggleIn(doc).click();
+  assert.ok(!controls.classList.contains(table.HIDDEN_CLASS), 'the controls did not come back');
 });
