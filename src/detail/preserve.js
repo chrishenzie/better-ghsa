@@ -10,59 +10,6 @@ if (typeof require === 'function') {
 }
 
 /**
- * The summary text of the preservation comment's `details` block. It is prose
- * for the reader: nothing this extension does keys on it, so it can be
- * rewritten without breaking recognition or write verification.
- */
-const PRESERVE_SUMMARY = 'Original report preserved by Better GHSA';
-
-/** The label the advisory's title is written under. */
-const TITLE_LABEL = 'Title:';
-
-/** The label the advisory's description is written under. */
-const DESCRIPTION_LABEL = 'Description:';
-
-/**
- * What says a comment is a preservation comment. The body carries it once, in
- * a code span under the summary: GitHub's sanitizer strips HTML comments but
- * keeps `code`, so the token is in the rendered document both checks read, and
- * it owes nothing to any sentence. The trailing `1` is the body format, so a
- * later format can be told from this one.
- *
- * A reporter can copy this token into their own description, which hides the
- * button on their own advisory. That denies the feature on that advisory and
- * writes nothing, so recognition fails safe. Write verification does not rest
- * on it; see `newMarker`.
- */
-const MARKER_PREFIX = 'better-ghsa:preserved:1:';
-
-/** How many random bytes a marker's per-write value carries. */
-const MARKER_BYTES = 8;
-
-/**
- * The marker for one press: the fixed prefix and a value drawn immediately
- * before the body is built. The response counts as the write only where it
- * renders this value, which no description written earlier can hold, so text
- * the reporter controls cannot confirm a write that did not happen.
- *
- * @returns {string}
- */
-function newMarker() {
-  const bytes = new Uint8Array(MARKER_BYTES);
-  globalThis.crypto.getRandomValues(bytes);
-  const value = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
-  return `${MARKER_PREFIX}${value}`;
-}
-
-/** What the panel says while a press is on its way to GitHub. */
-const PENDING_MESSAGE = 'A press is already on its way to GitHub for this advisory.';
-
-/** What the panel says once a press has gone out unconfirmed. */
-const ATTEMPTED_MESSAGE =
-  'A press has already gone to GitHub for this advisory. Reload the page to see' +
-  ' whether the comment was created.';
-
-/**
  * @typedef {import('../common/parse-detail.js').ParsedDetail} ParsedDetail
  * @typedef {import('../common/parse-detail.js').ParsedComment} ParsedComment
  * @typedef {import('../common/parse-detail.js').AdvisoryRef} AdvisoryRef
@@ -79,117 +26,6 @@ const ATTEMPTED_MESSAGE =
  */
 
 /**
- * How far a press has got on each advisory, by `owner/repo/GHSA-id`. GitHub
- * does not put the new comment on the page, so the document alone does not say
- * that a press already happened, and a panel rebuilt after GitHub replaced the
- * region it sits in would offer the button a second time.
- *
- * @type {Map<string, AttemptState>}
- */
-const attempts = new Map();
-
-/**
- * @param {AdvisoryRef} ref
- * @returns {string} the key an advisory's attempt is held under.
- */
-function attemptKey(ref) {
-  // Lowercased, because `sameRef` and the allowlist read a reference
-  // case-insensitively and two spellings of one advisory are one advisory.
-  return `${ref.owner}/${ref.repo}/${ref.ghsaId}`.toLowerCase();
-}
-
-/**
- * @param {AdvisoryRef} left
- * @param {AdvisoryRef} right
- * @returns {boolean} whether both name the same advisory.
- */
-function sameRef(left, right) {
-  return (
-    left.owner.toLowerCase() === right.owner.toLowerCase() &&
-    left.repo.toLowerCase() === right.repo.toLowerCase() &&
-    left.ghsaId.toLowerCase() === right.ghsaId.toLowerCase()
-  );
-}
-
-/**
- * Whether the advisory already carries a preservation comment. The marker is
- * what says so; the body is not parsed and no sentence in it is read.
- *
- * @param {readonly ParsedComment[]} comments
- * @returns {boolean}
- */
-function hasPreservationComment(comments) {
-  return comments.some((comment) => comment.text.includes(MARKER_PREFIX));
-}
-
-/**
- * Reporter text with every `</details>` that closes nothing taken out. Such a
- * tag would close the block this comment wraps the report in and spill the
- * rest of the report into the thread. A `</details>` that closes a `<details>`
- * the reporter opened stays, and the pair renders as a block nested inside the
- * enclosing one.
- *
- * The tags are counted where they stand in the text, with no reading of how
- * GitHub would render them. A `</details>` shown inside a code sample counts
- * like any other: it can be dropped out of the sample, and it can take the
- * count of an opener, leaving a tag that does close the wrapper in place. That
- * is the accepted cost of not modelling GitHub's renderer.
- *
- * @param {string} text
- * @returns {string}
- */
-function balanceDetails(text) {
-  let depth = 0;
-  return text.replace(/<details(\s[^>]*)?>|<\/details\s*>/gi, (tag) => {
-    if (tag[1] === '/') {
-      if (depth === 0) return '';
-      depth -= 1;
-      return tag;
-    }
-    depth += 1;
-    return tag;
-  });
-}
-
-/**
- * The comment the button writes: one collapsed block holding the marker and
- * then the advisory's title and description under their labels.
- *
- * The marker comes first, immediately under the summary, so that no reporter
- * text can render above it or swallow it.
- *
- * A description whose provenance did not read builds nothing. The comment no
- * longer says which case it is, and the extension still declines to write
- * where it cannot tell whether the description is the reporter's own text.
- *
- * @param {ParsedDetail} advisory
- * @param {string} marker The marker for this press.
- * @returns {string | null} null when the title, the description, or the
- *   description's provenance is not in hand.
- */
-function buildBody(advisory, marker) {
-  const { title, description, descriptionOriginal } = advisory;
-  if (title === null || description === null || descriptionOriginal === null) return null;
-  return [
-    '<details>',
-    `<summary>${PRESERVE_SUMMARY}</summary>`,
-    '',
-    `\`${marker}\``,
-    '',
-    TITLE_LABEL,
-    '',
-    balanceDetails(title),
-    '',
-    DESCRIPTION_LABEL,
-    '',
-    balanceDetails(description),
-    '',
-    '</details>',
-    '',
-  ].join('\n');
-}
-
-/**
  * @typedef {object} Availability
  * @property {boolean} available Whether the button is offered.
  * @property {boolean} writable Whether pressing it would write.
@@ -199,220 +35,388 @@ function buildBody(advisory, marker) {
  */
 
 /**
- * @param {boolean} available
- * @param {boolean} writable
- * @param {string | null} reason
- * @param {string} message
- * @returns {Availability}
- */
-function availability(available, writable, reason, message) {
-  return { available, writable, reason, message };
-}
-
-/**
- * What one document says about writing this comment, read from that document
- * alone. A repository off the allowlist and a description whose provenance did
- * not read leave the button pressable and refuse the press, so the reason
- * reaches the maintainer who pressed it.
- *
- * @param {ParsedDetail} advisory
- * @returns {Availability}
- */
-function inspect(advisory) {
-  if (hasPreservationComment(advisory.comments)) {
-    return availability(false, false, 'preserved', 'The original report is already preserved.');
-  }
-  const ref = advisory.ref;
-  if (ref === null) {
-    return availability(
-      true,
-      false,
-      'unreadable',
-      'Nothing was written: this extension could not read which repository this advisory is in.'
-    );
-  }
-  const nameWithOwner = `${ref.owner}/${ref.repo}`;
-  if (!globalThis.bghsa.allowlist.isAllowed(nameWithOwner)) {
-    return availability(
-      true,
-      false,
-      'allowlist',
-      `Nothing was written: ${nameWithOwner} is not on this extension's allowlist.`
-    );
-  }
-  if (advisory.descriptionOriginal === null) {
-    return availability(
-      true,
-      false,
-      'provenance',
-      'Nothing was written: this extension could not tell whether the description is' +
-        " the reporter's original text."
-    );
-  }
-  if (advisory.title === null || advisory.description === null) {
-    return availability(
-      true,
-      false,
-      'unreadable',
-      'Nothing was written: this extension could not read the advisory title and description.'
-    );
-  }
-  return availability(true, true, null, 'Preserve the title and description in a comment.');
-}
-
-/**
- * What the button offers on this advisory: what the page says, and what this
- * page's own presses have already done.
- *
- * An advisory that already carries the comment offers no button, because the
- * extension writes one comment per advisory.
- *
- * @param {ParsedDetail} advisory
- * @returns {Availability}
- */
-function offered(advisory) {
-  const state = inspect(advisory);
-  const ref = advisory.ref;
-  if (!state.writable || ref === null) return state;
-  const attempt = attempts.get(attemptKey(ref));
-  if (attempt === 'written') {
-    return availability(false, false, 'preserved', 'The original report is preserved.');
-  }
-  if (attempt === 'sent') return availability(false, false, 'attempted', ATTEMPTED_MESSAGE);
-  if (attempt === 'pending') return availability(false, false, 'pending', PENDING_MESSAGE);
-  return state;
-}
-
-/**
  * @typedef {object} PreserveOptions
  * @property {import('../common/write.js').WriteFetch} [fetch]
  * @property {(html: string) => Document} [parseDocument]
  */
 
-/**
- * @param {Availability} state
- * @returns {WriteResult}
- */
-function refused(state) {
-  return { ok: false, reason: state.reason, status: null, message: state.message };
-}
+(() => {
+  /**
+   * The summary text of the preservation comment's `details` block. It is prose
+   * for the reader: nothing this extension does keys on it, so it can be
+   * rewritten without breaking recognition or write verification.
+   */
+  const PRESERVE_SUMMARY = 'Original report preserved by Better GHSA';
 
-/**
- * @param {string} reason
- * @param {number | null} status
- * @param {string} message
- * @returns {WriteResult}
- */
-function failed(reason, status, message) {
-  return { ok: false, reason, status, message };
-}
+  /** The label the advisory's title is written under. */
+  const TITLE_LABEL = 'Title:';
 
-/**
- * Writes the preservation comment for this advisory.
- *
- * The whole write runs against a document fetched at press time: the comment
- * this advisory may already carry, the form the request clones, and the title
- * and description the comment holds all come from that document, so the
- * comment holds the report as it stood when it was written.
- *
- * The advisory is held from the first press until that write settles, because
- * a second one would put a second permanent comment on a real report.
- *
- * @param {ParsedDetail} advisory The advisory as the panel read it, which is
- *   what says whether the button writes at all.
- * @param {PreserveOptions} [options]
- * @returns {Promise<WriteResult>}
- */
-async function preserve(advisory, options) {
-  const state = offered(advisory);
-  if (!state.writable) return refused(state);
-  const ref = /** @type {AdvisoryRef} */ (advisory.ref);
-  const key = attemptKey(ref);
-  // Held before anything is awaited: while a press is in flight the page still
-  // shows no comment, and a second press would write a second one.
-  attempts.set(key, 'pending');
+  /** The label the advisory's description is written under. */
+  const DESCRIPTION_LABEL = 'Description:';
 
-  const send =
-    options?.fetch ??
-    /** @type {import('../common/write.js').WriteFetch} */ (globalThis.fetch.bind(globalThis));
-  const toDocument =
-    options?.parseDocument ?? ((html) => new DOMParser().parseFromString(html, 'text/html'));
+  /**
+   * What says a comment is a preservation comment. The body carries it once, in
+   * a code span under the summary: GitHub's sanitizer strips HTML comments but
+   * keeps `code`, so the token is in the rendered document both checks read, and
+   * it owes nothing to any sentence. The trailing `1` is the body format, so a
+   * later format can be told from this one.
+   *
+   * A reporter can copy this token into their own description, which hides the
+   * button on their own advisory. That denies the feature on that advisory and
+   * writes nothing, so recognition fails safe. Write verification does not rest
+   * on it; see `newMarker`.
+   */
+  const MARKER_PREFIX = 'better-ghsa:preserved:1:';
 
-  const fetched = await globalThis.bghsa.write.fetchAdvisoryPage(ref, {
-    fetch: send,
-    parseDocument: toDocument,
-  });
-  if (fetched.failure !== null || fetched.page === null) {
-    attempts.delete(key);
+  /** How many random bytes a marker's per-write value carries. */
+  const MARKER_BYTES = 8;
+
+  /**
+   * The marker for one press: the fixed prefix and a value drawn immediately
+   * before the body is built. The response counts as the write only where it
+   * renders this value, which no description written earlier can hold, so text
+   * the reporter controls cannot confirm a write that did not happen.
+   *
+   * @returns {string}
+   */
+  function newMarker() {
+    const bytes = new Uint8Array(MARKER_BYTES);
+    globalThis.crypto.getRandomValues(bytes);
+    const value = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+    return `${MARKER_PREFIX}${value}`;
+  }
+
+  /** What the panel says while a press is on its way to GitHub. */
+  const PENDING_MESSAGE = 'A press is already on its way to GitHub for this advisory.';
+
+  /** What the panel says once a press has gone out unconfirmed. */
+  const ATTEMPTED_MESSAGE =
+    'A press has already gone to GitHub for this advisory. Reload the page to see' +
+    ' whether the comment was created.';
+
+  /**
+   * How far a press has got on each advisory, by `owner/repo/GHSA-id`. GitHub
+   * does not put the new comment on the page, so the document alone does not say
+   * that a press already happened, and a panel rebuilt after GitHub replaced the
+   * region it sits in would offer the button a second time.
+   *
+   * @type {Map<string, AttemptState>}
+   */
+  const attempts = new Map();
+
+  /**
+   * @param {AdvisoryRef} ref
+   * @returns {string} the key an advisory's attempt is held under.
+   */
+  function attemptKey(ref) {
+    // Lowercased, because `sameRef` and the allowlist read a reference
+    // case-insensitively and two spellings of one advisory are one advisory.
+    return `${ref.owner}/${ref.repo}/${ref.ghsaId}`.toLowerCase();
+  }
+
+  /**
+   * @param {AdvisoryRef} left
+   * @param {AdvisoryRef} right
+   * @returns {boolean} whether both name the same advisory.
+   */
+  function sameRef(left, right) {
     return (
-      fetched.failure ??
-      failed('fetch', null, 'Nothing was written: the advisory page could not be read.')
-    );
-  }
-  const page = fetched.page;
-
-  const fresh = globalThis.bghsa.parseDetail.parseDetail(page);
-  if (fresh === null || fresh.ref === null || !sameRef(fresh.ref, ref)) {
-    attempts.delete(key);
-    return failed(
-      'mismatch',
-      null,
-      `Nothing was written: the page this extension read is not ${ref.owner}/${ref.repo}` +
-        ` ${ref.ghsaId}.`
+      left.owner.toLowerCase() === right.owner.toLowerCase() &&
+      left.repo.toLowerCase() === right.repo.toLowerCase() &&
+      left.ghsaId.toLowerCase() === right.ghsaId.toLowerCase()
     );
   }
 
-  const current = inspect(fresh);
-  if (!current.writable) {
-    if (current.reason === 'preserved') attempts.set(key, 'written');
-    else attempts.delete(key);
-    return refused(current);
-  }
-  const marker = newMarker();
-  const body = buildBody(fresh, marker);
-  if (body === null) {
-    attempts.delete(key);
-    return failed(
-      'unreadable',
-      null,
-      'Nothing was written: this extension could not read what the comment would say.'
-    );
+  /**
+   * Whether the advisory already carries a preservation comment. The marker is
+   * what says so; the body is not parsed and no sentence in it is read.
+   *
+   * @param {readonly ParsedComment[]} comments
+   * @returns {boolean}
+   */
+  function hasPreservationComment(comments) {
+    return comments.some((comment) => comment.text.includes(MARKER_PREFIX));
   }
 
-  let sent = false;
-  const outcome = await globalThis.bghsa.write.createComment({
-    doc: page,
-    ref: fresh.ref,
-    body,
-    contains: [marker],
-    fetch: send,
-    parseDocument: toDocument,
-    beforeSend: () => {
-      sent = true;
-      attempts.set(key, 'sent');
-    },
-  });
-  if (outcome.ok) attempts.set(key, 'written');
-  else if (!sent) attempts.delete(key);
-  return outcome;
-}
+  /**
+   * Reporter text with every `</details>` that closes nothing taken out. Such a
+   * tag would close the block this comment wraps the report in and spill the
+   * rest of the report into the thread. A `</details>` that closes a `<details>`
+   * the reporter opened stays, and the pair renders as a block nested inside the
+   * enclosing one.
+   *
+   * The tags are counted where they stand in the text, with no reading of how
+   * GitHub would render them. A `</details>` shown inside a code sample counts
+   * like any other: it can be dropped out of the sample, and it can take the
+   * count of an opener, leaving a tag that does close the wrapper in place. That
+   * is the accepted cost of not modelling GitHub's renderer.
+   *
+   * @param {string} text
+   * @returns {string}
+   */
+  function balanceDetails(text) {
+    let depth = 0;
+    return text.replace(/<details(\s[^>]*)?>|<\/details\s*>/gi, (tag) => {
+      if (tag[1] === '/') {
+        if (depth === 0) return '';
+        depth -= 1;
+        return tag;
+      }
+      depth += 1;
+      return tag;
+    });
+  }
 
-globalThis.bghsa.preserve = {
-  PRESERVE_SUMMARY,
-  attempts,
-  TITLE_LABEL,
-  DESCRIPTION_LABEL,
-  MARKER_PREFIX,
-  PENDING_MESSAGE,
-  ATTEMPTED_MESSAGE,
-  newMarker,
-  balanceDetails,
-  hasPreservationComment,
-  buildBody,
-  offered,
-  preserve,
-};
+  /**
+   * The comment the button writes: one collapsed block holding the marker and
+   * then the advisory's title and description under their labels.
+   *
+   * The marker comes first, immediately under the summary, so that no reporter
+   * text can render above it or swallow it.
+   *
+   * A description whose provenance did not read builds nothing. The comment no
+   * longer says which case it is, and the extension still declines to write
+   * where it cannot tell whether the description is the reporter's own text.
+   *
+   * @param {ParsedDetail} advisory
+   * @param {string} marker The marker for this press.
+   * @returns {string | null} null when the title, the description, or the
+   *   description's provenance is not in hand.
+   */
+  function buildBody(advisory, marker) {
+    const { title, description, descriptionOriginal } = advisory;
+    if (title === null || description === null || descriptionOriginal === null) return null;
+    return [
+      '<details>',
+      `<summary>${PRESERVE_SUMMARY}</summary>`,
+      '',
+      `\`${marker}\``,
+      '',
+      TITLE_LABEL,
+      '',
+      balanceDetails(title),
+      '',
+      DESCRIPTION_LABEL,
+      '',
+      balanceDetails(description),
+      '',
+      '</details>',
+      '',
+    ].join('\n');
+  }
 
-if (typeof module !== 'undefined') {
-  module.exports = globalThis.bghsa.preserve;
-}
+  /**
+   * @param {boolean} available
+   * @param {boolean} writable
+   * @param {string | null} reason
+   * @param {string} message
+   * @returns {Availability}
+   */
+  function availability(available, writable, reason, message) {
+    return { available, writable, reason, message };
+  }
+
+  /**
+   * What one document says about writing this comment, read from that document
+   * alone. A repository off the allowlist and a description whose provenance did
+   * not read leave the button pressable and refuse the press, so the reason
+   * reaches the maintainer who pressed it.
+   *
+   * @param {ParsedDetail} advisory
+   * @returns {Availability}
+   */
+  function inspect(advisory) {
+    if (hasPreservationComment(advisory.comments)) {
+      return availability(false, false, 'preserved', 'The original report is already preserved.');
+    }
+    const ref = advisory.ref;
+    if (ref === null) {
+      return availability(
+        true,
+        false,
+        'unreadable',
+        'Nothing was written: this extension could not read which repository this advisory is in.'
+      );
+    }
+    const nameWithOwner = `${ref.owner}/${ref.repo}`;
+    if (!globalThis.bghsa.allowlist.isAllowed(nameWithOwner)) {
+      return availability(
+        true,
+        false,
+        'allowlist',
+        `Nothing was written: ${nameWithOwner} is not on this extension's allowlist.`
+      );
+    }
+    if (advisory.descriptionOriginal === null) {
+      return availability(
+        true,
+        false,
+        'provenance',
+        'Nothing was written: this extension could not tell whether the description is' +
+          " the reporter's original text."
+      );
+    }
+    if (advisory.title === null || advisory.description === null) {
+      return availability(
+        true,
+        false,
+        'unreadable',
+        'Nothing was written: this extension could not read the advisory title and description.'
+      );
+    }
+    return availability(true, true, null, 'Preserve the title and description in a comment.');
+  }
+
+  /**
+   * What the button offers on this advisory: what the page says, and what this
+   * page's own presses have already done.
+   *
+   * An advisory that already carries the comment offers no button, because the
+   * extension writes one comment per advisory.
+   *
+   * @param {ParsedDetail} advisory
+   * @returns {Availability}
+   */
+  function offered(advisory) {
+    const state = inspect(advisory);
+    const ref = advisory.ref;
+    if (!state.writable || ref === null) return state;
+    const attempt = attempts.get(attemptKey(ref));
+    if (attempt === 'written') {
+      return availability(false, false, 'preserved', 'The original report is preserved.');
+    }
+    if (attempt === 'sent') return availability(false, false, 'attempted', ATTEMPTED_MESSAGE);
+    if (attempt === 'pending') return availability(false, false, 'pending', PENDING_MESSAGE);
+    return state;
+  }
+
+  /**
+   * @param {Availability} state
+   * @returns {WriteResult}
+   */
+  function refused(state) {
+    return { ok: false, reason: state.reason, status: null, message: state.message };
+  }
+
+  /**
+   * @param {string} reason
+   * @param {number | null} status
+   * @param {string} message
+   * @returns {WriteResult}
+   */
+  function failed(reason, status, message) {
+    return { ok: false, reason, status, message };
+  }
+
+  /**
+   * Writes the preservation comment for this advisory.
+   *
+   * The whole write runs against a document fetched at press time: the comment
+   * this advisory may already carry, the form the request clones, and the title
+   * and description the comment holds all come from that document, so the
+   * comment holds the report as it stood when it was written.
+   *
+   * The advisory is held from the first press until that write settles, because
+   * a second one would put a second permanent comment on a real report.
+   *
+   * @param {ParsedDetail} advisory The advisory as the panel read it, which is
+   *   what says whether the button writes at all.
+   * @param {PreserveOptions} [options]
+   * @returns {Promise<WriteResult>}
+   */
+  async function preserve(advisory, options) {
+    const state = offered(advisory);
+    if (!state.writable) return refused(state);
+    const ref = /** @type {AdvisoryRef} */ (advisory.ref);
+    const key = attemptKey(ref);
+    // Held before anything is awaited: while a press is in flight the page still
+    // shows no comment, and a second press would write a second one.
+    attempts.set(key, 'pending');
+
+    const send =
+      options?.fetch ??
+      /** @type {import('../common/write.js').WriteFetch} */ (globalThis.fetch.bind(globalThis));
+    const toDocument =
+      options?.parseDocument ?? ((html) => new DOMParser().parseFromString(html, 'text/html'));
+
+    const fetched = await globalThis.bghsa.write.fetchAdvisoryPage(ref, {
+      fetch: send,
+      parseDocument: toDocument,
+    });
+    if (fetched.failure !== null || fetched.page === null) {
+      attempts.delete(key);
+      return (
+        fetched.failure ??
+        failed('fetch', null, 'Nothing was written: the advisory page could not be read.')
+      );
+    }
+    const page = fetched.page;
+
+    const fresh = globalThis.bghsa.parseDetail.parseDetail(page);
+    if (fresh === null || fresh.ref === null || !sameRef(fresh.ref, ref)) {
+      attempts.delete(key);
+      return failed(
+        'mismatch',
+        null,
+        `Nothing was written: the page this extension read is not ${ref.owner}/${ref.repo}` +
+          ` ${ref.ghsaId}.`
+      );
+    }
+
+    const current = inspect(fresh);
+    if (!current.writable) {
+      if (current.reason === 'preserved') attempts.set(key, 'written');
+      else attempts.delete(key);
+      return refused(current);
+    }
+    const marker = newMarker();
+    const body = buildBody(fresh, marker);
+    if (body === null) {
+      attempts.delete(key);
+      return failed(
+        'unreadable',
+        null,
+        'Nothing was written: this extension could not read what the comment would say.'
+      );
+    }
+
+    let sent = false;
+    const outcome = await globalThis.bghsa.write.createComment({
+      doc: page,
+      ref: fresh.ref,
+      body,
+      contains: [marker],
+      fetch: send,
+      parseDocument: toDocument,
+      beforeSend: () => {
+        sent = true;
+        attempts.set(key, 'sent');
+      },
+    });
+    if (outcome.ok) attempts.set(key, 'written');
+    else if (!sent) attempts.delete(key);
+    return outcome;
+  }
+
+  const exported = {
+    PRESERVE_SUMMARY,
+    attempts,
+    TITLE_LABEL,
+    DESCRIPTION_LABEL,
+    MARKER_PREFIX,
+    PENDING_MESSAGE,
+    ATTEMPTED_MESSAGE,
+    newMarker,
+    balanceDetails,
+    hasPreservationComment,
+    buildBody,
+    offered,
+    preserve,
+  };
+
+  globalThis.bghsa.preserve = exported;
+
+  if (typeof module !== 'undefined') {
+    module.exports = exported;
+  }
+})();

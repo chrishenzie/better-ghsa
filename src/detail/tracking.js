@@ -30,30 +30,6 @@ if (typeof require === 'function') {
  */
 
 /**
- * The confirmation tracks, in the order the panel shows them. `short` names the
- * track in a sentence, and `warn` names the track REQUIREMENTS.md section 8
- * warns on while it stands unconfirmed.
- *
- * @type {readonly { key: ConfirmationTrack, name: string, short: string,
- *   warn: boolean }[]}
- */
-const CONFIRMATION_TRACKS = [
-  { key: 'title', name: 'Advisory title', short: 'advisory title', warn: false },
-  {
-    key: 'description',
-    name: 'Advisory description',
-    short: 'advisory description',
-    warn: false,
-  },
-  {
-    key: 'scoring',
-    name: 'Severity and CVSS vector',
-    short: 'severity and CVSS vector',
-    warn: true,
-  },
-];
-
-/**
  * @typedef {object} Confirmation
  * @property {ConfirmationStatus} status
  * @property {string | null} by The login the record names.
@@ -95,127 +71,155 @@ const CONFIRMATION_TRACKS = [
  * @property {Confirmation} scoring
  */
 
-/**
- * @param {Record<string, unknown> | null} record
- * @param {string} key
- * @returns {string | null} the field's value, or null where it is not a string
- *   with content.
- */
-function stringField(record, key) {
-  const value = record === null ? undefined : record[key];
-  return typeof value === 'string' && value.trim() !== '' ? value : null;
-}
+(() => {
+  /**
+   * The confirmation tracks, in the order the panel shows them. `short` names the
+   * track in a sentence, and `warn` names the track REQUIREMENTS.md section 8
+   * warns on while it stands unconfirmed.
+   *
+   * @type {readonly { key: ConfirmationTrack, name: string, short: string,
+   *   warn: boolean }[]}
+   */
+  const CONFIRMATION_TRACKS = [
+    { key: 'title', name: 'Advisory title', short: 'advisory title', warn: false },
+    {
+      key: 'description',
+      name: 'Advisory description',
+      short: 'advisory description',
+      warn: false,
+    },
+    {
+      key: 'scoring',
+      name: 'Severity and CVSS vector',
+      short: 'severity and CVSS vector',
+      warn: true,
+    },
+  ];
 
-/**
- * @param {Record<string, unknown> | null} record
- * @param {string} key
- * @returns {string[]} the strings with content the field holds.
- */
-function stringArrayField(record, key) {
-  const value = record === null ? undefined : record[key];
-  if (!Array.isArray(value)) return [];
-  return value.filter((entry) => typeof entry === 'string' && entry.trim() !== '');
-}
+  /**
+   * @param {Record<string, unknown> | null} record
+   * @param {string} key
+   * @returns {string | null} the field's value, or null where it is not a string
+   *   with content.
+   */
+  function stringField(record, key) {
+    const value = record === null ? undefined : record[key];
+    return typeof value === 'string' && value.trim() !== '' ? value : null;
+  }
 
-/**
- * @param {Record<string, unknown> | null} record
- * @param {string} key
- * @returns {Record<string, unknown> | null}
- */
-function objectField(record, key) {
-  const value = record === null ? undefined : record[key];
-  return globalThis.bghsa.schema.isPlainObject(value) ? value : null;
-}
+  /**
+   * @param {Record<string, unknown> | null} record
+   * @param {string} key
+   * @returns {string[]} the strings with content the field holds.
+   */
+  function stringArrayField(record, key) {
+    const value = record === null ? undefined : record[key];
+    if (!Array.isArray(value)) return [];
+    return value.filter((entry) => typeof entry === 'string' && entry.trim() !== '');
+  }
 
-/**
- * Where one confirmation stands. A record carrying no fingerprint confirms
- * nothing, because nothing says what it confirmed.
- *
- * @param {Record<string, unknown> | null} state
- * @param {string} track
- * @param {string | null} current The fingerprint of the value on the page.
- * @returns {Confirmation}
- */
-function confirmationOf(state, track, current) {
-  const record = objectField(objectField(state, 'confirmed'), track);
-  const fingerprint = stringField(record, 'fp');
-  if (fingerprint === null) return { status: 'unconfirmed', by: null, at: null };
-  const by = stringField(record, 'by');
-  const at = stringField(record, 'at');
-  if (current === null) return { status: 'unreadable', by, at };
-  return { status: fingerprint === current ? 'confirmed' : 'drifted', by, at };
-}
+  /**
+   * @param {Record<string, unknown> | null} record
+   * @param {string} key
+   * @returns {Record<string, unknown> | null}
+   */
+  function objectField(record, key) {
+    const value = record === null ? undefined : record[key];
+    return globalThis.bghsa.schema.isPlainObject(value) ? value : null;
+  }
 
-/**
- * The tracks one snapshot holds, judged against the values on the page.
- *
- * @param {Record<string, unknown> | null} state The merged snapshot.
- * @param {Fingerprints} fingerprints
- * @returns {TrackingView}
- */
-function read(state, fingerprints) {
-  const embargo = objectField(state, 'embargo');
-  const closure = objectField(state, 'closure');
-  return {
-    triage: stringField(state, 'triage'),
-    triageSince: stringField(state, 'triageSince'),
-    owners: stringArrayField(state, 'owners'),
-    backports: stringArrayField(state, 'backports'),
-    embargo: embargo !== null,
-    embargoLift: stringField(embargo, 'lift'),
-    closureReason: stringField(closure, 'reason'),
-    closureDuplicateOf: stringField(closure, 'duplicateOf'),
-    title: confirmationOf(state, 'title', fingerprints.title),
-    description: confirmationOf(state, 'description', fingerprints.description),
-    scoring: confirmationOf(state, 'scoring', fingerprints.scoring),
+  /**
+   * Where one confirmation stands. A record carrying no fingerprint confirms
+   * nothing, because nothing says what it confirmed.
+   *
+   * @param {Record<string, unknown> | null} state
+   * @param {string} track
+   * @param {string | null} current The fingerprint of the value on the page.
+   * @returns {Confirmation}
+   */
+  function confirmationOf(state, track, current) {
+    const record = objectField(objectField(state, 'confirmed'), track);
+    const fingerprint = stringField(record, 'fp');
+    if (fingerprint === null) return { status: 'unconfirmed', by: null, at: null };
+    const by = stringField(record, 'by');
+    const at = stringField(record, 'at');
+    if (current === null) return { status: 'unreadable', by, at };
+    return { status: fingerprint === current ? 'confirmed' : 'drifted', by, at };
+  }
+
+  /**
+   * The tracks one snapshot holds, judged against the values on the page.
+   *
+   * @param {Record<string, unknown> | null} state The merged snapshot.
+   * @param {Fingerprints} fingerprints
+   * @returns {TrackingView}
+   */
+  function read(state, fingerprints) {
+    const embargo = objectField(state, 'embargo');
+    const closure = objectField(state, 'closure');
+    return {
+      triage: stringField(state, 'triage'),
+      triageSince: stringField(state, 'triageSince'),
+      owners: stringArrayField(state, 'owners'),
+      backports: stringArrayField(state, 'backports'),
+      embargo: embargo !== null,
+      embargoLift: stringField(embargo, 'lift'),
+      closureReason: stringField(closure, 'reason'),
+      closureDuplicateOf: stringField(closure, 'duplicateOf'),
+      title: confirmationOf(state, 'title', fingerprints.title),
+      description: confirmationOf(state, 'description', fingerprints.description),
+      scoring: confirmationOf(state, 'scoring', fingerprints.scoring),
+    };
+  }
+
+  /**
+   * @returns {TrackingView} the view of an advisory no snapshot holds state for.
+   */
+  function untracked() {
+    return read(null, { title: null, description: null, scoring: null });
+  }
+
+  /**
+   * The fingerprints of the values a confirmation binds to. The inputs are the
+   * metadata form source values, which is the raw markdown, not rendered text.
+   *
+   * @param {ParsedDetail} advisory
+   * @returns {Promise<Fingerprints>}
+   */
+  async function fingerprints(advisory) {
+    const schema = globalThis.bghsa.schema;
+    const [title, description, scoring] = await Promise.all([
+      advisory.title === null ? null : schema.fingerprint(advisory.title),
+      advisory.description === null ? null : schema.fingerprint(advisory.description),
+      advisory.severityFieldPresent && advisory.cvssV3Present
+        ? schema.scoringFingerprint(advisory.severityField, advisory.cvssV3)
+        : null,
+    ]);
+    return { title, description, scoring };
+  }
+
+  /**
+   * The tracking state one advisory page carries.
+   *
+   * @param {ParsedDetail} advisory
+   * @param {MergedState} merged
+   * @returns {Promise<TrackingView>}
+   */
+  async function readAdvisory(advisory, merged) {
+    return read(merged.state, await fingerprints(advisory));
+  }
+
+  const exported = {
+    CONFIRMATION_TRACKS,
+    read,
+    untracked,
+    fingerprints,
+    readAdvisory,
   };
-}
 
-/**
- * @returns {TrackingView} the view of an advisory no snapshot holds state for.
- */
-function untracked() {
-  return read(null, { title: null, description: null, scoring: null });
-}
+  globalThis.bghsa.tracking = exported;
 
-/**
- * The fingerprints of the values a confirmation binds to. The inputs are the
- * metadata form source values, which is the raw markdown, not rendered text.
- *
- * @param {ParsedDetail} advisory
- * @returns {Promise<Fingerprints>}
- */
-async function fingerprints(advisory) {
-  const schema = globalThis.bghsa.schema;
-  const [title, description, scoring] = await Promise.all([
-    advisory.title === null ? null : schema.fingerprint(advisory.title),
-    advisory.description === null ? null : schema.fingerprint(advisory.description),
-    advisory.severityFieldPresent && advisory.cvssV3Present
-      ? schema.scoringFingerprint(advisory.severityField, advisory.cvssV3)
-      : null,
-  ]);
-  return { title, description, scoring };
-}
-
-/**
- * The tracking state one advisory page carries.
- *
- * @param {ParsedDetail} advisory
- * @param {MergedState} merged
- * @returns {Promise<TrackingView>}
- */
-async function readAdvisory(advisory, merged) {
-  return read(merged.state, await fingerprints(advisory));
-}
-
-globalThis.bghsa.tracking = {
-  CONFIRMATION_TRACKS,
-  read,
-  untracked,
-  fingerprints,
-  readAdvisory,
-};
-
-if (typeof module !== 'undefined') {
-  module.exports = globalThis.bghsa.tracking;
-}
+  if (typeof module !== 'undefined') {
+    module.exports = exported;
+  }
+})();
