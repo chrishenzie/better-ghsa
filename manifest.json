@@ -24,6 +24,7 @@
         "src/common/branches.js",
         "src/common/cache.js",
         "src/common/write.js",
+        "src/common/fetch.js",
         "src/detail/tracking.js",
         "src/detail/comments.js",
         "src/detail/preserve.js",

@@ -19,6 +19,7 @@ interface BghsaNamespace {
   branches: typeof import('../src/common/branches.js');
   cache: typeof import('../src/common/cache.js');
   write: typeof import('../src/common/write.js');
+  fetch: typeof import('../src/common/fetch.js');
   tracking: typeof import('../src/detail/tracking.js');
   comments: typeof import('../src/detail/comments.js');
   preserve: typeof import('../src/detail/preserve.js');
