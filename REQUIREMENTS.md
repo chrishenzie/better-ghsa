@@ -49,10 +49,13 @@ All shared state lives in the advisory it describes. The extension does not
 operate a server or a database.
 
 The extension keeps a local cache in the browser. The cache is never
-authoritative and is always rederivable from the advisories. Cache entries
-expire on a schedule that follows the advisory's state, and the extension
-provides a control that clears the cache immediately. An entry observed within
-the last five minutes is not refreshed.
+authoritative and is always rederivable from the advisories. An entry is kept
+and refreshed on a schedule that follows the advisory's state, and a stale
+entry is shown while its refresh runs. An entry is evicted when its advisory no
+longer exists, and by a control that clears the cache immediately.
+
+Nothing accumulates for a repository the extension does not read, because the
+allowlist bounds what it ever stores.
 
 Every read is a poll. Other maintainers write through their own browsers, and
 GitHub changes derived state without notifying the extension.

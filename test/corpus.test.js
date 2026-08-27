@@ -157,7 +157,7 @@ function harness(pages) {
    * @param {Partial<import('../src/done/corpus.js').CorpusOptions>} [extra]
    * @returns {ReturnType<typeof corpus.collect>} the corpus, collected on the
    *   clock the queue runs on. A collection reading the wall clock would judge
-   *   every entry this queue wrote as long expired.
+   *   every entry this queue wrote as long stale.
    */
   const collect = (extra = {}) =>
     corpus.collect({ ref: REF, queue, storage, now: clock.now, ...extra });

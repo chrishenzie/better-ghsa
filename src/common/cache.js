@@ -33,12 +33,12 @@ if (typeof require === 'function') {
  * @property {unknown} record
  * @property {number} observedAt Epoch milliseconds.
  * @property {string | null} state The advisory's state, lowercased, which is
- *   what the entry's life follows. Null on an entry that is not an advisory and
- *   on one whose record named no state.
- * @property {number} [jitterMs] How much longer than the table's life this
- *   entry lives, milliseconds, drawn once when the entry was written. Absent on
- *   an entry written before entries carried a draw, which lives the plain life
- *   the table names.
+ *   what the entry's refresh schedule follows. Null on an entry that is not an
+ *   advisory and on one whose record named no state.
+ * @property {number} [jitterMs] How much longer than the table's threshold this
+ *   entry waits to be refreshed, milliseconds, drawn once when the entry was
+ *   written. Absent on an entry written before entries carried a draw, which
+ *   waits the plain threshold the table names.
  */
 
 /**
@@ -46,10 +46,8 @@ if (typeof require === 'function') {
  * @property {CacheStorage | null} [storage] The storage to read and write, and
  *   absent to use the one {@link storageOf} names.
  * @property {number} [at] The moment being asked about, epoch milliseconds. On
- *   a read it is the moment life and staleness are judged at, and on a write it
- *   is the time of the observation. Absent, the clock says.
- * @property {string | null} [state] On a write, the state the entry's life
- *   follows, and absent to read it from the record.
+ *   a read it is the moment staleness is judged at, and on a write it is the
+ *   time of the observation. Absent, the clock says.
  */
 
 (() => {
@@ -78,9 +76,8 @@ if (typeof require === 'function') {
    * How long an entry may go unrefreshed before a pass fetches it again, where
    * nothing named a state.
    *
-   * This is not entry life. Life is when an entry is discarded; staleness is
-   * when it is refreshed. A six-day-old triage entry is stale and still held:
-   * the table paints from it while the queue refetches it.
+   * Reaching it is not an end. A six-day-old triage entry is stale and still
+   * held: the table paints from it while the queue refetches it.
    */
   const STALE_MS = 5 * MINUTE_MS;
 
@@ -94,9 +91,6 @@ if (typeof require === 'function') {
    * one five-minute threshold, opening the done view twice in an afternoon
    * re-reads the whole corpus twice at a request a second.
    *
-   * Every threshold here is shorter than that state's life below, so an entry
-   * is refreshed before it is ever discarded.
-   *
    * @type {Readonly<Record<string, number>>}
    */
   const STALE_MS_BY_STATE = {
@@ -108,47 +102,24 @@ if (typeof require === 'function') {
   };
 
   /**
-   * How long an entry lives, by the state of the advisory it holds. A
-   * published or withdrawn advisory does not change again, so its entry lives
-   * months and not days; it is bounded all the same, so storage does not keep
-   * every advisory this extension ever read.
-   *
-   * @type {Readonly<Record<string, number>>}
-   */
-  const LIFE_MS = {
-    triage: 7 * DAY_MS,
-    draft: 7 * DAY_MS,
-    closed: 30 * DAY_MS,
-    published: 90 * DAY_MS,
-    withdrawn: 90 * DAY_MS,
-  };
-
-  /**
-   * The most a draw lengthens an entry's life.
+   * The most a draw puts off a refresh.
    *
    * REQUIREMENTS.md section 10 reads a corpus at one request per second, so the
    * entries a pass writes are stamped within minutes of each other. On one
-   * shared life they fall due together and the corpus re-crawls in one wave.
-   * Spread over a fortnight it is a few advisories a day, which is what
+   * shared threshold they fall due together and the corpus re-crawls in one
+   * wave. Spread over five days it is a few advisories a day, which is what
    * background refreshing already costs.
    */
-  const JITTER_MS = 14 * DAY_MS;
+  const JITTER_MS = 5 * DAY_MS;
 
   /**
-   * The states whose entries carry a draw: the long-lived two, which are the
-   * ones a pass writes in bulk. A triage, draft, or closed entry is re-read
-   * constantly and has no herd to spread.
+   * The states whose entries carry a draw: the two on the thirty-day threshold,
+   * which are the ones a pass writes in bulk. A triage, draft, or closed entry
+   * comes due within a week and has no herd to spread.
    *
    * @type {ReadonlySet<string>}
    */
   const JITTERED_STATES = new Set(['published', 'withdrawn']);
-
-  /**
-   * How long an entry lives when nothing named a state: the shortest life in
-   * the table. An entry whose state this extension could not read does not
-   * outlive an open advisory's.
-   */
-  const DEFAULT_LIFE_MS = 7 * DAY_MS;
 
   /**
    * The storage a caller put in place of the browser's, and null while the
@@ -313,11 +284,11 @@ if (typeof require === 'function') {
   /**
    * @param {string | null} state The entry's state, already normalized.
    * @param {unknown} value The draw the entry carries.
-   * @returns {number} how much that draw lengthens the entry's life,
+   * @returns {number} how much that draw puts off the entry's refresh,
    *   milliseconds. It is none where the state takes no draw, and it is held
    *   inside the range the table allows: an entry carrying a duration that is
    *   not a real one takes none, because every comparison against one answers
-   *   false and the entry would never reach the end of its life.
+   *   false and the entry would never come due.
    */
   function jitterOf(state, value) {
     if (state === null || !JITTERED_STATES.has(state)) return 0;
@@ -328,8 +299,8 @@ if (typeof require === 'function') {
   /**
    * @param {string | null} state The entry's state, already normalized.
    * @returns {number} the draw to store on an entry being written now, drawn
-   *   here and never again. Drawn at read time the same entry would expire at a
-   *   different moment on every read, and would be discarded early or late
+   *   here and never again. Drawn at read time the same entry would come due at
+   *   a different moment on every read, and would be refreshed early or late
    *   depending on when someone looked.
    */
   function drawJitter(state) {
@@ -338,57 +309,38 @@ if (typeof require === 'function') {
 
   /**
    * @param {string | null | undefined} state
-   * @returns {number} how long an entry in this state may go unrefreshed. An
-   *   entry whose state this extension could not read takes the shortest
-   *   threshold in the table, as it takes the shortest life.
+   * @param {number} [jitterMs] The draw the entry carries, and absent where the
+   *   caller is asking about a state and not about an entry.
+   * @returns {number} how long an entry in this state may go unrefreshed, its
+   *   own draw included. An entry whose state this extension could not read
+   *   takes the shortest threshold in the table.
    */
-  function staleAfter(state) {
+  function staleAfter(state, jitterMs) {
     const key = normalizeState(state);
     const held = key === null ? undefined : STALE_MS_BY_STATE[key];
-    return held === undefined ? STALE_MS : held;
-  }
-
-  /**
-   * @param {string | null | undefined} state
-   * @param {number} [jitterMs] The draw the entry carries, and absent on an
-   *   entry written before entries carried one.
-   * @returns {number} how long an entry in this state lives.
-   */
-  function lifeOf(state, jitterMs) {
-    const key = normalizeState(state);
-    const life = key === null ? undefined : LIFE_MS[key];
-    return (life === undefined ? DEFAULT_LIFE_MS : life) + jitterOf(key, jitterMs);
+    return (held === undefined ? STALE_MS : held) + jitterOf(key, jitterMs);
   }
 
   /**
    * @param {CacheEntry} entry
-   * @param {number} [at]
+   * @param {number} at The instant the read is being made at.
    * @returns {number} how long ago the entry was observed, in milliseconds. An
    *   entry observed later than `at`, which a clock moved backwards produces,
-   *   reads as age zero and is neither stale nor expired.
+   *   reads as age zero and is not stale.
    */
-  function ageOf(entry, at = now()) {
+  function ageOf(entry, at) {
     return Math.max(0, at - entry.observedAt);
   }
 
   /**
    * @param {CacheEntry} entry
-   * @param {number} [at]
-   * @returns {boolean} whether the entry has outlived its state's life, its own
-   *   draw included, and is to be discarded.
-   */
-  function isExpired(entry, at = now()) {
-    return ageOf(entry, at) >= lifeOf(entry.state, entry.jitterMs);
-  }
-
-  /**
-   * @param {CacheEntry} entry
-   * @param {number} [at]
+   * @param {number} at The instant the read is being made at.
    * @returns {boolean} whether the entry is old enough to be refreshed. An entry
-   *   observed within its state's threshold is not.
+   *   observed within its state's threshold, its own draw included, is not.
+   *   Being stale is not being gone: the entry is shown while its refresh runs.
    */
-  function isStale(entry, at = now()) {
-    return ageOf(entry, at) >= staleAfter(entry.state);
+  function isStale(entry, at) {
+    return ageOf(entry, at) >= staleAfter(entry.state, entry.jitterMs);
   }
 
   /**
@@ -405,8 +357,8 @@ if (typeof require === 'function') {
   }
 
   /**
-   * Takes an expired entry out of storage. Failing costs the caller nothing: it
-   * already read the entry as absent.
+   * Takes entries out of storage. Failing costs the caller nothing: the entry
+   * stays, and the cache is rederivable either way.
    *
    * @param {CacheStorage} storage
    * @param {string[]} keys
@@ -417,13 +369,13 @@ if (typeof require === 'function') {
     try {
       await storage.remove(keys);
     } catch {
-      // The entry stays until the next read, which discards it again.
+      // The entry stays until whatever asked for this asks again.
     }
   }
 
   /**
-   * Reads one entry. An entry past its state's life is gone: it answers as
-   * absent and is taken out of storage.
+   * Reads one entry. Age alone never takes one away: an entry is answered with
+   * however old it is, and {@link isStale} is what says a refresh is due.
    *
    * The cache is never authoritative, so a storage failure is an absent entry
    * and not an error: the caller rederives what it needed from the page or from
@@ -443,13 +395,7 @@ if (typeof require === 'function') {
     } catch {
       return null;
     }
-    const entry = entryFrom(held);
-    if (entry === null) return null;
-    if (isExpired(entry, options.at ?? now())) {
-      await discard(storage, [key]);
-      return null;
-    }
-    return entry;
+    return entryFrom(held);
   }
 
   /**
@@ -458,8 +404,8 @@ if (typeof require === 'function') {
    *
    * @param {readonly (string | null)[]} keys
    * @param {CacheOptions} [options]
-   * @returns {Promise<Map<string, CacheEntry>>} the entries that are held and
-   *   within their life, by key. A key with no entry is absent from the map.
+   * @returns {Promise<Map<string, CacheEntry>>} the entries that are held, by
+   *   key. A key with no entry is absent from the map.
    */
   async function getEntries(keys, options = {}) {
     const storage = options.storage ?? storageOf();
@@ -474,19 +420,10 @@ if (typeof require === 'function') {
     } catch {
       return found;
     }
-    const at = options.at ?? now();
-    /** @type {string[]} */
-    const expired = [];
     for (const key of wanted) {
       const entry = entryFrom(held[key]);
-      if (entry === null) continue;
-      if (isExpired(entry, at)) {
-        expired.push(key);
-        continue;
-      }
-      found.set(key, entry);
+      if (entry !== null) found.set(key, entry);
     }
-    await discard(storage, expired);
     return found;
   }
 
@@ -495,14 +432,16 @@ if (typeof require === 'function') {
    *
    * @param {string | null} key
    * @param {unknown} record
+   * @param {string | null} state The state the entry's refresh schedule
+   *   follows. Only an advisory has one; a list and a progress entry carry null
+   *   and take the plain threshold.
    * @param {CacheOptions} [options]
    * @returns {Promise<CacheEntry | null>} the entry as it was written, and null
    *   where nothing was written.
    */
-  async function putEntry(key, record, options = {}) {
+  async function putEntry(key, record, state, options = {}) {
     const storage = options.storage ?? storageOf();
     if (storage === null || key === null) return null;
-    const state = options.state === undefined ? stateOf(record) : normalizeState(options.state);
     /** @type {CacheEntry} */
     const entry = {
       record,
@@ -539,7 +478,7 @@ if (typeof require === 'function') {
    * @returns {Promise<CacheEntry | null>}
    */
   function putAdvisory(ref, record, options = {}) {
-    return putEntry(advisoryKey(ref), record, options);
+    return putEntry(advisoryKey(ref), record, stateOf(record), options);
   }
 
   /**
@@ -584,7 +523,7 @@ if (typeof require === 'function') {
    * @returns {Promise<CacheEntry | null>}
    */
   function putList(ref, record, options = {}) {
-    return putEntry(listKey(ref), record, { ...options, state: options.state ?? null });
+    return putEntry(listKey(ref), record, null, options);
   }
 
   /**
@@ -605,7 +544,7 @@ if (typeof require === 'function') {
    * @returns {Promise<CacheEntry | null>}
    */
   function putProgress(ref, progress, options = {}) {
-    return putEntry(progressKey(ref), progress, { ...options, state: options.state ?? null });
+    return putEntry(progressKey(ref), progress, null, options);
   }
 
   /**
@@ -660,8 +599,6 @@ if (typeof require === 'function') {
     DAY_MS,
     STALE_MS,
     STALE_MS_BY_STATE,
-    LIFE_MS,
-    DEFAULT_LIFE_MS,
     JITTER_MS,
     JITTERED_STATES,
     setStorage,
@@ -675,9 +612,7 @@ if (typeof require === 'function') {
     isCacheKey,
     stateOf,
     staleAfter,
-    lifeOf,
     ageOf,
-    isExpired,
     isStale,
     entryFrom,
     getEntry,

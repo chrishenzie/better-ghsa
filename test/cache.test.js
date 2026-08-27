@@ -57,75 +57,39 @@ test('the list and progress entries are keyed by repository', () => {
   assert.ok(!cache.isCacheKey('branches'), 'the branches entry is not the cache');
 });
 
-test('entry life follows the advisory state', () => {
-  assert.ok(cache.lifeOf('triage') === 7 * DAY, `triage life was ${cache.lifeOf('triage')}`);
-  assert.ok(cache.lifeOf('draft') === 7 * DAY, `draft life was ${cache.lifeOf('draft')}`);
-  assert.ok(cache.lifeOf('closed') === 30 * DAY, `closed life was ${cache.lifeOf('closed')}`);
-  assert.ok(cache.lifeOf('published') === 90 * DAY, `published life was ${cache.lifeOf('published')}`);
-  assert.ok(cache.lifeOf('withdrawn') === 90 * DAY, `withdrawn life was ${cache.lifeOf('withdrawn')}`);
-  assert.ok(cache.lifeOf('Triage') === 7 * DAY, 'the state is read case-insensitively');
-  assert.ok(cache.lifeOf(null) === 7 * DAY, 'an entry naming no state takes the shortest life');
-});
-
-test('a draw lengthens the two long lives and no others', () => {
-  assert.ok(
-    cache.lifeOf('published', 3 * DAY) === 93 * DAY,
-    `a published entry that drew three days lived ${cache.lifeOf('published', 3 * DAY)}`
-  );
-  assert.ok(cache.lifeOf('withdrawn', DAY) === 91 * DAY, 'a withdrawn entry ignored its draw');
+test('a draw puts off the two long thresholds and no others', () => {
+  const drew = cache.staleAfter('published', 3 * DAY);
+  assert.ok(drew === 33 * DAY, `a published entry that drew three days refreshed after ${drew}`);
+  assert.ok(cache.staleAfter('withdrawn', DAY) === 31 * DAY, 'a withdrawn entry ignored its draw');
   for (const state of ['triage', 'draft', 'closed', null]) {
     assert.ok(
-      cache.lifeOf(state, 3 * DAY) === cache.lifeOf(state),
+      cache.staleAfter(state, 3 * DAY) === cache.staleAfter(state),
       `${state} took a draw it is not meant to carry`
     );
   }
   assert.ok(
-    cache.lifeOf('published', 400 * DAY) === 104 * DAY,
-    'a draw beyond a fortnight was not held to one'
+    cache.staleAfter('published', 400 * DAY) === 35 * DAY,
+    'a draw beyond five days was not held to five'
   );
   for (const drawn of [Number.NaN, Number.POSITIVE_INFINITY, -5 * DAY]) {
     assert.ok(
-      cache.lifeOf('published', drawn) === 90 * DAY,
+      cache.staleAfter('published', drawn) === 30 * DAY,
       `a draw of ${drawn} was taken as a duration`
     );
   }
 });
 
-test('an open entry expires at seven days and not before', () => {
-  for (const state of ['triage', 'draft']) {
-    const held = entry(0, state);
-    assert.ok(!cache.isExpired(held, 7 * DAY - 1), `${state} expired one millisecond early`);
-    assert.ok(cache.isExpired(held, 7 * DAY), `${state} outlived seven days`);
-  }
-});
-
-test('a closed entry expires at thirty days and not before', () => {
-  const held = entry(0, 'closed');
-  assert.ok(!cache.isExpired(held, 7 * DAY), 'a closed entry expired on the open schedule');
-  assert.ok(!cache.isExpired(held, 30 * DAY - 1), 'a closed entry expired one millisecond early');
-  assert.ok(cache.isExpired(held, 30 * DAY), 'a closed entry outlived thirty days');
-});
-
-test('a done entry expires at ninety days plus its own draw', () => {
+test('a drawn entry comes due at its threshold and its own draw', () => {
   for (const state of ['published', 'withdrawn']) {
-    const plain = entry(0, state);
-    assert.ok(!cache.isExpired(plain, 30 * DAY), `${state} expired on the closed schedule`);
-    assert.ok(!cache.isExpired(plain, 90 * DAY - 1), `${state} expired one millisecond early`);
-    assert.ok(cache.isExpired(plain, 90 * DAY), `${state} outlived ninety days`);
-    const drawn = entry(0, state, 5 * DAY);
-    assert.ok(!cache.isExpired(drawn, 95 * DAY - 1), `${state} expired one millisecond into a draw`);
-    assert.ok(cache.isExpired(drawn, 95 * DAY), `${state} outlived its ninety days and its draw`);
+    const drawn = entry(0, state, 3 * DAY);
+    // The plain threshold on its own would have had this one due here.
+    assert.ok(!cache.isStale(drawn, 30 * DAY), `${state} came due on the plain threshold`);
+    assert.ok(!cache.isStale(drawn, 33 * DAY - 1), `${state} came due one millisecond early`);
+    assert.ok(cache.isStale(drawn, 33 * DAY), `${state} was fresh at thirty-three days`);
   }
-});
-
-test('staleness is five minutes on an open advisory and is not entry life', () => {
-  const held = entry(0, 'triage');
-  assert.ok(!cache.isStale(held, 5 * MINUTE - 1), 'an entry went stale one millisecond early');
-  assert.ok(cache.isStale(held, 5 * MINUTE), 'an entry five minutes old was not stale');
-  // The two thresholds are separate: an entry is refreshed long before it is
-  // discarded, and it is read from all the while.
-  assert.ok(cache.isStale(held, 6 * DAY), 'a six-day-old triage entry was not stale');
-  assert.ok(!cache.isExpired(held, 6 * DAY), 'a six-day-old triage entry was discarded');
+  // The draw is on the two long thresholds and no others, so an entry in
+  // another state carrying one comes due where it always did.
+  assert.ok(cache.isStale(entry(0, 'closed', 3 * DAY), 7 * DAY), 'a closed entry took a draw');
 });
 
 test('a done advisory refreshes on its own state, not on five minutes', () => {
@@ -148,10 +112,6 @@ test('a done advisory refreshes on its own state, not on five minutes', () => {
       cache.isStale(held, 60 * MINUTE),
       state === 'triage' || state === 'draft',
       `${state} an hour on`
-    );
-    assert.ok(
-      threshold < cache.lifeOf(state),
-      `${state} would be discarded before it was ever refreshed`
     );
   }
 });
@@ -179,26 +139,32 @@ test('an entry within its life is read back with what was written', async () => 
   assert.ok(!cache.isStale(held, 1000 + 4 * MINUTE), 'a four-minute-old entry was stale');
 });
 
-test('a read past the entry life answers absent and discards the entry', async () => {
+test('an entry a year old is answered and left in storage', async () => {
   const storage = fakeStorage();
   await cache.putAdvisory(REF, { state: 'triage' }, { storage, at: 0 });
-  const held = await cache.getAdvisory(REF, { storage, at: 7 * DAY });
-  assert.ok(held === null, 'an expired entry was handed back');
-  assert.ok(!Object.hasOwn(storage.entries, KEY), 'the expired entry is still in storage');
-  assert.ok(storage.removals.length === 1, `storage saw ${storage.removals.length} removals`);
+  // A triage entry was the shortest-lived of all: seven days. A year on it is
+  // long past that and it is still what the table paints from.
+  const held = await cache.getAdvisory(REF, { storage, at: 365 * DAY });
+  assert.ok(held !== null, 'a year-old entry was not handed back');
+  assert.ok(held.observedAt === 0, `the entry was observed at ${held?.observedAt}`);
+  assert.ok(cache.isStale(held, 365 * DAY), 'a year-old triage entry was not stale');
+  assert.ok(Object.hasOwn(storage.entries, KEY), 'the entry was taken out of storage');
+  assert.ok(storage.removals.length === 0, `storage saw ${storage.removals.length} removals`);
 });
 
-test('many advisories are read in one call, expired ones absent', async () => {
+test('many advisories are read in one call, however old they are', async () => {
   const storage = fakeStorage();
   const ids = ['GHSA-aaaa-aaaa-aaaa', 'GHSA-bbbb-bbbb-bbbb', 'GHSA-cccc-cccc-cccc'];
   await cache.putAdvisory({ ...REF, ghsaId: ids[0] }, { state: 'triage' }, { storage, at: 0 });
   await cache.putAdvisory({ ...REF, ghsaId: ids[1] }, { state: 'closed' }, { storage, at: 0 });
 
-  const found = await cache.getAdvisories(REF, ids, { storage, at: 8 * DAY });
-  assert.ok(found.size === 1, `${found.size} entries were held`);
-  assert.ok(found.has(ids[1] ?? ''), 'the closed entry was not held at eight days');
-  assert.ok(!found.has(ids[0] ?? ''), 'the triage entry outlived seven days');
+  const found = await cache.getAdvisories(REF, ids, { storage, at: 365 * DAY });
+  assert.ok(found.size === 2, `${found.size} entries were held`);
+  assert.ok(found.has(ids[0] ?? ''), 'the triage entry was dropped at a year old');
+  assert.ok(found.has(ids[1] ?? ''), 'the closed entry was dropped at a year old');
+  assert.ok(!found.has(ids[2] ?? ''), 'an advisory nothing wrote was handed back');
   assert.ok(storage.reads.length === 1, `storage saw ${storage.reads.length} reads`);
+  assert.ok(storage.removals.length === 0, `storage saw ${storage.removals.length} removals`);
 });
 
 test('the list entry and the progress entry round trip', async () => {
@@ -259,10 +225,9 @@ test('an entry stamped with no real moment reads as absent', async () => {
 
   // Why the stamp is checked: every comparison against a stamp that is not a
   // real moment answers false, so an entry carrying one would be fresh for
-  // ever and would never reach the end of its life.
+  // ever and would never be refreshed.
   const unreal = { record: {}, observedAt: Number.NaN, state: 'triage' };
   assert.ok(!cache.isStale(unreal, 40 * DAY), 'a NaN stamp read as stale');
-  assert.ok(!cache.isExpired(unreal, 40 * DAY), 'a NaN stamp read as expired');
 });
 
 test('storage failing is an absent entry and an unwritten one', async () => {
@@ -293,10 +258,10 @@ test('the clock is injectable and the entry stamps read from it', async () => {
     assert.ok(written !== null && written.observedAt === 10_000, 'the injected clock was not read');
     clock += 4 * MINUTE;
     const fresh = await cache.getAdvisory(REF, { storage });
-    assert.ok(fresh !== null && !cache.isStale(fresh), 'a four-minute-old entry was stale');
+    assert.ok(fresh !== null && !cache.isStale(fresh, clock), 'a four-minute-old entry was stale');
     clock += MINUTE;
     const stale = await cache.getAdvisory(REF, { storage });
-    assert.ok(stale !== null && cache.isStale(stale), 'a five-minute-old entry was fresh');
+    assert.ok(stale !== null && cache.isStale(stale, clock), 'a five-minute-old entry was fresh');
   } finally {
     cache.setClock(null);
   }
@@ -312,8 +277,8 @@ test('the jitter is drawn once, at write time, and held on the entry', async () 
     const other = { ...REF, ghsaId: 'GHSA-dead-beef-cafe' };
     const first = await cache.putAdvisory(REF, { state: 'published' }, { storage });
     const second = await cache.putAdvisory(other, { state: 'published' }, { storage });
-    assert.ok(first !== null && first.jitterMs === 3.5 * DAY, `the first drew ${first?.jitterMs}`);
-    assert.ok(second !== null && second.jitterMs === 10.5 * DAY, `the second drew ${second?.jitterMs}`);
+    assert.ok(first !== null && first.jitterMs === 1.25 * DAY, `the first drew ${first?.jitterMs}`);
+    assert.ok(second !== null && second.jitterMs === 3.75 * DAY, `the second drew ${second?.jitterMs}`);
 
     // The draw is on the stored entry, so the moment it falls due is fixed
     // when it is written and does not move when someone reads it.
@@ -332,44 +297,43 @@ test('the jitter is drawn once, at write time, and held on the entry', async () 
   }
 });
 
-test('a drawn entry is held to the end of its life and then discarded', async () => {
+test('a drawn entry read back from storage comes due at its own moment', async () => {
   const storage = fakeStorage();
   let clock = 0;
   cache.setClock(() => clock);
   cache.setRandom(() => 0.5);
   try {
     const written = await cache.putAdvisory(REF, { state: 'published' }, { storage });
-    assert.ok(written !== null && written.jitterMs === 7 * DAY, `the entry drew ${written?.jitterMs}`);
-    clock = 97 * DAY - 1;
-    assert.ok((await cache.getAdvisory(REF, { storage })) !== null, 'discarded one millisecond early');
-    assert.ok(Object.hasOwn(storage.entries, KEY), 'a live entry was taken out of storage');
-    clock = 97 * DAY;
-    assert.ok((await cache.getAdvisory(REF, { storage })) === null, 'held past ninety-seven days');
-    assert.ok(!Object.hasOwn(storage.entries, KEY), 'the expired entry stayed in storage');
+    const drew = written?.jitterMs;
+    assert.ok(written !== null && drew === 2.5 * DAY, `the entry drew ${drew}`);
+    // The plain threshold on its own would have had this one due at thirty
+    // days, which is inside the window this walks.
+    clock = 32.5 * DAY - 1;
+    const before = await cache.getAdvisory(REF, { storage });
+    assert.ok(before !== null && !cache.isStale(before, clock), 'came due one millisecond early');
+    clock = 32.5 * DAY;
+    const after = await cache.getAdvisory(REF, { storage });
+    assert.ok(after !== null && cache.isStale(after, clock), 'was fresh at its own moment');
+    assert.ok(Object.hasOwn(storage.entries, KEY), 'a due entry was taken out of storage');
   } finally {
     cache.setClock(null);
     cache.setRandom(null);
   }
 });
 
-test('an entry written before the draw lives the plain ninety days', async () => {
+test('an entry written before the draw comes due on the plain threshold', async () => {
   const held = { record: { state: 'published' }, observedAt: 0, state: 'published' };
   const early = fakeStorage({ [KEY]: { ...held } });
-  const inside = await cache.getEntry(KEY, { storage: early, at: 90 * DAY - 1 });
-  assert.ok(inside !== null, 'an entry carrying no draw was discarded before ninety days');
+  const inside = await cache.getEntry(KEY, { storage: early, at: 30 * DAY - 1 });
+  assert.ok(inside !== null, 'an entry carrying no draw was not handed back');
   assert.ok(inside.jitterMs === 0, `a missing draw read as ${inside?.jitterMs}`);
-  assert.ok(
-    (await cache.getEntry(KEY, { storage: early, at: 90 * DAY })) === null,
-    'an entry carrying no draw outlived ninety days'
-  );
-  assert.ok(!Object.hasOwn(early.entries, KEY), 'the expired entry stayed in storage');
+  assert.ok(!cache.isStale(inside, 30 * DAY - 1), 'it came due one millisecond early');
+  assert.ok(cache.isStale(inside, 30 * DAY), 'an entry carrying no draw was fresh at thirty days');
 
   // A stored draw that is not a real duration is no draw. Every comparison
-  // against one answers false, so an entry carrying one would never reach the
-  // end of its life.
+  // against one answers false, so an entry carrying one would never come due.
   const unreal = fakeStorage({ [KEY]: { ...held, jitterMs: Number.NaN } });
-  assert.ok(
-    (await cache.getEntry(KEY, { storage: unreal, at: 90 * DAY })) === null,
-    'an entry carrying a NaN draw was handed back'
-  );
+  const read = await cache.getEntry(KEY, { storage: unreal, at: 30 * DAY });
+  assert.ok(read !== null, 'an entry carrying a NaN draw was not handed back');
+  assert.ok(cache.isStale(read, 30 * DAY), 'an entry carrying a NaN draw was fresh at thirty days');
 });
