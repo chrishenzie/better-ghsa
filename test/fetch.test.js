@@ -906,6 +906,6 @@ test('a 404 on one advisory leaves another advisory alone', async () => {
 
   assert.strictEqual(await heldFor(storage, gone, clock.now()), null, 'the missing one was kept');
   const held = await heldFor(storage, kept, clock.now());
-  assert.ok(held !== null, "the other advisory went with its neighbour's 404s");
+  assert.ok(held !== null, "the other advisory went with its neighbor's 404s");
   assert.strictEqual(held.misses, 0, 'the other advisory carried a count of its own');
 });

@@ -527,7 +527,7 @@ if (typeof require === 'function') {
    * lists them.
    *
    * A chip standing for a boolean is there while the condition holds and absent
-   * while it does not. Colour marks what a maintainer has to act on now: an
+   * while it does not. Color marks what a maintainer has to act on now: an
    * advisory nobody has reviewed, a reporter waiting on an answer, an embargo
    * running out. A chip naming a state the advisory is simply in stays dimmed.
    *
@@ -1272,7 +1272,7 @@ if (typeof require === 'function') {
 
   /**
    * What the header says the refresh is doing. It is dimmed like every other
-   * chip: colour is kept for a condition a maintainer has to act on, and a
+   * chip: color is kept for a condition a maintainer has to act on, and a
    * refresh that is running finishes on its own.
    *
    * @param {Document} doc

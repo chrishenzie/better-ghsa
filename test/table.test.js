@@ -127,7 +127,7 @@ function textOf(scope, selector) {
 /**
  * Every chip under one row's title, as one line. A chip carrying a tone names it
  * in brackets, so one string covers both what the chips read and which of them
- * are coloured.
+ * are colored.
  *
  * @param {Element} row
  * @returns {string}
@@ -940,8 +940,7 @@ test('the chip the header carries is dimmed and says nothing with nothing left',
   const doc = pageOf('<div id="advisories"></div>');
   const walking = table.progressChip(doc, { phase: 'walking', left: 0 });
   assert.ok(walking !== null, 'the walk said nothing');
-  // Colour marks a condition to act on, and a refresh that is running is not
-  // one.
+  // Color marks a condition to act on, and a refresh that is running is not one.
   assert.strictEqual(
     walking.className,
     'Label Label--secondary bghsa-list-progress',

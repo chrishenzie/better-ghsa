@@ -41,7 +41,7 @@ if (typeof require === 'function') {
  * metadata form source values. A value the parser did not read is null, and
  * its track cannot be judged.
  *
- * The scoring halves are labelled inside the fingerprinted source, so an unset
+ * The scoring halves are labeled inside the fingerprinted source, so an unset
  * severity and an unset vector are a scoring state like any other. A form
  * field the parser did not find is not a scoring state: nothing on the page
  * says what the score is, so the scoring fingerprint is null there.

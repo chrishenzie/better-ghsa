@@ -239,7 +239,7 @@ if (typeof require === 'function') {
   const element = globalThis.bghsa.dom.element;
 
   /**
-   * A dimmed chip. Colour is kept for a condition a maintainer has to act on
+   * A dimmed chip. Color is kept for a condition a maintainer has to act on
    * now, and nothing this view shows is one: a crawl still running finishes on
    * its own, and an advisory nobody has read is read next.
    *

@@ -170,7 +170,7 @@ function rowText(root, label) {
       return text(row.querySelector('.flex-auto'));
     }
   }
-  throw new Error(`no panel row labelled ${label}`);
+  throw new Error(`no panel row labeled ${label}`);
 }
 
 /**
@@ -198,7 +198,7 @@ function rowChip(root, label) {
     const chip = /** @type {Element} */ (chips[0]);
     return { text: text(chip), classes: String(chip.getAttribute('class') ?? '') };
   }
-  throw new Error(`no panel row labelled ${label}`);
+  throw new Error(`no panel row labeled ${label}`);
 }
 
 /**

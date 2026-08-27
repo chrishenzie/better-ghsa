@@ -1684,7 +1684,7 @@ test('the changes carry a confirmation only where a fingerprint stands behind it
  * @param {string} type
  * @returns {Event} an event a handler can cancel.
  */
-function cancellable(doc, type) {
+function cancelable(doc, type) {
   const view = doc.defaultView;
   if (view === null || view === undefined) throw new Error('the document has no view');
   return new view.Event(type, { bubbles: true, cancelable: true });
@@ -1696,12 +1696,12 @@ test('leaving the page with changes that were never written warns', async () => 
   const { editor } = await editorFor(page);
   const disarm = edit.armNavigationWarning(page, { confirm: () => true });
   try {
-    const clean = cancellable(page, 'beforeunload');
+    const clean = cancelable(page, 'beforeunload');
     page.defaultView?.dispatchEvent(clean);
     assert.strictEqual(clean.defaultPrevented, false, 'a panel with nothing to save warned');
 
     choose(control(editor, 'select.bghsa-triage'), 'evaluating');
-    const dirty = cancellable(page, 'beforeunload');
+    const dirty = cancelable(page, 'beforeunload');
     page.defaultView?.dispatchEvent(dirty);
     assert.strictEqual(dirty.defaultPrevented, true, 'unsaved changes did not warn');
     assert.strictEqual(
@@ -1731,19 +1731,19 @@ test('a link GitHub would follow without a load is asked about first', async () 
     },
   });
   try {
-    const clean = cancellable(page, 'click');
+    const clean = cancelable(page, 'click');
     link.dispatchEvent(clean);
     assert.strictEqual(asked.length, 0, 'a panel with nothing to save asked');
     assert.strictEqual(clean.defaultPrevented, false);
 
     choose(control(editor, 'select.bghsa-triage'), 'evaluating');
-    const stopped = cancellable(page, 'click');
+    const stopped = cancelable(page, 'click');
     link.dispatchEvent(stopped);
     assert.deepStrictEqual(asked, [edit.LEAVE_MESSAGE]);
     assert.strictEqual(stopped.defaultPrevented, true, 'the navigation went ahead');
 
     answer = true;
-    const allowed = cancellable(page, 'click');
+    const allowed = cancelable(page, 'click');
     link.dispatchEvent(allowed);
     assert.strictEqual(asked.length, 2);
     assert.strictEqual(allowed.defaultPrevented, false, 'the navigation was stopped anyway');
@@ -1771,8 +1771,8 @@ test('a move within the page and a press on the panel are not navigation', async
   });
   try {
     choose(control(editor, 'select.bghsa-triage'), 'evaluating');
-    fragment.dispatchEvent(cancellable(page, 'click'));
-    control(editor, 'button.bghsa-discard').dispatchEvent(cancellable(page, 'click'));
+    fragment.dispatchEvent(cancelable(page, 'click'));
+    control(editor, 'button.bghsa-discard').dispatchEvent(cancelable(page, 'click'));
     assert.strictEqual(asked, 0, 'a click that stays on the page asked about leaving');
   } finally {
     disarm();
@@ -1799,7 +1799,7 @@ test('a link opened somewhere else leaves the panel where it is', async () => {
   });
   try {
     choose(control(editor, 'select.bghsa-triage'), 'evaluating');
-    link.dispatchEvent(cancellable(page, 'click'));
+    link.dispatchEvent(cancelable(page, 'click'));
     assert.strictEqual(asked, 0, 'a link opening a second tab asked about leaving');
   } finally {
     disarm();
@@ -1871,14 +1871,14 @@ test('the page holding unsaved changes is the page that asks about them', async 
 
     // The advisory list is not the page the changes were left on, and opening
     // another advisory from it is not the navigation that left them.
-    next.dispatchEvent(cancellable(page, 'click'));
+    next.dispatchEvent(cancelable(page, 'click'));
     assert.deepStrictEqual(asked, [edit.LEAVE_MESSAGE], 'the next navigation asked again');
 
     // The same press on the same link asks while the advisory holding the
     // changes is the one showing, so it is the departure that quieted it and
     // not a guard that stopped listening.
     edit.panelShows(key);
-    next.dispatchEvent(cancellable(page, 'click'));
+    next.dispatchEvent(cancelable(page, 'click'));
     assert.strictEqual(asked.length, 2, 'the guard heard nothing on the page it is armed for');
   } finally {
     disarm();

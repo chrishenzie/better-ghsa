@@ -313,7 +313,7 @@ globalThis.bghsa ??= /** @type {BghsaNamespace} */ ({});
 
   /**
    * The source value the scoring fingerprint covers. A real advisory carries a
-   * severity or a CVSS vector and not both, so each half is labelled and an
+   * severity or a CVSS vector and not both, so each half is labeled and an
    * absent half is written as the empty string. A null half and an empty half
    * therefore fingerprint alike.
    *

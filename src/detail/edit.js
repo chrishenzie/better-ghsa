@@ -1153,7 +1153,7 @@ if (typeof require === 'function') {
   /**
    * @param {Document} doc
    * @param {string} label
-   * @returns {{ field: Element, body: Element }} one labelled line of controls.
+   * @returns {{ field: Element, body: Element }} one labeled line of controls.
    */
   function fieldRow(doc, label) {
     const field = element(doc, 'div', 'd-flex flex-items-center flex-wrap mb-2 bghsa-field');
