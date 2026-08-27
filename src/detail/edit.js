@@ -1575,7 +1575,10 @@ if (typeof require === 'function') {
 
     const disclosure = element(doc, 'details', 'bghsa-editor-details');
     if (opened.has(key)) disclosure.setAttribute('open', '');
-    const summary = element(doc, 'summary', 'text-bold bghsa-editor-summary', 'Edit tracking state');
+    // A Primer button, so the disclosure reads as a control and not as a line
+    // of bold text with a triangle beside it. It stays a `summary`, so the
+    // native disclosure semantics and the expanded state still hold.
+    const summary = element(doc, 'summary', 'btn btn-sm bghsa-editor-summary', 'Edit tracking state');
     summary.addEventListener('click', () => {
       if (opened.has(key)) opened.delete(key);
       else opened.add(key);

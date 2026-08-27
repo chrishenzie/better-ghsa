@@ -1,0 +1,1062 @@
+'use strict';
+
+globalThis.bghsa ??= /** @type {BghsaNamespace} */ ({});
+
+// The manifest orders content scripts; under Node the dependencies are named here.
+if (typeof require === 'function') {
+  require('../common/dom.js');
+  require('../common/trust.js');
+  require('../common/schema.js');
+  require('../common/merge.js');
+  require('../common/parse-list.js');
+  require('../common/derive.js');
+  require('../common/order.js');
+  require('../common/cache.js');
+  require('../detail/tracking.js');
+}
+
+/**
+ * One chip on a row. A tone names a Primer state token, and a chip with no tone
+ * is dimmed.
+ *
+ * @typedef {object} ChipSpec
+ * @property {string} text
+ * @property {'attention' | 'danger'} [tone]
+ */
+
+/**
+ * One row of the table: what the list markup said, and what the cached read of
+ * the advisory adds to it. Every field the default order sorts on is here, so a
+ * row is an `OrderEntry` as it stands.
+ *
+ * @typedef {object} TableRow
+ * @property {string | null} ghsaId
+ * @property {string | null} href The advisory's path on github.com.
+ * @property {string | null} title
+ * @property {string | null} state `Triage` or `Draft`, as GitHub names it.
+ * @property {string | null} severity The severity, lowercased.
+ * @property {string | null} severityLabel The severity as displayed.
+ * @property {boolean} severityConfirmed Whether a maintainer confirmed the
+ *   scoring the severity comes from.
+ * @property {string | null} openedAt
+ * @property {string | null} reporter
+ * @property {string[]} owners The logins a maintainer put on the advisory.
+ * @property {number} observedAt When this row's data was read, epoch
+ *   milliseconds. A row no advisory read backs carries the moment the list
+ *   markup was read.
+ * @property {boolean} read Whether a cached advisory read backs this row. The
+ *   chips that stand for read state are absent while this is false, because
+ *   nothing has been read to say they hold.
+ * @property {boolean} neverReviewed
+ * @property {boolean} newActivity
+ * @property {string | null} triage
+ * @property {string | null} waitingSince
+ * @property {boolean} embargo Whether an embargo applies.
+ * @property {string | null} embargoLift
+ * @property {boolean} embargoOverdue
+ * @property {string | null} patch The furthest state the private fork's pull
+ *   requests reached, and null where there is nothing to say.
+ * @property {number} backportTargets How many branches a maintainer asked for.
+ * @property {number} backportsDone How many of them carry a merged pull request.
+ * @property {boolean} textConfirmed Whether a maintainer confirmed both the
+ *   advisory title and the advisory description.
+ * @property {string | null} cve What the CVE chip reads, and null where the
+ *   advisory has no CVE state to show.
+ */
+
+/**
+ * The table as one render assembled it.
+ *
+ * @typedef {object} TableView
+ * @property {TableRow[]} rows In the default order.
+ * @property {number} at The moment the render read the page, epoch milliseconds.
+ */
+
+/**
+ * @typedef {object} ViewOptions
+ * @property {import('../common/cache.js').CacheStorage | null} [storage]
+ * @property {number} [at] The moment the list markup was read, epoch
+ *   milliseconds.
+ */
+
+(() => {
+  /** The id of the sentinel element the extension owns. */
+  const ROOT_ID = 'bghsa-list';
+
+  /**
+   * The id of the list surface's stylesheet. The detail panel carries a
+   * stylesheet of its own under another id, so neither surface can be left
+   * holding the other's rules.
+   */
+  const STYLE_ID = 'bghsa-list-style';
+
+  /** What marks an element the extension is holding out of view. */
+  const HIDDEN_CLASS = 'bghsa-hidden';
+
+  /** Every rule the list surface adds to the page. */
+  const STYLE_TEXT = [
+    // Primer's own display utilities carry `!important`, so holding one of its
+    // elements out of view takes the same weight.
+    `.${HIDDEN_CLASS} { display: none !important; }`,
+    '.bghsa-list-chips { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; }',
+    '.bghsa-list-owners { display: flex; flex-wrap: wrap; gap: 2px; align-items: center; }',
+    '.bghsa-list-observed { color: var(--fgColor-muted); white-space: nowrap; }',
+    '.bghsa-list-meta { color: var(--fgColor-muted); }',
+    '.bghsa-tone-attention { color: var(--fgColor-default);' +
+      ' background-color: var(--bgColor-attention);' +
+      ' border-color: var(--bgColor-attention); }',
+    '.bghsa-tone-danger { color: var(--fgColor-default);' +
+      ' background-color: var(--bgColor-danger);' +
+      ' border-color: var(--bgColor-danger); }',
+  ].join('\n');
+
+  /** What the toggle reads while the extension's table is showing. */
+  const SHOW_GITHUB = "Show GitHub's view";
+
+  /** What the toggle reads while GitHub's own view is showing. */
+  const SHOW_TABLE = 'Show the Better GHSA table';
+
+  /**
+   * The selectors `parse-list` keys on inside `div#advisories`. Nothing the
+   * table inserts may match one of them: the table sits in the element the
+   * parser reads, and a row of its own read back as a row of GitHub's would
+   * double every advisory on the next pass.
+   *
+   * @type {readonly string[]}
+   */
+  const PARSED_SELECTORS = ['div.Box-row--drag-hide', 'segmented-control', 'a[rel="next"]'];
+
+  /** How every surface builds an element. */
+  const element = globalThis.bghsa.dom.element;
+
+  /**
+   * @param {Document} doc
+   * @param {ChipSpec} spec
+   * @returns {Element}
+   */
+  function chip(doc, spec) {
+    const classes = ['Label', 'Label--secondary'];
+    if (spec.tone !== undefined) classes.push(`bghsa-tone-${spec.tone}`);
+    return element(doc, 'span', classes.join(' '), spec.text);
+  }
+
+  /**
+   * A stored value as a chip reads it. Only the first letter is touched, so a
+   * value this extension does not interpret reaches the reader as it stands.
+   *
+   * @param {string} value
+   * @returns {string}
+   */
+  function sentenceCase(value) {
+    return value === '' ? value : `${value[0]?.toUpperCase() ?? ''}${value.slice(1)}`;
+  }
+
+  /**
+   * @param {string | number | null} at
+   * @returns {number | null} the instant `at` names, and null for a value that
+   *   does not read as one.
+   */
+  function instantOf(at) {
+    if (at === null) return null;
+    const parsed = typeof at === 'number' ? at : Date.parse(at);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  /**
+   * @param {string | number | null} at
+   * @returns {string | null} that instant to the minute in UTC. A string that
+   *   does not read as a time comes back as it stands, because a stored value
+   *   is whatever a maintainer's browser wrote.
+   */
+  function formatTime(at) {
+    const parsed = instantOf(at);
+    if (parsed === null) return typeof at === 'string' ? at : null;
+    return new Date(parsed).toISOString().replace('T', ' ').replace(/:\d\d\.\d+Z$/, ' UTC');
+  }
+
+  /**
+   * @param {string | number | null} at
+   * @returns {string | null} the day that instant falls on, in UTC.
+   */
+  function formatDate(at) {
+    const parsed = instantOf(at);
+    if (parsed === null) return typeof at === 'string' ? at : null;
+    return new Date(parsed).toISOString().slice(0, 10);
+  }
+
+  /**
+   * @param {unknown} value
+   * @returns {string | null} the string it holds, and null for anything else.
+   */
+  function text(value) {
+    return typeof value === 'string' && value.trim() !== '' ? value : null;
+  }
+
+  /**
+   * @param {unknown} value
+   * @returns {string[]} the strings with content the value holds.
+   */
+  function strings(value) {
+    if (!Array.isArray(value)) return [];
+    /** @type {string[]} */
+    const found = [];
+    for (const entry of value) {
+      if (typeof entry === 'string' && entry.trim() !== '') found.push(entry);
+    }
+    return found;
+  }
+
+  /**
+   * One comment out of a cached record. The author's standing and the snapshot
+   * are recomputed here rather than read: the record is what an older version of
+   * this extension wrote, and the trust rule and the schema rules are this
+   * version's.
+   *
+   * @param {unknown} value
+   * @returns {import('../common/parse-detail.js').ParsedComment | null}
+   */
+  function commentFrom(value) {
+    const schema = globalThis.bghsa.schema;
+    if (!schema.isPlainObject(value)) return null;
+    const author = text(value.author);
+    const role = text(value.role);
+    const held = schema.isPlainObject(value.stateComment) ? text(value.stateComment.raw) : null;
+    return {
+      id: text(value.id) ?? '',
+      elementId: text(value.elementId) ?? '',
+      author,
+      role,
+      roles: strings(value.roles),
+      trusted: globalThis.bghsa.trust.isTrustedAuthor(author, role),
+      at: text(value.at),
+      text: text(value.text) ?? '',
+      stateComment: held === null ? null : schema.readSnapshot(held),
+    };
+  }
+
+  /**
+   * @param {unknown} value
+   * @returns {import('../common/parse-detail.js').TimelineEvent | null}
+   */
+  function eventFrom(value) {
+    if (!globalThis.bghsa.schema.isPlainObject(value)) return null;
+    return {
+      id: text(value.id),
+      actor: text(value.actor),
+      at: text(value.at),
+      text: text(value.text) ?? '',
+    };
+  }
+
+  /**
+   * @param {unknown} value
+   * @returns {import('../common/parse-detail.js').ForkPullRequest | null}
+   */
+  function pullFrom(value) {
+    if (!globalThis.bghsa.schema.isPlainObject(value)) return null;
+    const number = value.number;
+    return {
+      number: typeof number === 'number' && Number.isFinite(number) ? number : null,
+      url: text(value.url),
+      title: text(value.title) ?? '',
+      state: text(value.state),
+      baseRef: text(value.baseRef),
+      headRef: text(value.headRef),
+      author: text(value.author),
+      openedAt: text(value.openedAt),
+      assignees: strings(value.assignees),
+    };
+  }
+
+  /**
+   * @param {unknown} value
+   * @returns {import('../common/parse-detail.js').PrivateFork | null}
+   */
+  function forkFrom(value) {
+    if (!globalThis.bghsa.schema.isPlainObject(value)) return null;
+    if (!Array.isArray(value.pullRequests)) return null;
+    /** @type {import('../common/parse-detail.js').ForkPullRequest[]} */
+    const pullRequests = [];
+    for (const entry of value.pullRequests) {
+      const pull = pullFrom(entry);
+      if (pull !== null) pullRequests.push(pull);
+    }
+    return {
+      cloneUrl: text(value.cloneUrl),
+      repository: text(value.repository),
+      deleteUrl: text(value.deleteUrl),
+      pullRequests,
+    };
+  }
+
+  /**
+   * The advisory a cache entry holds. The entry is data an older version of this
+   * extension wrote, so every field is checked and none is assumed: a record
+   * carrying no comment list and no timeline is not one this reader can derive
+   * anything from, and it answers as absent.
+   *
+   * @param {unknown} record
+   * @returns {import('../common/parse-detail.js').ParsedDetail | null}
+   */
+  function advisoryFrom(record) {
+    const schema = globalThis.bghsa.schema;
+    if (!schema.isPlainObject(record)) return null;
+    if (!Array.isArray(record.comments) || !Array.isArray(record.timeline)) return null;
+
+    /** @type {import('../common/parse-detail.js').ParsedComment[]} */
+    const comments = [];
+    for (const entry of record.comments) {
+      const comment = commentFrom(entry);
+      if (comment !== null) comments.push(comment);
+    }
+    /** @type {import('../common/parse-detail.js').TimelineEvent[]} */
+    const timeline = [];
+    for (const entry of record.timeline) {
+      const event = eventFrom(entry);
+      if (event !== null) timeline.push(event);
+    }
+
+    return {
+      ref: null,
+      viewer: null,
+      ghsaId: text(record.ghsaId),
+      state: text(record.state),
+      severity: text(record.severity),
+      severityLabel: text(record.severityLabel),
+      reportedAt: text(record.reportedAt),
+      reporter: text(record.reporter),
+      title: text(record.title),
+      description: text(record.description),
+      severityField: text(record.severityField),
+      severityFieldPresent: record.severityFieldPresent === true,
+      cvssV3: text(record.cvssV3),
+      cvssV3Present: record.cvssV3Present === true,
+      cveId: text(record.cveId),
+      cveSelection: text(record.cveSelection),
+      descriptionOriginal:
+        typeof record.descriptionOriginal === 'boolean' ? record.descriptionOriginal : null,
+      descriptionRevision: null,
+      comments,
+      timeline,
+      fork: forkFrom(record.fork),
+      collaborators: strings(record.collaborators),
+    };
+  }
+
+  /**
+   * The furthest state the advisory's private fork reached. A pull request whose
+   * state went unread leaves this null where nothing else is open or merged,
+   * because a closed patch and a patch this reader could not judge are not the
+   * same thing.
+   *
+   * @param {import('../common/derive.js').PatchState} patch
+   * @returns {string | null}
+   */
+  function patchStateOf(patch) {
+    const states = patch.pullRequests.map((pull) => pull.state);
+    if (states.includes('open')) return 'Patch in review';
+    if (states.includes('merged')) return 'Patch merged';
+    if (patch.incomplete || states.length === 0) return null;
+    return 'Patch closed';
+  }
+
+  /**
+   * @param {import('../common/derive.js').PatchState} patch
+   * @param {readonly string[]} backports The branches a maintainer asked for.
+   * @returns {number} how many of them carry a merged pull request.
+   */
+  function backportsDoneIn(patch, backports) {
+    /** @type {Set<string>} */
+    const merged = new Set();
+    return backports.filter((branch) => merged.has(branch)).length;
+  }
+
+  /**
+   * What the CVE chip reads. An assigned CVE reads as the identifier itself,
+   * which is the value a maintainer is looking for. An advisory with no CVE
+   * state has no chip.
+   *
+   * @param {import('../common/derive.js').CveState} cve
+   * @returns {string | null}
+   */
+  function cveTextOf(cve) {
+    if (cve.state === 'assigned') return cve.id;
+    if (cve.state === 'requested') return 'CVE requested';
+    if (cve.state === 'not applicable') return 'CVE not applicable';
+    return null;
+  }
+
+  /**
+   * A row carrying nothing but what the list markup said.
+   *
+   * @param {import('../common/parse-list.js').ListRow} listRow
+   * @param {number} at When the list markup was read.
+   * @returns {TableRow}
+   */
+  function unreadRow(listRow, at) {
+    return {
+      ghsaId: listRow.ghsaId,
+      href: listRow.href,
+      title: listRow.title,
+      state: listRow.state,
+      severity: listRow.severity,
+      severityLabel: listRow.severityLabel,
+      severityConfirmed: false,
+      openedAt: listRow.openedAt,
+      reporter: listRow.reporter,
+      owners: [],
+      observedAt: at,
+      read: false,
+      neverReviewed: false,
+      newActivity: false,
+      triage: null,
+      waitingSince: listRow.openedAt,
+      embargo: false,
+      embargoLift: null,
+      embargoOverdue: false,
+      patch: null,
+      backportTargets: 0,
+      backportsDone: 0,
+      textConfirmed: false,
+      cve: null,
+    };
+  }
+
+  /**
+   * One row, from the list markup and from what the cache holds of that
+   * advisory. The list markup wins on the values GitHub's own row carried: the
+   * page was rendered now and the cached read was not.
+   *
+   * @param {import('../common/parse-list.js').ListRow} listRow
+   * @param {import('../common/cache.js').CacheEntry | null} entry
+   * @param {number} at When the list markup was read.
+   * @returns {Promise<TableRow>}
+   */
+  async function viewRow(listRow, entry, at) {
+    const advisory = entry === null ? null : advisoryFrom(entry.record);
+    if (advisory === null || entry === null) return unreadRow(listRow, at);
+
+    const merged = globalThis.bghsa.merge.mergeSnapshots(advisory.comments);
+    const tracking = await globalThis.bghsa.tracking.readAdvisory(advisory, merged);
+    const derived = globalThis.bghsa.derive.derive(advisory);
+    const embargoLift = tracking.embargo ? tracking.embargoLift : null;
+
+    return {
+      ghsaId: listRow.ghsaId ?? advisory.ghsaId,
+      href: listRow.href,
+      title: listRow.title ?? advisory.title,
+      state: listRow.state ?? advisory.state,
+      severity: listRow.severity ?? advisory.severity,
+      severityLabel: listRow.severityLabel ?? advisory.severityLabel,
+      severityConfirmed: tracking.scoring.status === 'confirmed',
+      openedAt: listRow.openedAt ?? advisory.reportedAt,
+      reporter: listRow.reporter ?? advisory.reporter,
+      owners: tracking.owners,
+      observedAt: entry.observedAt,
+      read: true,
+      neverReviewed: derived.neverReviewed,
+      newActivity: derived.newActivity,
+      triage: tracking.triage,
+      waitingSince: tracking.triageSince ?? listRow.openedAt ?? advisory.reportedAt,
+      embargo: tracking.embargo,
+      embargoLift,
+      embargoOverdue: globalThis.bghsa.derive.embargoOverdue(advisory, embargoLift, at),
+      patch: patchStateOf(derived.patch),
+      backportTargets: tracking.backports.length,
+      backportsDone: backportsDoneIn(derived.patch, tracking.backports),
+      textConfirmed:
+        tracking.title.status === 'confirmed' && tracking.description.status === 'confirmed',
+      cve: cveTextOf(derived.cve),
+    };
+  }
+
+  /**
+   * The rows of the table, in the default order, from the list markup on the
+   * page and from what the cache holds of the advisories it names.
+   *
+   * @param {import('../common/parse-list.js').ParsedList} parsed
+   * @param {ViewOptions} [options]
+   * @returns {Promise<TableView>}
+   */
+  async function readView(parsed, options = {}) {
+    const cache = globalThis.bghsa.cache;
+    const at = options.at ?? cache.now();
+    /** @type {string[]} */
+    const ids = [];
+    for (const row of parsed.rows) {
+      if (row.ghsaId !== null) ids.push(row.ghsaId);
+    }
+    const entries = await cache.getAdvisories(parsed, ids, { storage: options.storage, at });
+    const rows = await Promise.all(
+      parsed.rows.map((row) =>
+        viewRow(row, row.ghsaId === null ? null : entries.get(row.ghsaId) ?? null, at)
+      )
+    );
+    return { rows: globalThis.bghsa.order.sort(rows), at };
+  }
+
+  /**
+   * The chips under one row's title, in the order REQUIREMENTS.md section 9
+   * lists them.
+   *
+   * A chip standing for a boolean is there while the condition holds and absent
+   * while it does not. Colour marks what a maintainer has to act on now: an
+   * advisory nobody has reviewed, a reporter waiting on an answer, an embargo
+   * running out. A chip naming a state the advisory is simply in stays dimmed.
+   *
+   * The scoring confirmation rides on the severity chip, because the scoring
+   * track is the severity and its vector, and a second chip beside the severity
+   * would say the same thing twice. Where the advisory sets no severity there is
+   * no chip to ride, and the confirmation stands on its own.
+   *
+   * @param {TableRow} row
+   * @returns {ChipSpec[]}
+   */
+  function chipsFor(row) {
+    const order = globalThis.bghsa.order;
+    /** @type {ChipSpec[]} */
+    const chips = [];
+
+    // The waiting state is what an advisory read says, so it is absent until one
+    // has been read. Nothing on the list page names it.
+    if (row.read) {
+      const tier = order.tierOf(row);
+      /** @type {ChipSpec} */
+      const waiting = { text: sentenceCase(order.tierName(tier)) };
+      if (tier === order.TIERS.NEVER_REVIEWED) waiting.tone = 'danger';
+      else if (tier === order.TIERS.NEW_ACTIVITY) waiting.tone = 'attention';
+      chips.push(waiting);
+    }
+
+    if (row.patch !== null) chips.push({ text: row.patch });
+    if (row.backportTargets > 0) {
+      chips.push({ text: `Backports ${row.backportsDone} of ${row.backportTargets}` });
+    }
+    if (row.textConfirmed) chips.push({ text: 'Text confirmed' });
+
+    if (row.cve !== null) chips.push({ text: row.cve });
+
+    if (row.severityLabel !== null) {
+      const severity = sentenceCase(row.severityLabel);
+      chips.push({
+        text: row.read
+          ? `${severity}, ${row.severityConfirmed ? 'confirmed' : 'unconfirmed'}`
+          : severity,
+      });
+    } else if (row.severityConfirmed) {
+      chips.push({ text: 'Scoring confirmed' });
+    }
+
+    if (row.embargoOverdue) chips.push({ text: 'Embargo overdue', tone: 'danger' });
+    else if (row.embargo) {
+      const lift = row.embargoLift;
+      chips.push({
+        text: lift === null ? 'Embargoed' : `Embargo lifts ${lift}`,
+        tone: 'attention',
+      });
+    }
+
+    return chips;
+  }
+
+  /**
+   * The line GitHub's own row carries under the title. The table replaces those
+   * rows, so it carries what they carried.
+   *
+   * @param {TableRow} row
+   * @returns {string}
+   */
+  function metaTextOf(row) {
+    const parts = [];
+    if (row.ghsaId !== null) parts.push(row.ghsaId);
+    const opened = formatDate(row.openedAt);
+    if (opened !== null) parts.push(`opened ${opened}`);
+    if (row.reporter !== null) parts.push(`by ${row.reporter}`);
+    return parts.join(' ');
+  }
+
+  /**
+   * The size an owner icon is drawn at.
+   * `testdata/published-containerd.html` shows GitHub drawing a collaborator
+   * avatar at 20 pixels from a source asked for at `s=40`, so the image is
+   * requested at twice the size it is drawn at and reads sharp on a display
+   * that doubles pixels.
+   */
+  const AVATAR_PIXELS = 20;
+
+  /** The size the avatar image is asked for, in pixels. */
+  const AVATAR_SOURCE_PIXELS = AVATAR_PIXELS * 2;
+
+  /**
+   * The avatar GitHub serves for one login.
+   *
+   * Every avatar in every capture under `testdata/` is keyed on the account's
+   * numeric id, `https://avatars.githubusercontent.com/u/{id}?s=40&v=4`, and an
+   * owner login arrives from a state comment with no id beside it. GitHub also
+   * serves `https://github.com/{login}.png?size={n}`, which redirects to that
+   * id-keyed form: `samuelkarp` answers with
+   * `https://avatars.githubusercontent.com/u/737750?s=40&v=4`, verified in a
+   * browser on 2026-08-27.
+   *
+   * A login that names no account and a request that fails both leave the image
+   * blank, and the icon falls back to the login in its `alt`. Neither is known
+   * here, so every login gets a source and the browser decides what arrives.
+   *
+   * @param {string} login
+   * @returns {string}
+   */
+  function avatarUrlFor(login) {
+    return `https://github.com/${encodeURIComponent(login)}.png?size=${AVATAR_SOURCE_PIXELS}`;
+  }
+
+  /**
+   * The owners, as the profile icons an issue carries for its assignees: the
+   * `img.avatar.avatar-user` inside a link to the profile that GitHub uses for a
+   * collaborator.
+   *
+   * The login travels in `alt` and in `title`, so an owner whose image does not
+   * load is still named and the row still renders.
+   *
+   * An owner login arrives from a state comment, which is text anyone who can
+   * comment on the advisory can write, so it is encoded into the profile path
+   * the same way it is encoded into the avatar source beside it.
+   *
+   * @param {Document} doc
+   * @param {readonly string[]} owners
+   * @returns {Element}
+   */
+  function buildOwners(doc, owners) {
+    const box = element(doc, 'div', 'bghsa-list-owners');
+    for (const login of owners) {
+      const link = element(doc, 'a', 'no-underline bghsa-list-owner');
+      link.setAttribute('href', `/${encodeURIComponent(login)}`);
+      link.setAttribute('title', login);
+      link.setAttribute('aria-label', `Owner ${login}`);
+      const avatar = element(doc, 'img', 'avatar avatar-user');
+      avatar.setAttribute('src', avatarUrlFor(login));
+      avatar.setAttribute('alt', `@${login}`);
+      avatar.setAttribute('title', login);
+      avatar.setAttribute('width', String(AVATAR_PIXELS));
+      avatar.setAttribute('height', String(AVATAR_PIXELS));
+      link.append(avatar);
+      box.append(link);
+    }
+    return box;
+  }
+
+  /**
+   * One row: the title as a link, the line GitHub's row carried, the chips, the
+   * state, the owners, and when this row's data was read.
+   *
+   * The row carries none of the classes `parse-list` keys on, so a re-read of
+   * the page cannot take it for one of GitHub's.
+   *
+   * @param {Document} doc
+   * @param {TableRow} row
+   * @returns {Element}
+   */
+  function buildRow(doc, row) {
+    const item = element(doc, 'li', 'Box-row d-flex flex-items-start bghsa-list-row');
+    if (row.ghsaId !== null) item.setAttribute('data-bghsa-ghsa', row.ghsaId);
+
+    const main = element(doc, 'div', 'flex-auto lh-condensed');
+    const link = element(
+      doc,
+      'a',
+      'Link--primary v-align-middle no-underline h4',
+      row.title ?? row.ghsaId ?? 'Advisory'
+    );
+    if (row.href !== null) link.setAttribute('href', row.href);
+    main.append(link);
+    main.append(element(doc, 'div', 'mt-1 text-small bghsa-list-meta', metaTextOf(row)));
+    const chips = element(doc, 'div', 'mt-1 bghsa-list-chips');
+    for (const spec of chipsFor(row)) chips.append(chip(doc, spec));
+    main.append(chips);
+    item.append(main);
+
+    const state = element(doc, 'div', 'pl-2 flex-shrink-0 bghsa-list-state');
+    if (row.state !== null) state.append(chip(doc, { text: row.state }));
+    item.append(state);
+
+    if (row.owners.length > 0) {
+      const owners = element(doc, 'div', 'pl-2 flex-shrink-0');
+      owners.append(buildOwners(doc, row.owners));
+      item.append(owners);
+    }
+
+    item.append(
+      element(
+        doc,
+        'div',
+        'pl-2 flex-shrink-0 text-small bghsa-list-observed',
+        `Observed ${formatTime(row.observedAt) ?? 'never'}`
+      )
+    );
+    return item;
+  }
+
+  /**
+   * @param {number} count
+   * @returns {string}
+   */
+  function countTextOf(count) {
+    return count === 1 ? '1 advisory' : `${count} advisories`;
+  }
+
+  /**
+   * The extension's surface: a bar carrying the toggle, which is visible in
+   * either view, and the table, which the toggle holds out of view.
+   *
+   * @param {Document} doc
+   * @param {TableView} view
+   * @returns {Element}
+   */
+  function buildTable(doc, view) {
+    const root = element(doc, 'div', 'bghsa-list-root');
+    root.id = ROOT_ID;
+    root.setAttribute('data-bghsa-list', '1');
+
+    const bar = element(doc, 'div', 'd-flex flex-items-center flex-justify-end mb-2 bghsa-list-bar');
+    const toggle = element(doc, 'button', 'btn btn-sm bghsa-list-toggle', SHOW_GITHUB);
+    toggle.setAttribute('type', 'button');
+    toggle.addEventListener('click', () => {
+      setShowingNative(doc, !showingNative(doc));
+      applyVisibility(doc);
+    });
+    bar.append(toggle);
+    root.append(bar);
+
+    const box = element(doc, 'div', 'Box mb-3 bghsa-list-box');
+    const header = element(
+      doc,
+      'div',
+      'Box-header d-flex flex-items-center flex-justify-between bghsa-list-header'
+    );
+    header.append(element(doc, 'strong', '', 'Better GHSA'));
+    header.append(element(doc, 'span', 'text-normal', countTextOf(view.rows.length)));
+    box.append(header);
+
+    const list = element(doc, 'ul', 'bghsa-list-rows');
+    for (const row of view.rows) list.append(buildRow(doc, row));
+    box.append(list);
+    root.append(box);
+    return root;
+  }
+
+  /**
+   * GitHub's own controls, which the table holds out of view while it is
+   * showing: the Box carrying the segmented control and the native rows, and the
+   * query form. The segmented control and the rows are one element, so restoring
+   * them is one act and cannot restore half.
+   *
+   * @param {Element} container The `div#advisories`.
+   * @returns {Element[]}
+   */
+  function nativeControls(container) {
+    /** @type {Element[]} */
+    const found = [];
+    const control = container.querySelector('segmented-control');
+    const box =
+      control?.closest('div.Box') ??
+      container.querySelector('div.Box-row--drag-hide')?.closest('div.Box') ??
+      null;
+    if (box !== null) found.push(box);
+    for (const filter of container.querySelectorAll('repository-advisories-filter')) {
+      if (!found.includes(filter)) found.push(filter);
+    }
+    return found;
+  }
+
+  /**
+   * Which view each document is showing. GitHub's view is showing only where a
+   * press asked for it, so a fresh page and a re-render after a subtree
+   * replacement both come up on the table.
+   *
+   * @type {WeakMap<Document, boolean>}
+   */
+  const nativeView = new WeakMap();
+
+  /**
+   * @param {Document} doc
+   * @returns {boolean} whether GitHub's own view is showing.
+   */
+  function showingNative(doc) {
+    return nativeView.get(doc) === true;
+  }
+
+  /**
+   * @param {Document} doc
+   * @param {boolean} value
+   * @returns {void}
+   */
+  function setShowingNative(doc, value) {
+    nativeView.set(doc, value);
+  }
+
+  /**
+   * @param {Element} node
+   * @param {boolean} hidden
+   * @returns {void} holds `node` out of view, or puts it back. Nothing is taken
+   *   out of the document: the maintainer gets GitHub's own view back whole.
+   */
+  function setHidden(node, hidden) {
+    if (hidden) node.classList.add(HIDDEN_CLASS);
+    else node.classList.remove(HIDDEN_CLASS);
+  }
+
+  /**
+   * Puts the view the document is on into effect: one of the two tables is
+   * showing, the toggle is showing in either, and it reads what pressing it
+   * does.
+   *
+   * @param {Document} doc
+   * @returns {void}
+   */
+  function applyVisibility(doc) {
+    const container = doc.querySelector('#advisories');
+    if (container === null) return;
+    const native = showingNative(doc);
+    for (const node of nativeControls(container)) setHidden(node, !native);
+    const root = doc.getElementById(ROOT_ID);
+    if (root === null) return;
+    const box = root.querySelector('.bghsa-list-box');
+    if (box !== null) setHidden(box, native);
+    const toggle = root.querySelector('.bghsa-list-toggle');
+    if (toggle !== null) toggle.textContent = native ? SHOW_TABLE : SHOW_GITHUB;
+  }
+
+  /**
+   * Where the table goes: in `div#advisories`, above GitHub's query form and the
+   * Box holding its segmented control and its rows, so the toggle sits at the
+   * top of the list in either view.
+   *
+   * @param {Document} doc
+   * @returns {{ parent: Element, before: Element } | null}
+   */
+  function anchor(doc) {
+    const container = doc.querySelector('#advisories');
+    if (container === null) return null;
+    const filter = container.querySelector('repository-advisories-filter');
+    const before = filter ?? nativeControls(container)[0] ?? null;
+    if (before === null || before.parentElement === null) return null;
+    return { parent: before.parentElement, before };
+  }
+
+  /**
+   * @param {Document} doc
+   * @returns {void} adds the list surface's stylesheet once.
+   */
+  function ensureStyle(doc) {
+    if (doc.getElementById(STYLE_ID) !== null) return;
+    const style = doc.createElement('style');
+    style.id = STYLE_ID;
+    style.textContent = STYLE_TEXT;
+    (doc.head ?? doc.documentElement ?? doc.body)?.append(style);
+  }
+
+  /**
+   * Places the table. Placement is keyed on the sentinel element, so injecting
+   * twice leaves one table and re-injecting after GitHub replaced the subtree
+   * puts one back.
+   *
+   * @param {Document} doc
+   * @param {TableView} view
+   * @returns {Element | null} the table, or null when the page offers no anchor.
+   */
+  function injectTable(doc, view) {
+    const root = buildTable(doc, view);
+    const existing = doc.getElementById(ROOT_ID);
+    const place = anchor(doc);
+    if (place !== null) {
+      if (existing !== null) existing.remove();
+      place.parent.insertBefore(root, place.before);
+    } else if (existing !== null) {
+      existing.replaceWith(root);
+    } else {
+      return null;
+    }
+    ensureStyle(doc);
+    applyVisibility(doc);
+    return root;
+  }
+
+  /**
+   * Whether the document needs the table placed: it carries no sentinel, or it
+   * carries one that no longer sits at the anchor because GitHub replaced the
+   * subtree under it.
+   *
+   * @param {Document} doc
+   * @returns {boolean}
+   */
+  function outOfPlace(doc) {
+    const root = doc.getElementById(ROOT_ID);
+    if (root === null) return true;
+    const place = anchor(doc);
+    return place !== null && root.nextElementSibling !== place.before;
+  }
+
+  /**
+   * @param {Document} doc
+   * @returns {{ owner: string, repo: string } | null} the repository the page
+   *   names, and null where it names none. It is the reading the last render
+   *   took, so asking costs no second parse of the page.
+   */
+  function refOf(doc) {
+    const parsed = pageOf(doc);
+    if (parsed === null || parsed.owner === null || parsed.repo === null) return null;
+    return { owner: parsed.owner, repo: parsed.repo };
+  }
+
+  /**
+   * Reads the page and places the table. Returns null when the document is not
+   * an advisory list page, or when it offers no anchor.
+   *
+   * @param {Document} doc
+   * @returns {Promise<Element | null>}
+   */
+  async function render(doc) {
+    const parsed = globalThis.bghsa.parseList.parseList(doc);
+    if (parsed === null) return null;
+    const view = await readView(parsed);
+    return injectTable(doc, view);
+  }
+
+  /**
+   * @returns {string} what the nodes the extension owns match: the table and its
+   *   stylesheet.
+   */
+  function ownedSelector() {
+    return `#${ROOT_ID}, #${STYLE_ID}`;
+  }
+
+  /**
+   * A render loop for one document, running one pass at a time. A pass is
+   * asynchronous because it reads storage, and two running together would each
+   * read the page and then write the table, so the one that finished last would
+   * put back what it read first. A request arriving while a pass runs takes a
+   * pass of its own after it, and further requests during the same pass fold
+   * into that one.
+   *
+   * @param {Document} doc
+   * @returns {() => Promise<void>}
+   */
+  function renderLoop(doc) {
+    let running = false;
+    let again = false;
+    return async function pass() {
+      if (running) {
+        again = true;
+        return;
+      }
+      running = true;
+      try {
+        do {
+          again = false;
+          await render(doc);
+        } while (again);
+      } finally {
+        running = false;
+      }
+    };
+  }
+
+  /**
+   * The render loop each document runs its passes through.
+   *
+   * @type {WeakMap<Document, () => Promise<void>>}
+   */
+  const loops = new WeakMap();
+
+  /**
+   * @param {Document} doc
+   * @returns {() => Promise<void>} that document's loop, made on first use.
+   */
+  function passFor(doc) {
+    const held = loops.get(doc);
+    if (held !== undefined) return held;
+    const loop = renderLoop(doc);
+    loops.set(doc, loop);
+    return loop;
+  }
+
+  /**
+   * Watches the document and runs a pass when the list changes, or when the
+   * table is gone or has been left behind.
+   *
+   * Holding GitHub's controls out of view writes a class and nothing else, and
+   * the watcher reads children alone, so no pass sees it.
+   *
+   * @param {Document} doc
+   * @param {() => Promise<void>} [pass]
+   * @returns {MutationObserver | null} null where the document offers nothing to
+   *   watch or no observer to watch it with.
+   */
+  function observe(doc, pass = renderLoop(doc)) {
+    return globalThis.bghsa.dom.watch(doc, { ownedSelector, outOfPlace, pass });
+  }
+
+  /**
+   * @returns {void} renders the table into this page and keeps it there. The
+   *   first pass and every pass the observer asks for run through one loop, so
+   *   no two of them read and write the document together.
+   */
+  function start() {
+    const doc = globalThis.document;
+    const pass = passFor(doc);
+    void pass();
+    observe(doc, pass);
+  }
+
+  const exported = {
+    ROOT_ID,
+    STYLE_ID,
+    HIDDEN_CLASS,
+    setHidden,
+    STYLE_TEXT,
+    SHOW_GITHUB,
+    SHOW_TABLE,
+    PARSED_SELECTORS,
+    sentenceCase,
+    formatTime,
+    formatDate,
+    advisoryFrom,
+    patchStateOf,
+    backportsDoneIn,
+    cveTextOf,
+    AVATAR_PIXELS,
+    avatarUrlFor,
+    unreadRow,
+    viewRow,
+    readView,
+    chipsFor,
+    metaTextOf,
+    countTextOf,
+    buildOwners,
+    buildRow,
+    buildTable,
+    nativeControls,
+    showingNative,
+    setShowingNative,
+    applyVisibility,
+    anchor,
+    ensureStyle,
+    outOfPlace,
+    injectTable,
+    refOf,
+    render,
+    ownWrite,
+    needsRender,
+    renderLoop,
+    passFor,
+    observe,
+    start,
+  };
+
+  globalThis.bghsa.table = exported;
+
+  if (typeof module !== 'undefined') {
+    module.exports = exported;
+  } else {
+    start();
+  }
+})();

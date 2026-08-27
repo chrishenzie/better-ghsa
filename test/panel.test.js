@@ -103,6 +103,26 @@ async function buildTracked(advisory) {
 }
 
 /**
+ * The panel with its editing controls. `buildPanel` builds them only when it is
+ * handed the context a write reads, so a panel built any other way has none.
+ *
+ * @param {import('../src/common/parse-detail.js').ParsedDetail} advisory
+ * @returns {Promise<Element>} the panel this advisory renders to.
+ */
+async function buildEditable(advisory) {
+  const merged = merge.mergeSnapshots(advisory.comments);
+  const view = await tracking.readAdvisory(advisory, merged);
+  const derived = derive.derive(advisory);
+  return panel.buildPanel(blank, advisory, derived, view, {
+    advisory,
+    derived,
+    tracking: view,
+    fingerprints: await tracking.fingerprints(advisory),
+    merged,
+  });
+}
+
+/**
  * @param {Document} doc
  * @param {import('../src/common/parse-detail.js').ParsedDetail} [advisory]
  * @returns {Element} the panel placed in `doc`.
@@ -423,6 +443,22 @@ test('the stored tracks the triage advisory carries are shown', async () => {
 
 test('a track the snapshot says nothing about carries no row', () => {
   assert.deepStrictEqual(rowLabels(build(draft)), ['Description', 'Original report']);
+});
+
+test('the editing controls start collapsed', async () => {
+  const built = await buildEditable(triage);
+
+  // The panel is for reading state, so the controls that change it are behind
+  // a disclosure the reader opens. What is behind it is the editing form, not
+  // an empty box: the select that stages the triage state is inside.
+  const disclosure = built.querySelector('.bghsa-editor details');
+  if (disclosure === null) throw new Error('the panel carries no editing disclosure');
+  const open = disclosure.getAttribute('open');
+  assert.ok(open === null, `the editing disclosure's open attribute: ${open}`);
+  assert.ok(
+    disclosure.querySelector('select.bghsa-triage') !== null,
+    'the disclosure holds none of the editing controls'
+  );
 });
 
 test('a closed advisory shows the reason and what it duplicates', async () => {

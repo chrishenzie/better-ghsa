@@ -30,7 +30,11 @@ if (typeof require === 'function') {
     '.bghsa-chips { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; }',
     '.bghsa-label { flex: 0 0 9rem; }',
     '.bghsa-field-label { flex: 0 0 9rem; }',
-    '.bghsa-editor-summary { cursor: pointer; }',
+    // The summary is drawn as a Primer button. `display: inline-block` off
+    // `btn` already drops the triangle in engines that key the marker on
+    // `display: list-item`; these cover the ones that do not.
+    '.bghsa-editor-summary { cursor: pointer; list-style: none; }',
+    '.bghsa-editor-summary::-webkit-details-marker { display: none; }',
     '.bghsa-missing { font-style: italic; }',
     '.bghsa-confirmed { display: flex; flex-direction: column; gap: 6px; }',
     '.bghsa-confirmation-name { flex: 0 0 13rem; }',
@@ -435,7 +439,6 @@ if (typeof require === 'function') {
 
     panel.append(buildConfirmations(doc, tracking));
     for (const track of buildTracks(doc, tracking, embargoOverdue)) panel.append(track);
-    if (context !== undefined) panel.append(globalThis.bghsa.edit.buildEditor(doc, context));
 
     const descriptionRow = row(doc, 'Description');
     if (advisory.descriptionOriginal === null) {
@@ -447,6 +450,10 @@ if (typeof require === 'function') {
     }
     panel.append(descriptionRow.row);
     panel.append(buildPreserve(doc, advisory));
+
+    // Last, under everything it edits, so the panel reads as state first and
+    // the one control that changes it sits where a reader has finished looking.
+    if (context !== undefined) panel.append(globalThis.bghsa.edit.buildEditor(doc, context));
 
     return panel;
   }
