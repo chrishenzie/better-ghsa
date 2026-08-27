@@ -39,6 +39,8 @@ if (typeof require === 'function') {
  *   entry waits to be refreshed, milliseconds, drawn once when the entry was
  *   written. Absent on an entry written before entries carried a draw, which
  *   waits the plain threshold the table names.
+ * @property {number} [misses] How many times in a row GitHub has answered 404
+ *   for this advisory. Absent on an entry no read has missed.
  */
 
 /**
@@ -120,6 +122,23 @@ if (typeof require === 'function') {
    * @type {ReadonlySet<string>}
    */
   const JITTERED_STATES = new Set(['published', 'withdrawn']);
+
+  /**
+   * How many 404 answers in a row take an advisory's entry out.
+   * REQUIREMENTS.md section 2 evicts an entry when its advisory no longer
+   * exists, and an advisory GitHub no longer serves is that.
+   *
+   * One 404 is not enough. GitHub answers 404 for an advisory a maintainer has
+   * lost access to and for one behind a bad minute, and the count resets on any
+   * read that succeeds, so an entry is only taken after three passes have each
+   * asked and each been told the advisory is not there.
+   *
+   * `crawl.js` counts three the same way for a list page that will not answer.
+   * The number is written again here and not read from there: `crawl.js`
+   * already reads this file, in the manifest's content script order and under
+   * Node, so reading it back would be a cycle.
+   */
+  const MAX_MISSES = 3;
 
   /**
    * The storage a caller put in place of the browser's, and null while the
@@ -344,6 +363,17 @@ if (typeof require === 'function') {
   }
 
   /**
+   * @param {unknown} value The miss count an entry carries.
+   * @returns {number} how many reads in a row have missed, as a whole count. A
+   *   count that is not a real one is none, so an entry carrying it is asked
+   *   for three more times before it is taken and never taken on the first.
+   */
+  function missesOf(value) {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return 0;
+    return Math.max(0, Math.trunc(value));
+  }
+
+  /**
    * @param {unknown} value The entry as storage handed it back.
    * @returns {CacheEntry | null} the entry it holds, and null where it holds
    *   something else.
@@ -353,7 +383,13 @@ if (typeof require === 'function') {
     const observedAt = value.observedAt;
     if (typeof observedAt !== 'number' || !Number.isFinite(observedAt)) return null;
     const state = normalizeState(value.state);
-    return { record: value.record, observedAt, state, jitterMs: jitterOf(state, value.jitterMs) };
+    return {
+      record: value.record,
+      observedAt,
+      state,
+      jitterMs: jitterOf(state, value.jitterMs),
+      misses: missesOf(value.misses),
+    };
   }
 
   /**
@@ -430,6 +466,10 @@ if (typeof require === 'function') {
   /**
    * Writes one entry, stamped with the moment it was observed.
    *
+   * The write puts the whole entry at that key, which is what takes any 404
+   * count off it: a read that landed says the advisory is there, whatever the
+   * reads before it said.
+   *
    * @param {string | null} key
    * @param {unknown} record
    * @param {string | null} state The state the entry's refresh schedule
@@ -504,6 +544,53 @@ if (typeof require === 'function') {
       if (ghsaId !== undefined) found.set(ghsaId, entry);
     }
     return found;
+  }
+
+  /**
+   * Counts one 404 against an advisory, and takes its entry once
+   * {@link MAX_MISSES} of them have come in a row.
+   *
+   * Only a 404 reaches here. A timeout, a refused connection, a 5xx, and a
+   * queue that was stopped are this extension failing to reach GitHub, and none
+   * of them says the advisory is gone.
+   *
+   * The count goes on the entry beside the observation, and the observation is
+   * left where it stands: an advisory that answered 404 was not read, so the
+   * entry is no fresher for having been asked and the next pass asks again.
+   *
+   * @param {{ owner?: unknown, repo?: unknown, ghsaId?: unknown } | null | undefined} ref
+   * @param {CacheOptions} [options]
+   * @returns {Promise<{ misses: number, evicted: boolean }>} how many 404s in a
+   *   row this advisory has now answered with, and whether that took its entry.
+   *   An advisory the cache holds nothing for counts none: there is nothing to
+   *   evict and nothing the count would go on.
+   */
+  async function noteMissing(ref, options = {}) {
+    const storage = options.storage ?? storageOf();
+    const key = advisoryKey(ref);
+    if (storage === null || key === null) return { misses: 0, evicted: false };
+    /** @type {unknown} */
+    let held;
+    try {
+      held = (await storage.get(key))[key];
+    } catch {
+      return { misses: 0, evicted: false };
+    }
+    const entry = entryFrom(held);
+    if (entry === null) return { misses: 0, evicted: false };
+    const misses = missesOf(entry.misses) + 1;
+    if (misses >= MAX_MISSES) {
+      await discard(storage, [key]);
+      return { misses, evicted: true };
+    }
+    try {
+      await storage.set({ [key]: { ...entry, misses } });
+    } catch {
+      // The count is lost and the entry is not, so the advisory is asked for
+      // again and taken a pass later than it would have been.
+      return { misses, evicted: false };
+    }
+    return { misses, evicted: false };
   }
 
   /**
@@ -595,12 +682,7 @@ if (typeof require === 'function') {
     ADVISORY_PREFIX,
     LIST_PREFIX,
     PROGRESS_PREFIX,
-    CACHE_PREFIXES,
-    DAY_MS,
     STALE_MS,
-    STALE_MS_BY_STATE,
-    JITTER_MS,
-    JITTERED_STATES,
     setStorage,
     storageOf,
     setClock,
@@ -612,15 +694,13 @@ if (typeof require === 'function') {
     isCacheKey,
     stateOf,
     staleAfter,
-    ageOf,
     isStale,
     entryFrom,
     getEntry,
-    getEntries,
-    putEntry,
     getAdvisory,
     putAdvisory,
     getAdvisories,
+    noteMissing,
     getList,
     putList,
     getProgress,

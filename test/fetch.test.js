@@ -782,3 +782,130 @@ test('a stopped queue sends no list page read', async () => {
   // pages that would not answer has this one to leave out.
   assert.ok(page.stopped === true, 'a stop was not told apart from a page that would not answer');
 });
+
+/**
+ * Runs one pass over some advisories, on a clock far enough on that whatever
+ * the cache holds has gone stale and is read again. Each pass is a fresh queue,
+ * which is what a page load is.
+ *
+ * @param {ReturnType<typeof fakeClock>} clock
+ * @param {Fake} storage
+ * @param {readonly string[]} ids
+ * @param {(url: string) => { status: number, body?: string }} answer
+ * @returns {Promise<void>}
+ */
+async function passOver(clock, storage, ids, answer) {
+  clock.advance(10 * MINUTE);
+  const fetch = fakeFetch(clock, answer);
+  const queue = queues.createQueue(options(clock, storage, { fetch: fetch.send }));
+  await queue.add([...ids]);
+  await queue.run();
+}
+
+/**
+ * @param {Fake} storage
+ * @param {string} ghsaId
+ * @param {number} at
+ * @returns {Promise<import('../src/common/cache.js').CacheEntry | null>}
+ */
+function heldFor(storage, ghsaId, at) {
+  return cache.getAdvisory({ ...REF, ghsaId }, { storage, at });
+}
+
+test('three 404 answers in a row take the advisory out of the cache', async () => {
+  const clock = fakeClock(0);
+  const storage = fakeStorage();
+  const id = ghsa('aaaa');
+
+  await passOver(clock, storage, [id], () => ({ status: 200 }));
+  const written = await heldFor(storage, id, clock.now());
+  assert.ok(written !== null, 'the read that answered was not cached');
+  const observedAt = written.observedAt;
+
+  for (const count of [1, 2]) {
+    await passOver(clock, storage, [id], () => ({ status: 404 }));
+    const held = await heldFor(storage, id, clock.now());
+    assert.ok(held !== null, `the entry went after ${count} 404 answers`);
+    assert.strictEqual(held.misses, count, `the count after ${count} 404 answers`);
+    // A 404 read nothing, so the entry is no fresher for having been asked and
+    // the next pass asks again.
+    assert.strictEqual(held.observedAt, observedAt, 'a 404 moved the observation time');
+  }
+
+  await passOver(clock, storage, [id], () => ({ status: 404 }));
+  assert.strictEqual(await heldFor(storage, id, clock.now()), null, 'it survived three 404s');
+  const key = cache.advisoryKey({ ...REF, ghsaId: id }) ?? '';
+  assert.ok(!Object.hasOwn(storage.entries, key), 'the evicted entry stayed in storage');
+});
+
+test('a read that lands puts the 404 count back to none', async () => {
+  const clock = fakeClock(0);
+  const storage = fakeStorage();
+  const id = ghsa('aaaa');
+
+  await passOver(clock, storage, [id], () => ({ status: 200 }));
+  for (const _ of [1, 2]) await passOver(clock, storage, [id], () => ({ status: 404 }));
+  assert.strictEqual((await heldFor(storage, id, clock.now()))?.misses, 2, 'two 404s counted');
+
+  await passOver(clock, storage, [id], () => ({ status: 200 }));
+  assert.strictEqual((await heldFor(storage, id, clock.now()))?.misses, 0, 'the count carried on');
+
+  // Two more. Without the reset the second of these is the third 404 the entry
+  // has answered with and it would be gone.
+  for (const count of [1, 2]) {
+    await passOver(clock, storage, [id], () => ({ status: 404 }));
+    const held = await heldFor(storage, id, clock.now());
+    assert.ok(held !== null, `the entry went after ${count} 404s past a read that landed`);
+    assert.strictEqual(held.misses, count, `the count after the read that landed and ${count}`);
+  }
+});
+
+test('a failure that is not a 404 never counts against the advisory', async () => {
+  const clock = fakeClock(0);
+  const storage = fakeStorage();
+  const id = ghsa('aaaa');
+  await passOver(clock, storage, [id], () => ({ status: 200 }));
+
+  // GitHub having a bad minute, three times over.
+  for (const _ of [1, 2, 3]) await passOver(clock, storage, [id], () => ({ status: 500 }));
+  assert.strictEqual((await heldFor(storage, id, clock.now()))?.misses, 0, 'a 500 counted');
+
+  // A request that never reached GitHub at all, three times over.
+  for (const _ of [1, 2, 3]) {
+    await passOver(clock, storage, [id], () => {
+      throw new Error('NetworkError when attempting to fetch resource.');
+    });
+  }
+  const held = await heldFor(storage, id, clock.now());
+  assert.ok(held !== null, 'six failures that were not 404s took the entry');
+  assert.strictEqual(held.misses, 0, 'a request that never answered counted');
+
+  // Three 404s through the same storage, the same clock, and the same queue.
+  // Without this the assertions above would hold against a reader that counted
+  // nothing at all, because no 404 was ever produced here.
+  for (const _ of [1, 2, 3]) await passOver(clock, storage, [id], () => ({ status: 404 }));
+  assert.strictEqual(await heldFor(storage, id, clock.now()), null, 'a 404 did not count');
+});
+
+test('a 404 on one advisory leaves another advisory alone', async () => {
+  const clock = fakeClock(0);
+  const storage = fakeStorage();
+  const gone = ghsa('aaaa');
+  const kept = ghsa('bbbb');
+  await passOver(clock, storage, [gone, kept], () => ({ status: 200 }));
+
+  // Two passes over both, and then the third 404 on its own. The advisory that
+  // is evicted is the last thing read, so an eviction reaching past its own
+  // entry has nothing after it to write the other one back.
+  for (const _ of [1, 2]) {
+    await passOver(clock, storage, [gone, kept], (url) =>
+      url.endsWith(gone) ? { status: 404 } : { status: 200 }
+    );
+  }
+  await passOver(clock, storage, [gone], () => ({ status: 404 }));
+
+  assert.strictEqual(await heldFor(storage, gone, clock.now()), null, 'the missing one was kept');
+  const held = await heldFor(storage, kept, clock.now());
+  assert.ok(held !== null, "the other advisory went with its neighbour's 404s");
+  assert.strictEqual(held.misses, 0, 'the other advisory carried a count of its own');
+});

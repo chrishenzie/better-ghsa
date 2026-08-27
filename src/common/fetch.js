@@ -116,6 +116,13 @@ if (typeof require === 'function') {
   const SPREAD_MS = 250;
 
   /**
+   * What GitHub answers for an advisory it will not serve. Enough of these in a
+   * row take the advisory's entry out; `cache.js` counts them and says how
+   * many.
+   */
+  const MISSING_STATUS = 404;
+
+  /**
    * How long one request may go unanswered before the pass gives up on it.
    *
    * An advisory detail page is one HTML document from a logged-in session, and
@@ -531,6 +538,13 @@ if (typeof require === 'function') {
       try {
         const answered = await request(globalThis.bghsa.write.detailUrl(advisory));
         if (!(answered.status >= 200 && answered.status < 300)) {
+          // The status is the typed thing this branches on. A read that never
+          // reached GitHub throws and lands in the catch below with no status
+          // at all, and a 5xx is GitHub having a bad minute: neither says the
+          // advisory is gone, and neither counts against it.
+          if (answered.status === MISSING_STATUS) {
+            await globalThis.bghsa.cache.noteMissing(advisory, { storage, at: clock() });
+          }
           fail(ghsaId, `GitHub answered ${answered.status}.`);
           return null;
         }
@@ -766,9 +780,6 @@ if (typeof require === 'function') {
 
   const exported = {
     RATE_MS,
-    SPREAD_MS,
-    REQUEST_TIMEOUT_MS,
-    idsOf,
     progressFrom,
     plan,
     createQueue,

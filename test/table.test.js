@@ -847,6 +847,115 @@ test('a read for an advisory the table is not showing replaces nothing', async (
   assert.ok(!applied, 'a row was replaced for an advisory the table does not hold');
 });
 
+/**
+ * @param {Document} doc
+ * @returns {string | null} what the header says the refresh is doing, and null
+ *   where it says nothing.
+ */
+function progressText(doc) {
+  const root = doc.getElementById(table.ROOT_ID);
+  const chip = root?.querySelector('.bghsa-list-progress') ?? null;
+  return chip === null ? null : (chip.textContent ?? '');
+}
+
+test('the header says what the refresh is doing and stops when it is done', async () => {
+  const owner = 'crawl-progress';
+  const repo = 'repo';
+  const base = `/${owner}/${repo}/security/advisories`;
+  const triage = 'GHSA-aaaa-aaaa-aaaa';
+  const first = 'GHSA-bbbb-bbbb-bbbb';
+  const second = 'GHSA-cccc-cccc-cccc';
+  const doc = pageOf(listHtml({ owner, repo, state: 'triage', ids: [triage] }));
+  const storage = fakeStorage();
+  cache.setStorage(storage);
+  const fetch = fakeFetch({
+    [`${base}?state=draft`]: listHtml({ owner, repo, state: 'draft', ids: [first, second] }),
+    [`${base}/${triage}`]: detailHtml(triage, 'Triage'),
+    [`${base}/${first}`]: detailHtml(first, 'Draft'),
+    [`${base}/${second}`]: detailHtml(second, 'Draft'),
+  });
+
+  // What the header said as each request went out. The sample is taken there
+  // and not on the wait, because the wait between two requests carries a draw
+  // that can round to nothing and then no wait is spent at all.
+  /** @type {(string | null)[]} */
+  const said = [];
+  /** @type {import('../src/common/write.js').WriteFetch} */
+  const send = async (url, init) => {
+    said.push(progressText(doc));
+    return fetch.send(url, init);
+  };
+
+  await table.render(doc);
+  assert.strictEqual(progressText(doc), null, 'a table nothing is refreshing said it was');
+
+  const summary = await table.refresh(doc, {
+    storage,
+    fetch: send,
+    wait: advance,
+    href: `https://github.com${base}?state=triage`,
+  });
+  assert.ok(summary !== null && summary.read.fetched === 3, 'the three advisories were not read');
+
+  // The first request is a list page, which is the walk. The three after it
+  // are the advisories the walk named, counting down as each one lands.
+  assert.deepStrictEqual(said, [table.WALKING_TEXT, '3 to read', '2 to read', '1 to read']);
+  assert.strictEqual(progressText(doc), null, 'the header still said a refresh was running');
+
+  // The count the header carried all along is still beside it.
+  const count = textOf(doc, `#${table.ROOT_ID} .bghsa-list-count`);
+  assert.strictEqual(count, '3 advisories', `the header count: ${count}`);
+});
+
+test('a refresh that could not read everything stops saying it is running', async () => {
+  const owner = 'crawl-progress-failed';
+  const repo = 'repo';
+  const base = `/${owner}/${repo}/security/advisories`;
+  const read = 'GHSA-aaaa-aaaa-aaaa';
+  const unread = 'GHSA-cccc-cccc-cccc';
+  const doc = pageOf(listHtml({ owner, repo, state: 'triage', ids: [read] }));
+  const storage = fakeStorage();
+  cache.setStorage(storage);
+  // The second advisory's page is not in the table, so the fetch answers 404
+  // for it. Nothing reports it, so the count the header carries never reaches
+  // nothing on its own.
+  const fetch = fakeFetch({
+    [`${base}?state=draft`]: listHtml({ owner, repo, state: 'draft', ids: [unread] }),
+    [`${base}/${read}`]: detailHtml(read, 'Triage'),
+  });
+
+  await table.render(doc);
+  const summary = await table.refresh(doc, {
+    storage,
+    fetch: fetch.send,
+    wait: advance,
+    href: `https://github.com${base}?state=triage`,
+  });
+
+  assert.ok(summary !== null && summary.read.failed === 1, 'the missing page was read');
+  assert.strictEqual(progressText(doc), null, 'the header still said a refresh was running');
+});
+
+test('the chip the header carries is dimmed and says nothing with nothing left', () => {
+  const doc = pageOf('<div id="advisories"></div>');
+  const walking = table.progressChip(doc, { phase: 'walking', left: 0 });
+  assert.ok(walking !== null, 'the walk said nothing');
+  // Colour marks a condition to act on, and a refresh that is running is not
+  // one.
+  assert.strictEqual(
+    walking.className,
+    'Label Label--secondary bghsa-list-progress',
+    `the chip carried ${walking.className}`
+  );
+  assert.strictEqual(walking.textContent, 'Walking the list', 'the walk chip read otherwise');
+  assert.strictEqual(
+    table.progressChip(doc, { phase: 'reading', left: 0 }),
+    null,
+    'a pass with nothing left to read still said something'
+  );
+  assert.strictEqual(table.progressChip(doc, null), null, 'a document with no refresh said something');
+});
+
 test('a refresh crawls both open states and fills every row in', async () => {
   const owner = 'crawl-union';
   const repo = 'repo';

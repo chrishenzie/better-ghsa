@@ -337,3 +337,88 @@ test('an entry written before the draw comes due on the plain threshold', async 
   assert.ok(read !== null, 'an entry carrying a NaN draw was not handed back');
   assert.ok(cache.isStale(read, 30 * DAY), 'an entry carrying a NaN draw was fresh at thirty days');
 });
+
+test('counting a 404 against an advisory the cache does not hold does nothing', async () => {
+  const storage = fakeStorage();
+  const counted = await cache.noteMissing(REF, { storage, at: 0 });
+  assert.deepStrictEqual(counted, { misses: 0, evicted: false });
+  assert.deepStrictEqual(storage.removals, [], 'a removal went out for an entry nothing holds');
+
+  // Three of them, which is what takes an entry that is held. There is nothing
+  // here to take and nothing for the count to go on.
+  await cache.noteMissing(REF, { storage, at: 0 });
+  const third = await cache.noteMissing(REF, { storage, at: 0 });
+  assert.ok(!third.evicted, 'an advisory the cache does not hold was evicted');
+});
+
+test('three 404s in a row take the advisory out of the cache', async () => {
+  // The eviction is what stops a deleted or withdrawn advisory being asked for
+  // once a schedule forever. Asserted here as a unit, because the only other
+  // place it is exercised is a whole queue pass in test/fetch.test.js.
+  const storage = fakeStorage();
+  await cache.putAdvisory(REF, { state: 'triage' }, { storage, at: 0 });
+
+  const first = await cache.noteMissing(REF, { storage, at: MINUTE });
+  assert.deepStrictEqual(first, { misses: 1, evicted: false });
+  assert.strictEqual(
+    (await cache.getAdvisory(REF, { storage, at: MINUTE }))?.misses,
+    1,
+    'the first 404 was not counted onto the entry'
+  );
+
+  const second = await cache.noteMissing(REF, { storage, at: 2 * MINUTE });
+  assert.deepStrictEqual(second, { misses: 2, evicted: false });
+  assert.ok(
+    (await cache.getAdvisory(REF, { storage, at: 2 * MINUTE })) !== null,
+    'the entry went on the second 404'
+  );
+  assert.deepStrictEqual(storage.removals, [], 'a removal went out before the third 404');
+
+  const third = await cache.noteMissing(REF, { storage, at: 3 * MINUTE });
+  assert.deepStrictEqual(third, { misses: 3, evicted: true });
+  assert.strictEqual(
+    await cache.getAdvisory(REF, { storage, at: 3 * MINUTE }),
+    null,
+    'the entry survived three 404s in a row'
+  );
+  assert.deepStrictEqual(storage.removals, [[KEY]], 'the eviction named another key');
+
+  // A fourth has nothing left to count, and says so rather than reporting an
+  // eviction of an entry that is already gone.
+  assert.deepStrictEqual(await cache.noteMissing(REF, { storage, at: 4 * MINUTE }), {
+    misses: 0,
+    evicted: false,
+  });
+});
+
+test('a read between two 404s puts the count back to nothing', async () => {
+  // The rule is three in a row. A page that came back is the run broken.
+  const storage = fakeStorage();
+  await cache.putAdvisory(REF, { state: 'triage' }, { storage, at: 0 });
+  await cache.noteMissing(REF, { storage, at: MINUTE });
+  await cache.noteMissing(REF, { storage, at: 2 * MINUTE });
+
+  await cache.putAdvisory(REF, { state: 'triage' }, { storage, at: 3 * MINUTE });
+  assert.strictEqual(
+    (await cache.getAdvisory(REF, { storage, at: 3 * MINUTE }))?.misses,
+    0,
+    'a page that came back left the count where it was'
+  );
+
+  const next = await cache.noteMissing(REF, { storage, at: 4 * MINUTE });
+  assert.deepStrictEqual(next, { misses: 1, evicted: false }, 'the run was not broken');
+  assert.deepStrictEqual(storage.removals, [], 'the entry was evicted on one 404');
+});
+
+test('counting a 404 the storage will not hold leaves the entry', async () => {
+  const storage = fakeStorage();
+  await cache.putAdvisory(REF, { state: 'triage' }, { storage, at: 0 });
+  storage.set = async () => {
+    throw new Error('QuotaExceededError');
+  };
+  const counted = await cache.noteMissing(REF, { storage, at: MINUTE });
+  assert.deepStrictEqual(counted, { misses: 1, evicted: false });
+  const held = await cache.getAdvisory(REF, { storage, at: MINUTE });
+  assert.ok(held !== null, 'a count that could not be written took the entry');
+  assert.strictEqual(held.misses, 0, 'a count that could not be written was read back');
+});

@@ -134,6 +134,18 @@ if (typeof require === 'function') {
  */
 
 /**
+ * How far the refresh a document has running has got, which is what the header
+ * says while it runs.
+ *
+ * @typedef {object} RefreshProgress
+ * @property {'walking' | 'reading'} phase Whether it is walking the list pages
+ *   or reading the advisories they named.
+ * @property {number} left How many advisories are still to read. It is nothing
+ *   while the walk runs, which says nothing about how many there will be: the
+ *   walk is what finds out.
+ */
+
+/**
  * What one refresh of the table did.
  *
  * @typedef {object} RefreshSummary
@@ -186,6 +198,7 @@ if (typeof require === 'function') {
     // elements out of view takes the same weight.
     `.${HIDDEN_CLASS} { display: none !important; }`,
     '.bghsa-list-chips { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; }',
+    '.bghsa-list-status { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; }',
     '.bghsa-list-owners { display: flex; flex-wrap: wrap; gap: 2px; align-items: center; }',
     '.bghsa-list-observed { color: var(--fgColor-muted); white-space: nowrap; }',
     '.bghsa-list-meta { color: var(--fgColor-muted); }',
@@ -206,6 +219,9 @@ if (typeof require === 'function') {
 
   /** What stands in the table where a filter keeps no row. */
   const EMPTY_TEXT = 'No advisory matches the filter';
+
+  /** What the header says while the refresh is walking the list pages. */
+  const WALKING_TEXT = 'Walking the list';
 
   /** What names the facet one filter control holds the table to. */
   const FACET_ATTRIBUTE = 'data-bghsa-facet';
@@ -1237,6 +1253,76 @@ if (typeof require === 'function') {
   }
 
   /**
+   * How far the refresh each document has running has got, and absent on a
+   * document with none. A render rebuilds the whole table, so what the header
+   * says is held here and not only in the node.
+   *
+   * @type {WeakMap<Document, RefreshProgress>}
+   */
+  const progresses = new WeakMap();
+
+  /**
+   * @param {Document} doc
+   * @returns {RefreshProgress | null} how far this document's refresh has got,
+   *   and null where it has none running.
+   */
+  function progressOf(doc) {
+    return progresses.get(doc) ?? null;
+  }
+
+  /**
+   * What the header says the refresh is doing. It is dimmed like every other
+   * chip: colour is kept for a condition a maintainer has to act on, and a
+   * refresh that is running finishes on its own.
+   *
+   * @param {Document} doc
+   * @param {RefreshProgress | null} held
+   * @returns {Element | null} the chip, and null where there is nothing to say:
+   *   no refresh is running, or one is running with nothing left to read.
+   */
+  function progressChip(doc, held) {
+    if (held === null) return null;
+    if (held.phase === 'walking') {
+      return element(doc, 'span', 'Label Label--secondary bghsa-list-progress', WALKING_TEXT);
+    }
+    if (held.left <= 0) return null;
+    return element(
+      doc,
+      'span',
+      'Label Label--secondary bghsa-list-progress',
+      `${held.left} to read`
+    );
+  }
+
+  /**
+   * Says what the refresh is doing, in the header of the table this document is
+   * showing. The chip is written where it stands, because a refresh reports
+   * after every advisory it reads and drawing the table again for each of them
+   * would throw away what the reader was looking at.
+   *
+   * @param {Document} doc
+   * @param {RefreshProgress | null} held What it is doing, and null where it
+   *   has stopped doing anything.
+   * @returns {void}
+   */
+  function setProgress(doc, held) {
+    if (held === null) progresses.delete(doc);
+    else progresses.set(doc, held);
+    const root = doc.getElementById(ROOT_ID);
+    const box = root?.querySelector('.bghsa-list-status') ?? null;
+    if (box === null) return;
+    const shown = box.querySelector('.bghsa-list-progress');
+    const wanted = progressChip(doc, held);
+    if (shown === null) {
+      if (wanted !== null) box.append(wanted);
+    } else if (wanted === null) {
+      box.removeChild(shown);
+    } else {
+      shown.replaceWith(wanted);
+    }
+  }
+
+  /**
    * The rows the table shows. A filter that keeps nothing says so, so that a
    * table holding rows a filter is hiding does not read as a broken one.
    *
@@ -1325,7 +1411,8 @@ if (typeof require === 'function') {
     );
     header.append(element(doc, 'strong', '', 'Better GHSA'));
     const shown = applyView(view.rows, state);
-    header.append(
+    const status = element(doc, 'div', 'bghsa-list-status');
+    status.append(
       element(
         doc,
         'span',
@@ -1333,6 +1420,9 @@ if (typeof require === 'function') {
         viewCountText(shown.length, view.rows.length)
       )
     );
+    const held = progressChip(doc, progressOf(doc));
+    if (held !== null) status.append(held);
+    header.append(status);
     box.append(header);
     box.append(buildBody(doc, shown, view.rows.length));
     root.append(box);
@@ -1840,6 +1930,18 @@ if (typeof require === 'function') {
   }
 
   /**
+   * @param {ReturnType<typeof globalThis.bghsa.fetch.createQueue>} queue
+   * @returns {number} how many advisories that queue has still to read. The
+   *   count comes off the queue rather than off a tally kept here, because the
+   *   queue is shared: another surface on this page queues advisories through
+   *   it, and a pass an earlier page load left behind is taken back into it.
+   */
+  function leftToRead(queue) {
+    const held = queue.progress();
+    return held.pending.length + (held.inFlight === null ? 0 : 1);
+  }
+
+  /**
    * One refresh, from the crawl to the last row.
    *
    * A pass an earlier page load left unfinished is taken back before anything
@@ -1863,10 +1965,12 @@ if (typeof require === 'function') {
     /** @type {(ghsaId: string, entry: import('../common/cache.js').CacheEntry) => void} */
     const listener = (ghsaId, entry) => {
       updates.push(applyEntry(doc, ghsaId, entry, { storage: options.storage }));
+      setProgress(doc, { phase: 'reading', left: leftToRead(queue) });
     };
     listening.add(listener);
 
     try {
+      setProgress(doc, { phase: 'walking', left: 0 });
       await queue.load();
       const crawled = await globalThis.bghsa.crawl.crawl({
         ref,
@@ -1881,7 +1985,8 @@ if (typeof require === 'function') {
           void pass();
         },
       });
-      await queue.add(crawled.ids);
+      const { queued } = await queue.add(crawled.ids);
+      setProgress(doc, { phase: 'reading', left: queued.length });
       const read = await queue.run();
       await Promise.all(updates);
       // The rows are current and each is where it was. This is what puts one
@@ -1890,6 +1995,7 @@ if (typeof require === 'function') {
       return { crawled, read };
     } finally {
       listening.delete(listener);
+      setProgress(doc, null);
     }
   }
 
@@ -2048,10 +2154,15 @@ if (typeof require === 'function') {
     DEFAULT_SORT_LABEL,
     RESET_LABEL,
     EMPTY_TEXT,
+    WALKING_TEXT,
     FACET_ATTRIBUTE,
     viewStateOf,
     setViewState,
     viewCountText,
+    progressOf,
+    progressChip,
+    setProgress,
+    leftToRead,
     buildControls,
     buildBody,
     refreshBody,
