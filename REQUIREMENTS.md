@@ -256,12 +256,16 @@ blocked on us, blocked on the reporter, waiting duration, owner, and severity.
 
 Default ordering is by tier, and within a tier by the stated rule:
 
-1. Never reviewed.
-2. New activity.
+1. Never reviewed, longest waiting first.
+2. New activity, longest waiting first.
 3. Blocked on us. An advisory with an overdue embargo sorts at the top of this
    tier. The rest sort by confirmed severity descending, then by unconfirmed
    severity descending, then by longest waiting.
 4. Blocked on the reporter, longest waiting first.
+
+Severity in tier 3 is two keys, not one. Every severity a maintainer confirmed
+ranks above every severity nobody has confirmed, so a confirmed low sorts above
+a severity the reporter claimed and no maintainer has checked.
 
 Published and closed advisories are excluded from this table and appear on the
 done page described in section 10.

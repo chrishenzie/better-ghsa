@@ -18,6 +18,7 @@
         "src/common/parse-detail.js",
         "src/common/parse-list.js",
         "src/common/derive.js",
+        "src/common/order.js",
         "src/common/members.js",
         "src/common/branches.js",
         "src/common/write.js",
