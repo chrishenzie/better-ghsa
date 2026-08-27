@@ -294,6 +294,70 @@ test("the table holds GitHub's segmented control, rows, and query form out of vi
   }
 });
 
+test('a surface beside the table gets a place on the bar and every view change', async () => {
+  /** @type {string[]} */
+  const told = [];
+  /** @type {import('../src/list/table.js').Surface} */
+  const surface = {
+    control: (doc) => {
+      const node = doc.createElement('button');
+      node.className = 'probe-control';
+      node.textContent = 'Probe';
+      node.addEventListener('click', () => {
+        table.setViewMode(doc, table.viewMode(doc) === 'probe' ? table.VIEW_TABLE : 'probe');
+        table.applyVisibility(doc);
+      });
+      return node;
+    },
+    show: (_doc, mode) => told.push(mode),
+  };
+  table.addSurface(surface);
+  try {
+    const doc = listPage('list-page-triage.html');
+    await render(doc);
+    // Placed once the table is in the document, so a surface drawing into the
+    // bar finds it.
+    assert.ok(
+      one(doc, '.probe-control').closest(`#${table.ROOT_ID} .bghsa-list-bar`) !== null,
+      'the control sits on the bar'
+    );
+    assert.deepStrictEqual(told, [table.VIEW_TABLE], `told after the first render: ${told}`);
+
+    const box = one(doc, `#${table.ROOT_ID} .bghsa-list-box`);
+    const nativeBox = /** @type {Element} */ (table.nativeControls(one(doc, '#advisories'))[0]);
+
+    /** @type {HTMLElement} */ (/** @type {unknown} */ (one(doc, '.probe-control'))).click();
+    assert.deepStrictEqual(told, [table.VIEW_TABLE, 'probe'], `told after the probe: ${told}`);
+    assert.ok(box.classList.contains(table.HIDDEN_CLASS), 'the table gives way to the surface');
+    assert.ok(
+      nativeBox.classList.contains(table.HIDDEN_CLASS),
+      "GitHub's view stays out of the way of the surface"
+    );
+    assert.strictEqual(table.showingNative(doc), false, 'the surface is not GitHub\'s view');
+    assert.strictEqual(
+      (toggleIn(doc).textContent ?? '').trim(),
+      table.SHOW_GITHUB,
+      "the GitHub toggle still offers GitHub's view"
+    );
+
+    // Every view is reachable from every other: the surface gives way to
+    // GitHub's view, and GitHub's view gives the table back.
+    toggleIn(doc).click();
+    assert.strictEqual(table.viewMode(doc), table.VIEW_NATIVE, 'the surface gave way');
+    assert.ok(!nativeBox.classList.contains(table.HIDDEN_CLASS), "GitHub's view is back");
+    toggleIn(doc).click();
+    assert.strictEqual(table.viewMode(doc), table.VIEW_TABLE, 'the table is back');
+    assert.ok(!box.classList.contains(table.HIDDEN_CLASS), 'the table is in view');
+    assert.deepStrictEqual(
+      told,
+      [table.VIEW_TABLE, 'probe', table.VIEW_NATIVE, table.VIEW_TABLE],
+      `told over the cycle: ${told}`
+    );
+  } finally {
+    table.surfaces.splice(table.surfaces.indexOf(surface), 1);
+  }
+});
+
 test('injecting twice leaves one table and one stylesheet', async () => {
   const doc = listPage('list-page-triage.html');
   await render(doc);

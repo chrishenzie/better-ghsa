@@ -142,6 +142,19 @@ if (typeof require === 'function') {
  */
 
 /**
+ * A surface beside the table, on the same page and under the same choice of
+ * view: the control it offers on the bar, and what it does once a view has been
+ * put into effect.
+ *
+ * @typedef {object} Surface
+ * @property {(doc: Document) => Element | null} control What it puts on the bar,
+ *   beside the toggle that restores GitHub's view. It is built again on every
+ *   render, because the bar is.
+ * @property {(doc: Document, mode: string) => void} show Told the view the
+ *   document is now on, after the table has been placed and hidden or shown.
+ */
+
+/**
  * @typedef {object} ViewOptions
  * @property {import('../common/cache.js').CacheStorage | null} [storage]
  * @property {number} [at] The moment the list markup was read, epoch
@@ -197,6 +210,12 @@ if (typeof require === 'function') {
 
   /** What the toggle reads while GitHub's own view is showing. */
   const SHOW_TABLE = 'Show the Better GHSA table';
+
+  /** The view the list page comes up on. */
+  const VIEW_TABLE = 'table';
+
+  /** The view that is GitHub's own rows and controls. */
+  const VIEW_NATIVE = 'native';
 
   /**
    * The selectors `parse-list` keys on inside `div#advisories`. Nothing the
@@ -1281,6 +1300,16 @@ if (typeof require === 'function') {
       applyVisibility(doc);
     });
     bar.append(toggle);
+    for (const surface of [...surfaces]) {
+      /** @type {Element | null} */
+      let node = null;
+      try {
+        node = surface.control(doc);
+      } catch {
+        // A surface that cannot build its control leaves the bar as it is.
+      }
+      if (node !== null) bar.append(node);
+    }
     root.append(bar);
 
     const box = element(doc, 'div', 'Box mb-3 bghsa-list-box');
@@ -1303,6 +1332,22 @@ if (typeof require === 'function') {
     box.append(buildBody(doc, shown, view.rows.length));
     root.append(box);
     return root;
+  }
+
+  /**
+   * The surfaces beside the table.
+   *
+   * @type {Surface[]}
+   */
+  const surfaces = [];
+
+  /**
+   * @param {Surface} surface
+   * @returns {void} takes a surface onto the list page. A module registers once,
+   *   when it loads, and the page draws it from then on.
+   */
+  function addSurface(surface) {
+    surfaces.push(surface);
   }
 
   /**
@@ -1330,20 +1375,42 @@ if (typeof require === 'function') {
   }
 
   /**
-   * Which view each document is showing. GitHub's view is showing only where a
-   * press asked for it, so a fresh page and a re-render after a subtree
-   * replacement both come up on the table.
+   * Which view each document is showing. The table is showing unless a press
+   * asked for another, so a fresh page and a re-render after a subtree
+   * replacement both come up on it.
    *
-   * @type {WeakMap<Document, boolean>}
+   * The three views are one choice held in one place. A surface that showed
+   * itself without saying so would leave two tables on the page, and a press on
+   * either toggle would have nothing to take the page back from.
+   *
+   * @type {WeakMap<Document, string>}
    */
-  const nativeView = new WeakMap();
+  const modes = new WeakMap();
+
+  /**
+   * @param {Document} doc
+   * @returns {string} the view this document is showing: {@link VIEW_TABLE},
+   *   {@link VIEW_NATIVE}, or the mode a surface named.
+   */
+  function viewMode(doc) {
+    return modes.get(doc) ?? VIEW_TABLE;
+  }
+
+  /**
+   * @param {Document} doc
+   * @param {string} mode
+   * @returns {void}
+   */
+  function setViewMode(doc, mode) {
+    modes.set(doc, mode);
+  }
 
   /**
    * @param {Document} doc
    * @returns {boolean} whether GitHub's own view is showing.
    */
   function showingNative(doc) {
-    return nativeView.get(doc) === true;
+    return viewMode(doc) === VIEW_NATIVE;
   }
 
   /**
@@ -1352,7 +1419,7 @@ if (typeof require === 'function') {
    * @returns {void}
    */
   function setShowingNative(doc, value) {
-    nativeView.set(doc, value);
+    setViewMode(doc, value ? VIEW_NATIVE : VIEW_TABLE);
   }
 
   /**
@@ -1377,17 +1444,28 @@ if (typeof require === 'function') {
   function applyVisibility(doc) {
     const container = doc.querySelector('#advisories');
     if (container === null) return;
-    const native = showingNative(doc);
-    for (const node of nativeControls(container)) setHidden(node, !native);
+    const mode = viewMode(doc);
+    for (const node of nativeControls(container)) setHidden(node, mode !== VIEW_NATIVE);
     const root = doc.getElementById(ROOT_ID);
     if (root === null) return;
     const box = root.querySelector('.bghsa-list-box');
-    if (box !== null) setHidden(box, native);
+    if (box !== null) setHidden(box, mode !== VIEW_TABLE);
     // The controls act on the extension's table, so they go out of view with it.
     const controls = root.querySelector('.bghsa-list-controls');
-    if (controls !== null) setHidden(controls, native);
+    if (controls !== null) setHidden(controls, mode !== VIEW_TABLE);
     const toggle = root.querySelector('.bghsa-list-toggle');
-    if (toggle !== null) toggle.textContent = native ? SHOW_TABLE : SHOW_GITHUB;
+    if (toggle !== null) toggle.textContent = mode === VIEW_NATIVE ? SHOW_TABLE : SHOW_GITHUB;
+    // The surfaces are told last, so each of them draws into a bar that is
+    // already placed and reads a view that is already in effect. One that
+    // throws does not keep the next from being told.
+    for (const surface of [...surfaces]) {
+      try {
+        surface.show(doc, mode);
+      } catch {
+        // A surface that cannot draw itself is not a reason to leave the rest
+        // of the page half switched.
+      }
+    }
   }
 
   /**
@@ -1923,6 +2001,8 @@ if (typeof require === 'function') {
     STYLE_TEXT,
     SHOW_GITHUB,
     SHOW_TABLE,
+    VIEW_TABLE,
+    VIEW_NATIVE,
     PARSED_SELECTORS,
     sentenceCase,
     formatTime,
@@ -1964,6 +2044,10 @@ if (typeof require === 'function') {
     buildRow,
     buildTable,
     nativeControls,
+    surfaces,
+    addSurface,
+    viewMode,
+    setViewMode,
     showingNative,
     setShowingNative,
     applyVisibility,
