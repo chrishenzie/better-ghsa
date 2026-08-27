@@ -509,28 +509,6 @@ test('the patch chip says nothing about a pull request whose state went unread',
   assert.ok(unread === null, `a patch state this reader cannot judge: ${unread}`);
 });
 
-test('a cache record this reader cannot use answers as absent', () => {
-  assert.ok(table.advisoryFrom(null) === null, 'null is not an advisory');
-  assert.ok(table.advisoryFrom('advisory') === null, 'a string is not an advisory');
-  assert.ok(table.advisoryFrom({ ghsaId: 'GHSA-x' }) === null, 'a record with no comment list');
-  assert.ok(table.advisoryFrom({ comments: [], timeline: {} }) === null, 'a record with no timeline');
-});
-
-test("an author's standing in a cache record is recomputed, not read", () => {
-  const advisory = table.advisoryFrom({
-    comments: [
-      { id: '1', elementId: 'advisory-comment-1', author: 'prakleumas', role: 'Author', trusted: true },
-      { id: '2', elementId: 'advisory-comment-2', author: 'samuelkarp', role: 'Member', trusted: false },
-    ],
-    timeline: [],
-  });
-  if (advisory === null) throw new Error('the record did not read as an advisory');
-  const reporter = advisory.comments[0]?.trusted ?? null;
-  assert.ok(reporter === false, `a reporter stored as trusted: ${reporter}`);
-  const member = advisory.comments[1]?.trusted ?? null;
-  assert.ok(member === true, `a member stored as untrusted: ${member}`);
-});
-
 test('a page that is not an advisory list gets no table', async () => {
   const doc = /** @type {Document} */ (
     /** @type {unknown} */ (parseHTML('<!doctype html><html><body><div id="x"></div></body></html>').document)

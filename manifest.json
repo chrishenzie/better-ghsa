@@ -18,6 +18,7 @@
         "src/common/merge.js",
         "src/common/parse-detail.js",
         "src/common/parse-list.js",
+        "src/common/record.js",
         "src/common/derive.js",
         "src/common/order.js",
         "src/common/members.js",

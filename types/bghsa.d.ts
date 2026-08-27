@@ -13,6 +13,7 @@ interface BghsaNamespace {
   merge: typeof import('../src/common/merge.js');
   parseDetail: typeof import('../src/common/parse-detail.js');
   parseList: typeof import('../src/common/parse-list.js');
+  record: typeof import('../src/common/record.js');
   derive: typeof import('../src/common/derive.js');
   order: typeof import('../src/common/order.js');
   members: typeof import('../src/common/members.js');
