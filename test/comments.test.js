@@ -110,11 +110,8 @@ test('a snapshot from a non-member marks the comment it came from', () => {
   const placed = comments.markComments(triageDoc, mergeOf(triageDoc));
   assert.strictEqual(placed.length, 1);
   const chip = /** @type {Element} */ (placed[0]);
-  assert.strictEqual(text(chip), 'Tracking state from a non-member');
-  assert.strictEqual(
-    chip.getAttribute('class'),
-    'Label Label--secondary bghsa-tone-attention'
-  );
+  assert.strictEqual(text(chip), 'Ignored: non-member state');
+  assert.strictEqual(chip.getAttribute('class'), 'Label Label--secondary bghsa-tone-danger');
   const group = chip.closest('div.timeline-comment-group');
   assert.ok(group?.id === 'advisory-comment-282848', 'the chip is on the wrong comment');
 });
@@ -158,6 +155,9 @@ test('a snapshot excluded for failing validation marks its comment', () => {
   assert.strictEqual(placed.length, 1);
   const chip = /** @type {Element} */ (placed[0]);
   assert.strictEqual(text(chip), 'Tracking state this extension could not read');
+  // Not the tone a snapshot from outside the organization takes: that one is
+  // the only chip here a maintainer has to act on.
+  assert.strictEqual(chip.getAttribute('class'), 'Label Label--secondary bghsa-tone-attention');
   const group = chip.closest('div.timeline-comment-group');
   assert.ok(group?.id === 'advisory-comment-282849', 'the chip is on the wrong comment');
 });
@@ -195,6 +195,6 @@ test('rendering the page marks the comment an untrusted snapshot came from', asy
   await panel.render(doc);
   const chips = doc.querySelectorAll(CHIP);
   assert.strictEqual(chips.length, 1);
-  assert.strictEqual(text(chips[0] ?? null), 'Tracking state from a non-member');
+  assert.strictEqual(text(chips[0] ?? null), 'Ignored: non-member state');
   assert.ok(doc.getElementById('bghsa-style') !== null, 'the chip has no stylesheet');
 });

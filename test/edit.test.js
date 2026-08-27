@@ -61,7 +61,7 @@ function renderStateComment(markdown) {
   return (
     '<!doctype html><html><body>' +
     '<div class="comment-body markdown-body js-comment-body"><details>' +
-    `<summary>${escapeHtml(schema.STATE_COMMENT_SUMMARY)}</summary>` +
+    `<summary>${schema.STATE_COMMENT_SUMMARY}</summary>` +
     `<p><code>${escapeHtml(marker)}</code></p>` +
     `<div class="highlight highlight-source-json"><pre>${escapeHtml(fence)}</pre></div>` +
     '</details></div></body></html>'

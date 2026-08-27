@@ -49,12 +49,24 @@ globalThis.bghsa ??= /** @type {BghsaNamespace} */ ({});
    */
   const STATE_COMMENT_MARKER = 'better-ghsa:state:1:';
 
+  /** Where this extension lives. */
+  const PROJECT_URL = 'https://github.com/samuelkarp/better-ghsa';
+
   /**
-   * The summary text of a state comment's `details` block. It is prose for the
+   * The extension's name in a comment summary, linked to the project, so a
+   * reader who has not seen the extension can find out what wrote the comment.
+   *
+   * A raw anchor rather than a markdown link: an anchor inside a `summary` is
+   * verified to render, and how markdown inside an HTML block renders is not.
+   */
+  const PROJECT_LINK = `<a href="${PROJECT_URL}">Better GHSA</a>`;
+
+  /**
+   * The summary line of a state comment's `details` block. It is prose for the
    * reader: recognition rests on the marker, so it can be rewritten without
    * breaking anything.
    */
-  const STATE_COMMENT_SUMMARY = 'Better GHSA tracking state';
+  const STATE_COMMENT_SUMMARY = `${PROJECT_LINK} tracking state`;
 
   /** Triage values this reader interprets. @type {readonly string[]} */
   const TRIAGE_VALUES = ['evaluating', 'awaiting reporter', 'awaiting maintainer input'];
@@ -332,6 +344,8 @@ globalThis.bghsa ??= /** @type {BghsaNamespace} */ ({});
   const exported = {
     SCHEMA_VERSION,
     STATE_COMMENT_MARKER,
+    PROJECT_URL,
+    PROJECT_LINK,
     STATE_COMMENT_SUMMARY,
     TRIAGE_VALUES,
     CLOSURE_REASONS,

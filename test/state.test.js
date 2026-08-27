@@ -80,7 +80,7 @@ function renderStateComment(markdown) {
   return (
     '<!doctype html><html><body>' +
     '<div class="comment-body markdown-body js-comment-body"><details>' +
-    `<summary>${escapeHtml(schema.STATE_COMMENT_SUMMARY)}</summary>` +
+    `<summary>${schema.STATE_COMMENT_SUMMARY}</summary>` +
     `<p><code>${escapeHtml(marker)}</code></p>` +
     `<div class="highlight highlight-source-json"><pre>${escapeHtml(fence)}</pre></div>` +
     '</details></div></body></html>'
@@ -605,5 +605,18 @@ test('a write that names triageSince itself keeps the value it names', () => {
   const snapshot = { triage: 'evaluating', triageSince: '2020-01-01T00:00:00Z' };
   state.stampTriageSince(snapshot, null, { triageSince: '2020-01-01T00:00:00Z' }, AT, AT);
   assert.strictEqual(snapshot['triageSince'], '2020-01-01T00:00:00Z');
+});
+
+test('the state comment names the extension and links to it', () => {
+  const body = state.buildBody({ betterGhsa: '1.0', seq: 1 });
+  const link = '<a href="https://github.com/samuelkarp/better-ghsa">Better GHSA</a>';
+  assert.strictEqual(schema.STATE_COMMENT_SUMMARY, `${link} tracking state`);
+  assert.strictEqual(body.includes(`<summary>${link} tracking state</summary>`), true);
+  // The shape the summary's link is known to render in: each of the block's own
+  // tags on a line, with a blank line between it and what it wraps.
+  assert.strictEqual(body.startsWith('<details>\n\n<summary>'), true);
+  assert.strictEqual(body.trimEnd().endsWith('\n\n</details>'), true);
+  // The marker still rides in a code span of its own, outside the fence.
+  assert.strictEqual(body.includes(`\n\`${schema.STATE_COMMENT_MARKER}\`\n`), true);
 });
 

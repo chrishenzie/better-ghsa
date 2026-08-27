@@ -241,10 +241,14 @@ function tick() {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+/** The link the summary carries, as the body writes it. */
+const LINK = '<a href="https://github.com/samuelkarp/better-ghsa">Better GHSA</a>';
+
 /** The comment an advisory gets. */
 const BODY = [
   '<details>',
-  '<summary>Original report preserved by Better GHSA</summary>',
+  '',
+  `<summary>Original report preserved by ${LINK}</summary>`,
   '',
   `\`${MARKER}\``,
   '',
@@ -340,6 +344,15 @@ test('the fixed summary text on a comment is what says the report is preserved',
   assert.strictEqual(state.writable, false);
   assert.strictEqual(state.reason, 'preserved');
   assert.strictEqual(state.message, 'The original report is already preserved.');
+  const held = preserve.preservationComment(preserved.comments);
+  assert.ok(held !== null, 'the marker named no comment');
+  assert.strictEqual(state.href, `#${held?.elementId}`);
+});
+
+test('an advisory with no preservation comment names no comment to link to', () => {
+  preserve.attempts.clear();
+  assert.strictEqual(preserve.preservationComment(advisory.comments), null);
+  assert.strictEqual(preserve.offered(advisory).href, null);
 });
 
 test('an advisory in a repository off the allowlist offers a button that refuses', () => {

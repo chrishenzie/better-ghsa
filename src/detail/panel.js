@@ -363,7 +363,8 @@ if (typeof require === 'function') {
 
   /**
    * The row the preservation button lives in. An advisory that already carries
-   * the comment gets no button, because the extension writes one per advisory.
+   * the comment gets no button, because the extension writes one per advisory,
+   * and the row is a link to that comment.
    *
    * @param {Document} doc
    * @param {import('../common/parse-detail.js').ParsedDetail} advisory
@@ -373,7 +374,13 @@ if (typeof require === 'function') {
     const state = globalThis.bghsa.preserve.offered(advisory);
     const built = row(doc, 'Original report');
     if (!state.available) {
-      built.body.textContent = state.message;
+      if (state.href === null) built.body.textContent = state.message;
+      else {
+        // The comment is on this page, so the row points at it and says no more.
+        const link = element(doc, 'a', 'bghsa-preserved', 'Preserved');
+        link.setAttribute('href', state.href);
+        built.body.append(link);
+      }
       return built.row;
     }
     const button = element(doc, 'button', 'btn btn-sm bghsa-preserve', 'Preserve original report');

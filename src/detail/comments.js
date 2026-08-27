@@ -20,13 +20,32 @@ if (typeof require === 'function') {
    * names the condition and stands alone, and no chip is placed where the merge
    * had nothing to say.
    *
+   * The untrusted phrase leads with what the extension did, because a snapshot
+   * an outsider wrote is the one case here that a reader has to act on. It says
+   * what the extension can see, which is that the author carries no member
+   * badge, and not why they wrote it: nothing on the page says that.
+   *
    * @type {Record<WarningKind, string>}
    */
   const CHIP_TEXT = {
-    untrusted: 'Tracking state from a non-member',
+    untrusted: 'Ignored: non-member state',
     'invalid payload': 'Tracking state this extension could not read',
     'not a snapshot': 'No tracking state in this comment',
     'unsupported schema': 'Tracking state from a newer extension',
+  };
+
+  /**
+   * The Primer state color each chip takes. A snapshot from outside the
+   * organization is a claim on the advisory's triage state by someone who
+   * cannot make one, so it is the loudest of the four.
+   *
+   * @type {Record<WarningKind, 'attention' | 'danger'>}
+   */
+  const CHIP_TONE = {
+    untrusted: 'danger',
+    'invalid payload': 'attention',
+    'not a snapshot': 'attention',
+    'unsupported schema': 'attention',
   };
 
   /**
@@ -50,7 +69,7 @@ if (typeof require === 'function') {
   function buildChip(doc, alert) {
     const parse = globalThis.bghsa.parseDetail;
     const node = doc.createElement('span');
-    node.className = 'Label Label--secondary bghsa-tone-attention';
+    node.className = `Label Label--secondary bghsa-tone-${CHIP_TONE[alert.kind]}`;
     node.setAttribute(parse.EXTENSION_CHIP_ATTRIBUTE, alert.kind);
     node.setAttribute('title', alert.message);
     node.textContent = CHIP_TEXT[alert.kind];
@@ -132,7 +151,7 @@ if (typeof require === 'function') {
     return Array.from(doc.querySelectorAll(`[${attribute}]`));
   }
 
-  const exported = { CHIP_TEXT, buildChip, placeChip, markComments };
+  const exported = { CHIP_TEXT, CHIP_TONE, buildChip, placeChip, markComments };
 
   globalThis.bghsa.comments = exported;
 

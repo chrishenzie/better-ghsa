@@ -939,10 +939,17 @@ function settle() {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-test('an advisory that already carries the comment is offered no button', () => {
+test('an advisory that already carries the comment links to it', () => {
   const built = build(preserved);
   assert.strictEqual(built.querySelector('button.bghsa-preserve'), null);
-  assert.strictEqual(rowText(built, 'Original report'), 'The original report is already preserved.');
+  assert.strictEqual(rowText(built, 'Original report'), 'Preserved');
+  const link = built.querySelector('.Box-row a.bghsa-preserved');
+  assert.ok(link !== null, 'the row carries no link to the comment');
+  assert.strictEqual(
+    link?.getAttribute('href'),
+    `#${preserved.comments[0]?.elementId}`,
+    'the link does not point at the comment holding the report'
+  );
 });
 
 test('the button on a repository off the allowlist writes nothing and says why', async () => {

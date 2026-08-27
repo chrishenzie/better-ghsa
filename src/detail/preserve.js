@@ -5,6 +5,7 @@ globalThis.bghsa ??= /** @type {BghsaNamespace} */ ({});
 // The manifest orders content scripts; under Node the dependencies are named here.
 if (typeof require === 'function') {
   require('../common/allowlist.js');
+  require('../common/schema.js');
   require('../common/parse-detail.js');
   require('../common/write.js');
 }
@@ -32,6 +33,9 @@ if (typeof require === 'function') {
  * @property {string | null} reason One of `preserved`, `attempted`, `pending`,
  *   `allowlist`, `provenance`, `unreadable`, and null when the write is open.
  * @property {string} message What the panel says about it.
+ * @property {string | null} href Where the comment holding the original report
+ *   is, as a fragment naming it on this page, and null where this document
+ *   carries no such comment.
  */
 
 /**
@@ -42,11 +46,11 @@ if (typeof require === 'function') {
 
 (() => {
   /**
-   * The summary text of the preservation comment's `details` block. It is prose
+   * The summary line of the preservation comment's `details` block. It is prose
    * for the reader: nothing this extension does keys on it, so it can be
    * rewritten without breaking recognition or write verification.
    */
-  const PRESERVE_SUMMARY = 'Original report preserved by Better GHSA';
+  const PRESERVE_SUMMARY = `Original report preserved by ${globalThis.bghsa.schema.PROJECT_LINK}`;
 
   /** The label the advisory's title is written under. */
   const TITLE_LABEL = 'Title:';
@@ -128,14 +132,24 @@ if (typeof require === 'function') {
   }
 
   /**
-   * Whether the advisory already carries a preservation comment. The marker is
-   * what says so; the body is not parsed and no sentence in it is read.
+   * The comment holding the original report. The marker is what says so; the
+   * body is not parsed and no sentence in it is read.
+   *
+   * @param {readonly ParsedComment[]} comments
+   * @returns {ParsedComment | null}
+   */
+  function preservationComment(comments) {
+    return comments.find((comment) => comment.text.includes(MARKER_PREFIX)) ?? null;
+  }
+
+  /**
+   * Whether the advisory already carries a preservation comment.
    *
    * @param {readonly ParsedComment[]} comments
    * @returns {boolean}
    */
   function hasPreservationComment(comments) {
-    return comments.some((comment) => comment.text.includes(MARKER_PREFIX));
+    return preservationComment(comments) !== null;
   }
 
   /**
@@ -174,6 +188,9 @@ if (typeof require === 'function') {
    * The marker comes first, immediately under the summary, so that no reporter
    * text can render above it or swallow it.
    *
+   * The block's own tags each stand on a line with a blank line between them and
+   * what they wrap, which is the shape the summary's link is known to render in.
+   *
    * A description whose provenance did not read builds nothing. The comment no
    * longer says which case it is, and the extension still declines to write
    * where it cannot tell whether the description is the reporter's own text.
@@ -188,6 +205,7 @@ if (typeof require === 'function') {
     if (title === null || description === null || descriptionOriginal === null) return null;
     return [
       '<details>',
+      '',
       `<summary>${PRESERVE_SUMMARY}</summary>`,
       '',
       `\`${marker}\``,
@@ -210,10 +228,11 @@ if (typeof require === 'function') {
    * @param {boolean} writable
    * @param {string | null} reason
    * @param {string} message
+   * @param {string | null} [href]
    * @returns {Availability}
    */
-  function availability(available, writable, reason, message) {
-    return { available, writable, reason, message };
+  function availability(available, writable, reason, message, href = null) {
+    return { available, writable, reason, message, href };
   }
 
   /**
@@ -226,8 +245,17 @@ if (typeof require === 'function') {
    * @returns {Availability}
    */
   function inspect(advisory) {
-    if (hasPreservationComment(advisory.comments)) {
-      return availability(false, false, 'preserved', 'The original report is already preserved.');
+    const held = preservationComment(advisory.comments);
+    if (held !== null) {
+      // The comment's own element carries the anchor GitHub links it by, so the
+      // panel can point at it and say nothing else.
+      return availability(
+        false,
+        false,
+        'preserved',
+        'The original report is already preserved.',
+        `#${held.elementId}`
+      );
     }
     const ref = advisory.ref;
     if (ref === null) {
@@ -408,6 +436,7 @@ if (typeof require === 'function') {
     ATTEMPTED_MESSAGE,
     newMarker,
     balanceDetails,
+    preservationComment,
     hasPreservationComment,
     buildBody,
     offered,

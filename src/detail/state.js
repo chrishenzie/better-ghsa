@@ -179,6 +179,9 @@ if (typeof require === 'function') {
    * is a state comment whatever the fence holds. Everything the snapshot says is
    * inside the fence, so no value in it renders as markup.
    *
+   * The block's own tags each stand on a line with a blank line between them and
+   * what they wrap, which is the shape the summary's link is known to render in.
+   *
    * @param {Record<string, unknown>} snapshot
    * @returns {string}
    */
@@ -186,6 +189,7 @@ if (typeof require === 'function') {
     const schema = globalThis.bghsa.schema;
     return [
       '<details>',
+      '',
       `<summary>${schema.STATE_COMMENT_SUMMARY}</summary>`,
       '',
       `\`${schema.STATE_COMMENT_MARKER}\``,
