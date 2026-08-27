@@ -584,7 +584,13 @@ if (typeof require === 'function') {
   async function render(doc) {
     const edit = globalThis.bghsa.edit;
     const advisory = globalThis.bghsa.parseDetail.parseDetail(doc);
-    if (advisory === null) return null;
+    // A pass over a document showing no advisory is how a departure from one
+    // reaches the extension when no click started it.
+    if (advisory === null) {
+      edit.panelShows(null);
+      return null;
+    }
+    edit.panelShows(edit.keyOf(advisory));
     // The panel does not wait on storage: what the page says is on the page.
     void remember(advisory);
     // A comment this page wrote is on GitHub and not in this document, so the
@@ -711,9 +717,11 @@ if (typeof require === 'function') {
 
   globalThis.bghsa.panel = exported;
 
+  // Nothing starts here. The content script matches every github.com page, so a
+  // surface that started as it loaded would connect an observer on every one of
+  // them. `src/content.js` loads last and starts this surface on the pages it
+  // belongs to, and again when GitHub turns a page into one of those.
   if (typeof module !== 'undefined') {
     module.exports = exported;
-  } else {
-    start();
   }
 })();

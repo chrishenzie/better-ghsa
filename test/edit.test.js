@@ -183,6 +183,7 @@ function forget() {
   edit.drafts.clear();
   edit.branchDrafts.clear();
   edit.saving.clear();
+  edit.showing.key = null;
   members.clear();
   branches.clear();
 }
@@ -1803,6 +1804,104 @@ test('a link opened somewhere else leaves the panel where it is', async () => {
   } finally {
     disarm();
     link.remove();
+    forget();
+  }
+});
+
+/**
+ * The panel on an advisory page holding a change in a control that was never
+ * saved, which is what a maintainer leaves behind by walking away from it.
+ *
+ * @param {string} name
+ * @returns {Promise<{ page: Document, key: string }>}
+ */
+async function unsavedPanel(name) {
+  const page = fixture(name);
+  const placed = await panel.render(page);
+  if (placed === null) throw new Error('the fixture got no panel');
+  choose(control(placed, 'select.bghsa-triage'), 'evaluating');
+  const advisory = parse.parseDetail(page);
+  if (advisory === null) throw new Error('the fixture is not an advisory detail page');
+  const key = edit.keyOf(advisory);
+  if (!edit.pendingOn(key)) throw new Error('the control change was not held');
+  return { page, key };
+}
+
+/** One row of the advisory list, as GitHub puts it in the content frame. */
+const LIST_MARKUP =
+  '<div id="advisories"><div class="Box-row Box-row--drag-hide">' +
+  '<a class="Link--primary" href="/git-utensils/Spoon-Knife/security/advisories/' +
+  'GHSA-2222-2222-2222">Another advisory</a></div></div>';
+
+/**
+ * GitHub replacing the content frame, which is how the advisory list arrives
+ * with no document load and no press on a link: the advisory leaves the frame,
+ * the panel goes with it, and the render loop takes the pass that finds a page
+ * showing no advisory.
+ *
+ * @param {Document} page
+ * @returns {Promise<Element>} the advisory the list offers to open next.
+ */
+async function leaveAdvisory(page) {
+  const content = page.querySelector('div.new-discussion-timeline');
+  if (content === null) throw new Error('the fixture carries no content frame');
+  content.innerHTML = LIST_MARKUP;
+  await panel.render(page);
+  if (parse.parseDetail(page) !== null) throw new Error('the advisory is still on the page');
+  const next = content.querySelector('a[href]');
+  if (next === null) throw new Error('the list offers no advisory to open');
+  return next;
+}
+
+test('the page holding unsaved changes is the page that asks about them', async () => {
+  forget();
+  const { page, key } = await unsavedPanel('triage-thread.html');
+  /** @type {string[]} */
+  const asked = [];
+  const disarm = edit.armNavigationWarning(page, {
+    confirm: (message) => {
+      asked.push(message);
+      return false;
+    },
+  });
+  try {
+    const next = await leaveAdvisory(page);
+    assert.deepStrictEqual(asked, [edit.LEAVE_MESSAGE], 'leaving the advisory asked nothing');
+    assert.strictEqual(edit.anyPending(), true, 'changes the maintainer kept were dropped');
+
+    // The advisory list is not the page the changes were left on, and opening
+    // another advisory from it is not the navigation that left them.
+    next.dispatchEvent(cancellable(page, 'click'));
+    assert.deepStrictEqual(asked, [edit.LEAVE_MESSAGE], 'the next navigation asked again');
+
+    // The same press on the same link asks while the advisory holding the
+    // changes is the one showing, so it is the departure that quieted it and
+    // not a guard that stopped listening.
+    edit.panelShows(key);
+    next.dispatchEvent(cancellable(page, 'click'));
+    assert.strictEqual(asked.length, 2, 'the guard heard nothing on the page it is armed for');
+  } finally {
+    disarm();
+    forget();
+  }
+});
+
+test('changes the maintainer leaves behind are left behind', async () => {
+  forget();
+  const { page } = await unsavedPanel('triage-thread.html');
+  let asked = 0;
+  const disarm = edit.armNavigationWarning(page, {
+    confirm: () => {
+      asked += 1;
+      return true;
+    },
+  });
+  try {
+    await leaveAdvisory(page);
+    assert.strictEqual(asked, 1, 'leaving the advisory asked once');
+    assert.strictEqual(edit.anyPending(), false, 'the changes are still staged');
+  } finally {
+    disarm();
     forget();
   }
 });

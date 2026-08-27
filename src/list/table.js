@@ -2206,9 +2206,11 @@ if (typeof require === 'function') {
 
   globalThis.bghsa.table = exported;
 
+  // Nothing starts here. The content script matches every github.com page, so a
+  // surface that started as it loaded would connect an observer on every one of
+  // them. `src/content.js` loads last and starts this surface on the pages it
+  // belongs to, and again when GitHub turns a page into one of those.
   if (typeof module !== 'undefined') {
     module.exports = exported;
-  } else {
-    start();
   }
 })();

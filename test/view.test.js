@@ -526,23 +526,47 @@ test("the three views converge, and GitHub's own view comes back whole", async (
     return shown.join('+');
   };
 
+  /**
+   * @param {HTMLElement} node
+   * @returns {void} presses a control the way a maintainer reaches it. A
+   *   control held out of view accepts a synthetic click, so a press of one is
+   *   this test's own defect and is reported as one.
+   */
+  const press = (node) => {
+    assert.ok(
+      !node.classList.contains(table.HIDDEN_CLASS),
+      `pressed a control held out of view: ${node.className}`
+    );
+    node.click();
+  };
+
   assert.strictEqual(showing(), 'table', 'a fresh page comes up on the table');
 
-  doneToggle(doc).click();
+  press(doneToggle(doc));
   assert.strictEqual(showing(), 'done');
-  githubToggle(doc).click();
+  press(githubToggle(doc));
   assert.strictEqual(showing(), 'native', "the done view gives way to GitHub's");
-  doneToggle(doc).click();
-  assert.strictEqual(showing(), 'done', "and GitHub's gives way to the done view");
-  doneToggle(doc).click();
+
+  // GitHub's own view carries one control of the extension's, the way back, so
+  // the done view cannot be opened from here.
+  assert.ok(
+    doneToggle(doc).classList.contains(table.HIDDEN_CLASS),
+    "the done toggle is out of reach while GitHub's view is showing"
+  );
+
+  press(githubToggle(doc));
+  assert.strictEqual(showing(), 'table', 'the way back lands on the table');
+  press(doneToggle(doc));
+  assert.strictEqual(showing(), 'done', 'and the done view opens again from there');
+  press(doneToggle(doc));
   assert.strictEqual(showing(), 'table', 'pressing it again gives the table back');
-  githubToggle(doc).click();
+  press(githubToggle(doc));
   assert.strictEqual(showing(), 'native');
-  githubToggle(doc).click();
+  press(githubToggle(doc));
   assert.strictEqual(showing(), 'table');
 
   // Hiding is not destroying: what came back is GitHub's own view, whole.
-  githubToggle(doc).click();
+  press(githubToggle(doc));
   assert.strictEqual(
     doc.querySelectorAll('#advisories div.Box-row--drag-hide').length,
     1,

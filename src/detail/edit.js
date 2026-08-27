@@ -186,6 +186,25 @@ if (typeof require === 'function') {
   const branchDrafts = new Map();
 
   /**
+   * The advisory the panel is showing, keyed as {@link keyOf} keys them, and
+   * null where the page shows none. The staged values outlive the page, so this
+   * is what says which of them belong to the advisory in front of the
+   * maintainer and which belong to one already left.
+   *
+   * @type {{ key: string | null }}
+   */
+  const showing = { key: null };
+
+  /**
+   * How the panel puts a yes-or-no question to the maintainer, and null while
+   * no warning is armed. A pass finds the page has left an advisory long after
+   * the arming, so the arming leaves what it settled on here.
+   *
+   * @type {((message: string) => boolean) | null}
+   */
+  let asker = null;
+
+  /**
    * The advisories a save from this panel is on its way to GitHub for. A pass
    * during the flight builds the controls again, and this is what the pass reads
    * to build them held still: a value staged against a request already out is a
@@ -619,14 +638,46 @@ if (typeof require === 'function') {
   ];
 
   /**
+   * @param {string} key
+   * @returns {boolean} whether this advisory holds a change that was never
+   *   written.
+   */
+  function pendingOn(key) {
+    const pending = edits.get(key);
+    if (pending === undefined) return false;
+    return PENDING_FIELDS.some((field) => Object.hasOwn(pending, field));
+  }
+
+  /**
    * @returns {boolean} whether any advisory this page has shown holds a change
    *   that was never written.
    */
   function anyPending() {
-    for (const pending of edits.values()) {
-      if (PENDING_FIELDS.some((field) => Object.hasOwn(pending, field))) return true;
+    for (const key of edits.keys()) {
+      if (pendingOn(key)) return true;
     }
     return false;
+  }
+
+  /**
+   * Records which advisory the panel is showing, and asks about the changes the
+   * advisory the page has left still holds.
+   *
+   * A pass is what finds the page has moved: GitHub replaces the content frame
+   * with no document load, so the departure reaches the extension as a render
+   * pass over a document that shows another advisory or none. Answering yes
+   * drops the changes, which is what leaving them behind is; answering no keeps
+   * them staged, and the panel holds them again on the advisory they belong to.
+   *
+   * @param {string | null} key the advisory the panel is showing now.
+   * @returns {void}
+   */
+  function panelShows(key) {
+    const left = showing.key;
+    if (left === key) return;
+    showing.key = key;
+    if (left === null || asker === null || !pendingOn(left)) return;
+    if (asker(LEAVE_MESSAGE)) discard(left);
   }
 
   /**
@@ -662,21 +713,29 @@ if (typeof require === 'function') {
   /**
    * Warns before changes that were never written are lost.
    *
-   * Two paths, because GitHub navigates two ways. A document load fires
-   * `beforeunload`, and the browser asks its own question there. A link GitHub
-   * follows by replacing `#repo-content-turbo-frame` fires nothing, so the click
-   * that starts it is asked about here and is stopped where the answer is no:
-   * the handler runs before the page's own, and a click it cancels never reaches
-   * the code that would swap the frame.
+   * Three paths, because a page is left three ways. A document load fires
+   * `beforeunload`, and the browser asks its own question there; the whole store
+   * goes with the document, so every advisory holding a change is a reason to
+   * ask. A link GitHub follows by replacing `#repo-content-turbo-frame` fires
+   * nothing, so the click that starts it is asked about here and is stopped
+   * where the answer is no: the handler runs before the page's own, and a click
+   * it cancels never reaches the code that would swap the frame. A departure no
+   * click started, the back button among them, reaches {@link panelShows} on the
+   * pass that finds the page has moved.
+   *
+   * The click and the pass ask about the advisory the panel is showing. The
+   * store outlives the page, so asking about any advisory would put the question
+   * on the page after the one holding the changes.
    *
    * @param {Document} doc
    * @param {{ confirm?: (message: string) => boolean }} [options]
-   * @returns {() => void} takes both warnings back off.
+   * @returns {() => void} takes the warnings back off.
    */
   function armNavigationWarning(doc, options) {
     const view = doc.defaultView;
     const ask =
       options?.confirm ?? ((message) => view?.confirm === undefined || view.confirm(message));
+    asker = ask;
 
     /** @param {Event} event @returns {void} */
     const onUnload = (event) => {
@@ -687,8 +746,12 @@ if (typeof require === 'function') {
     };
     /** @param {Event} event @returns {void} */
     const onClick = (event) => {
-      if (!anyPending() || !leavesPage(event)) return;
-      if (ask(LEAVE_MESSAGE)) return;
+      const key = showing.key;
+      if (key === null || !pendingOn(key) || !leavesPage(event)) return;
+      if (ask(LEAVE_MESSAGE)) {
+        discard(key);
+        return;
+      }
       event.preventDefault();
       event.stopPropagation();
     };
@@ -696,6 +759,7 @@ if (typeof require === 'function') {
     view?.addEventListener('beforeunload', onUnload);
     doc.addEventListener('click', onClick, true);
     return () => {
+      if (asker === ask) asker = null;
       view?.removeEventListener('beforeunload', onUnload);
       doc.removeEventListener('click', onClick, true);
     };
@@ -1565,6 +1629,9 @@ if (typeof require === 'function') {
    */
   function buildEditor(doc, context) {
     const key = keyOf(context.advisory);
+    // Building the editor is the panel taking up this advisory, and what a
+    // departure from it is judged against.
+    panelShows(key);
     prune(key, context.tracking);
     const box = element(doc, 'div', 'Box-row bghsa-editor');
 
@@ -1726,7 +1793,10 @@ if (typeof require === 'function') {
     unrecordedMessage,
     changedTracks,
     prune,
+    pendingOn,
     anyPending,
+    showing,
+    panelShows,
     leavesPage,
     armNavigationWarning,
     optional,

@@ -881,14 +881,23 @@ if (typeof require === 'function') {
   /**
    * Draws the view under whichever of the three views the page is on.
    *
+   * GitHub's own view carries GitHub's controls. This toggle opens a view of
+   * the extension's own, so it goes out of view with the table and comes back
+   * with it, leaving one control on the bar there: the one that brings the
+   * extension's views back.
+   *
    * @param {Document} doc
    * @param {string} mode
    * @returns {void}
    */
   function show(doc, mode) {
+    const table = globalThis.bghsa.table;
     const root = draw(doc);
-    const toggleNode = doc.querySelector(`#${globalThis.bghsa.table.ROOT_ID} .bghsa-done-toggle`);
-    if (toggleNode !== null) toggleNode.textContent = mode === MODE ? SHOW_OPEN : SHOW_DONE;
+    const toggleNode = doc.querySelector(`#${table.ROOT_ID} .bghsa-done-toggle`);
+    if (toggleNode !== null) {
+      toggleNode.textContent = mode === MODE ? SHOW_OPEN : SHOW_DONE;
+      setHidden(toggleNode, mode === table.VIEW_NATIVE);
+    }
     if (root !== null) setHidden(root, mode !== MODE);
   }
 

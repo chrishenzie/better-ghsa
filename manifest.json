@@ -7,7 +7,7 @@
   "host_permissions": ["https://github.com/*"],
   "content_scripts": [
     {
-      "matches": ["https://github.com/*/*/security/advisories*"],
+      "matches": ["https://github.com/*"],
       "js": [
         "src/common/dom.js",
         "src/common/text.js",
