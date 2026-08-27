@@ -715,11 +715,17 @@ if (typeof require === 'function') {
      * Runs the queue down. Calling it while a pass is running joins that pass
      * rather than starting a second one: the queue is serial.
      *
+     * A stopped queue stays stopped, and this pass reads nothing and reports
+     * what is left. `load` is what takes a pass back and starts the queue
+     * again. The two halves of a collection are a walk of the list pages and
+     * then the reads the walk named, and the stop that put the walk down is the
+     * page going away: taking the reads up here would spend the hundred
+     * requests the stop was for.
+     *
      * @returns {Promise<QueueSummary>}
      */
     function run() {
       if (running !== null) return running;
-      stopped = false;
       if (startedAt === null) startedAt = clock();
       running = serially(async () => {
         try {

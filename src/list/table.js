@@ -152,6 +152,11 @@ if (typeof require === 'function') {
  *   render, because the bar is.
  * @property {(doc: Document, mode: string) => void} show Told the view the
  *   document is now on, after the table has been placed and hidden or shown.
+ * @property {(doc: Document, key: string | null) => void} [left] Told which
+ *   repository the page names after every render, as `owner/repo` in lower
+ *   case, and null where it names none or is no longer an advisory list. A
+ *   surface with work of its own in flight puts down what it started for a
+ *   repository this is not.
  */
 
 /**
@@ -1950,6 +1955,19 @@ if (typeof require === 'function') {
       parsed === null || parsed.owner === null || parsed.repo === null
         ? null
         : refKey({ owner: parsed.owner, repo: parsed.repo });
+    // The surfaces are told before the table's own refresh is, and on every
+    // pass rather than only on the ones that changed repository: each holds its
+    // own work and each decides what this repository means for it. One that
+    // throws does not keep the next from hearing.
+    for (const surface of [...surfaces]) {
+      if (surface.left === undefined) continue;
+      try {
+        surface.left(doc, key);
+      } catch {
+        // A surface that cannot put its work down is not a reason to leave the
+        // rest of the page running for a repository nobody is looking at.
+      }
+    }
     const left = running.get(doc);
     if (left !== undefined && left.key !== key) leave(doc, left);
     if (parsed === null || key === null) return;

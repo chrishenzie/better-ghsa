@@ -47,6 +47,8 @@ if (typeof require === 'function') {
  *   reads hold, and null before the first page lands.
  * @property {boolean} reading Whether a collection is running.
  * @property {{ owner: string, repo: string } | null} ref
+ * @property {string[]} failures What the last collection could not read, in the
+ *   order it found out, each named once.
  */
 
 /**
@@ -105,6 +107,11 @@ if (typeof require === 'function') {
   /** What says a collection is running. */
   const READING_TEXT = 'Reading';
 
+  /** What the banner says when something the corpus is built from failed. */
+  const FAILURE_MESSAGE =
+    'Some of this could not be read. What is drawn here leaves those advisories' +
+    ' out, or draws them from an older read.';
+
   /** What the view says where a reason cannot be written from here. */
   const UNREADABLE_MESSAGE =
     'Nothing was written: this extension has not read this advisory, so it cannot tell' +
@@ -156,9 +163,17 @@ if (typeof require === 'function') {
   const held = new WeakMap();
 
   /**
-   * The collection each document has running, and the repository it is for.
+   * The collection each document has running, the repository it is for, and the
+   * queue its requests go through.
    *
-   * @type {WeakMap<Document, { key: string, started: Promise<unknown> }>}
+   * @type {WeakMap<
+   *   Document,
+   *   {
+   *     key: string,
+   *     queue: ReturnType<typeof globalThis.bghsa.fetch.createQueue>,
+   *     started: Promise<unknown>,
+   *   }
+   * >}
    */
   const running = new WeakMap();
 
@@ -170,7 +185,7 @@ if (typeof require === 'function') {
     const found = held.get(doc);
     if (found !== undefined) return found;
     /** @type {Held} */
-    const fresh = { corpus: null, reading: false, ref: null };
+    const fresh = { corpus: null, reading: false, ref: null, failures: [] };
     held.set(doc, fresh);
     return fresh;
   }
@@ -217,7 +232,7 @@ if (typeof require === 'function') {
   function current(doc) {
     const state = stateOf(doc);
     if (state.ref === null || names(doc, state.ref)) return state;
-    return setState(doc, { corpus: null, ref: null });
+    return setState(doc, { corpus: null, ref: null, failures: [] });
   }
 
   /** How every surface builds an element. */
@@ -673,6 +688,40 @@ if (typeof require === 'function') {
   }
 
   /**
+   * @param {unknown} reason
+   * @returns {string} what a failure says for itself.
+   */
+  function reasonTextOf(reason) {
+    if (reason === null || reason === undefined) return 'no reason was given';
+    if (reason instanceof Error) return reason.message;
+    return String(reason);
+  }
+
+  /**
+   * What the view says when a page of the walk or an advisory read failed.
+   * REQUIREMENTS.md section 11 displays what it can, marks the result
+   * incomplete, and shows a banner.
+   *
+   * The Partial crawl chip is not that banner. A walk that has not reached its
+   * last page is one a navigation stopped as readily as one GitHub refused, and
+   * a read that failed leaves a row standing as unread, which is also what a
+   * row nothing has got to yet looks like.
+   *
+   * @param {Document} doc
+   * @param {readonly string[]} failures
+   * @returns {Element | null} the banner, and null where nothing failed.
+   */
+  function buildBanner(doc, failures) {
+    if (failures.length === 0) return null;
+    const box = element(doc, 'div', 'flash flash-warn m-3 bghsa-done-banner');
+    box.append(element(doc, 'div', '', FAILURE_MESSAGE));
+    for (const failure of failures) {
+      box.append(element(doc, 'div', 'mt-1 text-small bghsa-done-failure', failure));
+    }
+    return box;
+  }
+
+  /**
    * The rows, and what stands where there are none.
    *
    * @param {Document} doc
@@ -725,6 +774,9 @@ if (typeof require === 'function') {
     });
     header.append(exportControl);
     root.append(header);
+
+    const banner = buildBanner(doc, state.failures);
+    if (banner !== null) root.append(banner);
 
     if (state.corpus !== null) {
       root.append(buildStats(doc, globalThis.bghsa.stats.summarize(state.corpus), state.reading));
@@ -891,7 +943,20 @@ if (typeof require === 'function') {
     };
     listening.add(listener);
 
-    setState(doc, { reading: true, ref });
+    /**
+     * @param {string} message
+     * @returns {void} puts one failure in the banner, named once however many
+     *   attempts it took to give the page up.
+     */
+    const noteFailure = (message) => {
+      if (!names(doc, ref)) return;
+      const failures = stateOf(doc).failures;
+      if (failures.includes(message)) return;
+      setState(doc, { failures: [...failures, message] });
+      draw(doc);
+    };
+
+    setState(doc, { reading: true, ref, failures: [] });
     draw(doc);
     const started = globalThis.bghsa.corpus
       .collect({
@@ -901,6 +966,9 @@ if (typeof require === 'function') {
         href: options.href ?? globalThis.location?.href,
         storage: options.storage,
         now: options.now,
+        onFailure: (state, url, reason) => {
+          noteFailure(`The ${state} list page ${url} could not be read: ${reasonTextOf(reason)}`);
+        },
         onPage: (corpus) => {
           // A page landing after the maintainer has gone to another repository
           // is a page of the one they left.
@@ -910,17 +978,64 @@ if (typeof require === 'function') {
         },
       })
       .then((collected) => {
-        if (names(doc, ref)) setState(doc, { corpus: collected.corpus });
+        if (names(doc, ref)) {
+          setState(doc, { corpus: collected.corpus });
+          const failed = collected.read.failed;
+          if (failed > 0) {
+            noteFailure(
+              `${globalThis.bghsa.table.countTextOf(failed)} could not be read.`
+            );
+          }
+        }
         return collected.corpus;
       })
       .finally(() => {
         listening.delete(listener);
+        // A collection of another repository may have taken the entry over
+        // while this one was finishing, and that one is the one still running.
+        // Reporting it finished here would take the Reading chip off a crawl
+        // that is still going, and where that crawl has no corpus yet the view
+        // would say the repository has no advisories while it is fetching them.
+        // The repository is not asked about on top of this: a collection the
+        // document still holds is the one whose end this is, whichever
+        // repository the page has come to name since.
+        if (running.get(doc)?.started !== started) return;
+        running.delete(doc);
         setState(doc, { reading: false });
-        if (running.get(doc)?.started === started) running.delete(doc);
         draw(doc);
       });
-    running.set(doc, { key, started });
+    running.set(doc, { key, queue, started });
     return started;
+  }
+
+  /**
+   * Puts down a collection running for a repository the page no longer names.
+   *
+   * A collection is a walk of two list pages and then a read of every advisory
+   * they name, a hundred-odd requests on a repository like
+   * `containerd/containerd`. A maintainer who follows a link out of the list
+   * has left it, and the rate this extension puts on github.com is one request
+   * a second per repository: a collection left running there spends that second
+   * on a repository nobody is looking at, and it spends it beside whatever the
+   * page they moved to is spending. The list surface stops its own refresh on
+   * the same reading of the page.
+   *
+   * The walk stops after the request in flight and the reads are never taken
+   * up. What is left stays in the progress entry, so a maintainer who comes
+   * back takes the collection back where it stood and reads no advisory twice.
+   *
+   * @param {Document} doc
+   * @param {string | null} key The repository the page names now, and null
+   *   where it names none.
+   * @returns {void}
+   */
+  function left(doc, key) {
+    const collecting = running.get(doc);
+    if (collecting === undefined || collecting.key === key) return;
+    void collecting.queue.stop();
+    running.delete(doc);
+    setState(doc, { reading: false });
+    draw(doc);
   }
 
   const exported = {
@@ -936,6 +1051,7 @@ if (typeof require === 'function') {
     UNREAD_TEXT,
     PARTIAL_TEXT,
     READING_TEXT,
+    FAILURE_MESSAGE,
     UNREADABLE_MESSAGE,
     STYLE_TEXT,
     COUNT_GROUPS,
@@ -950,6 +1066,8 @@ if (typeof require === 'function') {
     rowsOf,
     memberOf,
     metaTextOf,
+    reasonTextOf,
+    buildBanner,
     expectedTotal,
     contextFor,
     buildClosure,
@@ -967,13 +1085,14 @@ if (typeof require === 'function') {
     show,
     setReason,
     collect,
+    left,
   };
 
   globalThis.bghsa.view = exported;
 
   // The list surface holds the choice of view and the bar both toggles sit on,
   // so this one takes its place there as soon as it loads.
-  globalThis.bghsa.table.addSurface({ control: buildToggle, show });
+  globalThis.bghsa.table.addSurface({ control: buildToggle, show, left });
 
   if (typeof module !== 'undefined') {
     module.exports = exported;

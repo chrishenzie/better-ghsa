@@ -58,10 +58,23 @@ const pages = {};
 const asked = [];
 
 /**
- * The one queue this repository's requests go through, made here so the view's
- * own collection finds it rather than making one that would reach the network.
+ * What to run while a path is being answered, by path. A test that has to act
+ * while a collection is in flight puts the act here, and it runs once: the
+ * entry is taken out before it is called, so a retry of the same path does not
+ * run it again.
+ *
+ * @type {Record<string, () => Promise<void>>}
  */
-table.queueFor(REF, {
+const during = {};
+
+/**
+ * What a queue this file makes reads and waits with. Every answer is a string a
+ * test wrote, so no queue made with these reaches the network, whichever
+ * repository it is for.
+ *
+ * @type {import('../src/list/table.js').RefreshOptions}
+ */
+const QUEUE_OPTIONS = {
   storage: cache.storageOf(),
   now: () => clockAt,
   wait: async (ms) => {
@@ -69,11 +82,22 @@ table.queueFor(REF, {
   },
   fetch: async (url) => {
     asked.push(url);
+    const act = during[url];
+    if (act !== undefined) {
+      delete during[url];
+      await act();
+    }
     const body = pages[url];
     if (body === undefined) return { status: 404, text: async () => '' };
     return { status: 200, text: async () => body };
   },
-});
+};
+
+/**
+ * The one queue this repository's requests go through, made here so the view's
+ * own collection finds it rather than making one that would reach the network.
+ */
+table.queueFor(REF, QUEUE_OPTIONS);
 
 /**
  * @param {string} name
@@ -980,4 +1004,195 @@ test("a corpus is not drawn under the repository the maintainer moved to", async
   );
   assert.strictEqual(view.exportCsv(doc), null, 'a file of them can still be asked for');
   assert.strictEqual(view.stateOf(doc).corpus, null, 'the view is still holding them');
+});
+
+test('a page or a read the crawl could not take shows a banner', async () => {
+  const base = `/${REF.owner}/${REF.repo}/security/advisories`;
+  const closedUrl = `${base}?state=closed`;
+  const readable = ghsa('pppp');
+  const unreadable = ghsa('qqqq');
+  pages[`${base}?state=published`] = listHtml({
+    state: 'published',
+    ids: [readable, unreadable],
+    counts: { published: 2, closed: 0 },
+  });
+  pages[detailUrl(readable)] = detailHtml({
+    ghsaId: readable,
+    state: 'Published',
+    reportedAt: '2026-03-02T00:00:00Z',
+  });
+  // The closed list page and one advisory are the pages GitHub does not answer.
+  delete pages[closedUrl];
+  delete pages[detailUrl(unreadable)];
+  await cache.clear();
+
+  const doc = await page();
+  const held = await view.collect(doc);
+  assert.ok(held !== null, 'the collection ran');
+
+  const banner = one(doc, `#${view.ROOT_ID} .bghsa-done-banner`);
+  assert.ok(
+    (banner.textContent ?? '').includes(view.FAILURE_MESSAGE),
+    'the banner says what a failed read means for what is drawn'
+  );
+  const lines = textsOf(banner, '.bghsa-done-failure');
+  assert.strictEqual(lines.length, 2, `the failures named: ${lines.join(' | ')}`);
+  assert.ok(
+    lines.some((line) => line.includes(closedUrl)),
+    `the list page that failed is named: ${lines.join(' | ')}`
+  );
+  assert.ok(
+    lines.some((line) => line === '1 advisory could not be read.'),
+    `the read that failed is counted: ${lines.join(' | ')}`
+  );
+  assert.deepStrictEqual(view.stateOf(doc).failures, lines, 'the view holds what it drew');
+});
+
+/** The repository a soft navigation moves to in the tests below. */
+const MOVED = { owner: 'git-utensils', repo: 'Fork-Knife' };
+
+/**
+ * Moves the page to another repository the way a soft navigation does: GitHub
+ * replaces the turbo frame and keeps the document.
+ *
+ * @param {Document} doc
+ * @param {{ owner: string, repo: string }} ref
+ * @param {readonly string[]} ids What the list page there names.
+ * @returns {Promise<void>}
+ */
+async function moveTo(doc, ref, ids) {
+  one(doc, '#repo-content-turbo-frame').innerHTML = listHtml({
+    state: 'published',
+    ids: [...ids],
+    counts: { published: ids.length, closed: 0 },
+  }).replaceAll(`/${REF.owner}/${REF.repo}/`, `/${ref.owner}/${ref.repo}/`);
+  if ((await table.render(doc)) === null) throw new Error('the page offered no anchor');
+}
+
+/**
+ * @param {{ owner: string, repo: string }} ref
+ * @param {string} state
+ * @returns {string} the path that state's first list page is read from.
+ */
+function listUrl(ref, state) {
+  return `/${ref.owner}/${ref.repo}/security/advisories?state=${state}`;
+}
+
+test('a collection that ends does not report the one now running finished', async () => {
+  const left = ghsa('rrrr');
+  const moved = ghsa('ssss');
+  pages[listUrl(REF, 'published')] = listHtml({
+    state: 'published',
+    ids: [left],
+    counts: { published: 1, closed: 0 },
+  });
+  pages[listUrl(REF, 'closed')] = listHtml({
+    state: 'closed',
+    ids: [],
+    counts: { published: 1, closed: 0 },
+  });
+  pages[detailUrl(left)] = detailHtml({
+    ghsaId: left,
+    state: 'Published',
+    reportedAt: '2026-03-02T00:00:00Z',
+  });
+  await cache.clear();
+
+  // The list page of the repository moved to is held until this test lets it
+  // go, so the collection of that repository is still crawling when the
+  // collection of the one left behind ends.
+  /** @type {() => void} */
+  let release = () => {};
+  const held = new Promise((resolve) => {
+    release = () => {
+      resolve(undefined);
+    };
+  });
+  pages[listUrl(MOVED, 'published')] = listHtml({
+    state: 'published',
+    ids: [moved],
+    counts: { published: 1, closed: 0 },
+  }).replaceAll(`/${REF.owner}/${REF.repo}/`, `/${MOVED.owner}/${MOVED.repo}/`);
+  during[listUrl(MOVED, 'published')] = () => held;
+
+  const doc = await page();
+  /** @type {Promise<unknown> | null} */
+  let arriving = null;
+  during[detailUrl(left)] = async () => {
+    await moveTo(doc, MOVED, [moved]);
+    arriving = view.collect(doc, QUEUE_OPTIONS);
+  };
+
+  await view.collect(doc, QUEUE_OPTIONS);
+  assert.ok(arriving !== null, 'the collection of the repository moved to never started');
+
+  assert.strictEqual(
+    view.stateOf(doc).reading,
+    true,
+    'the collection that ended reported the one still crawling finished'
+  );
+  const drawn = (one(doc, `#${view.ROOT_ID}`).textContent ?? '').replace(/\s+/g, ' ');
+  assert.ok(drawn.includes(view.READING_TEXT), `the view drew: ${drawn}`);
+  assert.ok(!drawn.includes(view.EMPTY_TEXT), `the view drew: ${drawn}`);
+
+  release();
+  await arriving;
+});
+
+test('a collection spends no request on a repository the page has left', async () => {
+  const published = [ghsa('tttt'), ghsa('uuuu'), ghsa('vvvv')];
+  pages[listUrl(REF, 'published')] = listHtml({
+    state: 'published',
+    ids: published,
+    counts: { published: published.length, closed: 1 },
+  });
+  pages[listUrl(REF, 'closed')] = listHtml({
+    state: 'closed',
+    ids: [ghsa('wwww')],
+    counts: { published: published.length, closed: 1 },
+  });
+  for (const id of [...published, ghsa('wwww')]) {
+    pages[detailUrl(id)] = detailHtml({
+      ghsaId: id,
+      state: 'Published',
+      reportedAt: '2026-03-02T00:00:00Z',
+    });
+  }
+  await cache.clear();
+
+  const doc = await page();
+  const mine = `/${REF.owner}/${REF.repo}/`;
+  // The maintainer follows a link out of the list while the walk is reading its
+  // first page. The render that lands on the repository they moved to is what
+  // tells this surface the page it was collecting for has gone.
+  during[listUrl(REF, 'published')] = async () => {
+    await moveTo(doc, MOVED, [ghsa('xxxx')]);
+    table.ensureRefresh(doc, QUEUE_OPTIONS);
+  };
+
+  const before = asked.length;
+  await view.collect(doc, QUEUE_OPTIONS);
+
+  assert.deepStrictEqual(
+    asked.slice(before).filter((url) => url.startsWith(mine)),
+    [listUrl(REF, 'published')],
+    'the collection carried on reading a repository nobody was looking at'
+  );
+  assert.strictEqual(
+    view.stateOf(doc).reading,
+    false,
+    'the view reports a collection running that it put down'
+  );
+
+  // What the collection did not spend is what a maintainer coming back takes
+  // up, and the walk it put down cost none of those reads twice.
+  const back = asked.length;
+  const { queue } = table.queueFor(REF, QUEUE_OPTIONS);
+  await queue.load();
+  await queue.run();
+  assert.deepStrictEqual(
+    asked.slice(back).filter((url) => url.startsWith(mine)).sort(),
+    published.map(detailUrl).sort(),
+    'the advisories the stopped pass was holding'
+  );
 });
