@@ -499,3 +499,41 @@ test('a corpus of one real advisory measures what its page carries', () => {
   assert.strictEqual(summary.timings.firstResponse?.omitted, 1);
   assert.strictEqual(summary.timings.firstResponse?.mean, null);
 });
+
+/** The units the durations below are written in. */
+const HOUR = 60 * 60 * 1000;
+const DAY = 24 * HOUR;
+
+test('the median of a timing is the middle of what it measured', () => {
+  // One advisory answered in an hour, one in a day, one in twelve. The long one
+  // carries the mean past every value but itself, so the two answers stand
+  // apart and a mean standing in for the median would read as one.
+  const odd = stats.timing([DAY, 12 * DAY, HOUR], { corpus: 3, unread: 0 });
+  assert.strictEqual(odd.median, DAY, 'the middle of an odd count');
+  assert.strictEqual(odd.mean, (HOUR + DAY + 12 * DAY) / 3);
+  assert.notStrictEqual(odd.median, odd.mean, 'the input tells the two answers apart');
+
+  const even = stats.timing([30 * DAY, DAY, HOUR, DAY], { corpus: 4, unread: 0 });
+  assert.strictEqual(even.median, DAY, 'the middle pair of an even count');
+  assert.strictEqual(even.mean, (HOUR + DAY + DAY + 30 * DAY) / 4);
+  assert.notStrictEqual(even.median, even.mean, 'the input tells the two answers apart');
+});
+
+test('a timing orders its values by magnitude', () => {
+  // Two hours, a day and three days are 7200000, 86400000 and 259200000
+  // milliseconds, which read in a different order as text: "259200000" comes
+  // first there and "86400000" last. A corpus holds durations of every size, so
+  // an order taken from the text would report the wrong min, median and max.
+  const values = [3 * DAY, 2 * HOUR, DAY];
+  assert.notDeepStrictEqual(
+    [...values].sort(),
+    [2 * HOUR, DAY, 3 * DAY],
+    'the input tells an order by magnitude from an order by text'
+  );
+
+  const held = stats.timing(values, { corpus: 3, unread: 0 });
+  assert.deepStrictEqual(held.values, [2 * HOUR, DAY, 3 * DAY], 'ascending by magnitude');
+  assert.strictEqual(held.min, 2 * HOUR);
+  assert.strictEqual(held.median, DAY);
+  assert.strictEqual(held.max, 3 * DAY);
+});

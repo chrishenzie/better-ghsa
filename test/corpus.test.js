@@ -398,3 +398,60 @@ test('a page of the walk draws the corpus before any advisory is read', async ()
     `a page that landed named the advisory it carries: ${JSON.stringify(drawn)}`
   );
 });
+
+test('the corpus is ordered by identifier, whatever order the crawl found it in', async () => {
+  // The walk reads the published state first and takes each page's rows in the
+  // order GitHub laid them out, so this crawl meets the four advisories in the
+  // reverse of their identifier order.
+  const published = [ghsa('dddd'), ghsa('bbbb')];
+  const closed = [ghsa('cccc'), ghsa('aaaa')];
+  const found = [...published, ...closed];
+  const wanted = [ghsa('aaaa'), ghsa('bbbb'), ghsa('cccc'), ghsa('dddd')];
+  assert.notDeepStrictEqual(found, wanted, 'the crawl order tells the two orders apart');
+
+  const pages = {
+    [PUBLISHED_URL]: listHtml({
+      state: 'published',
+      ids: published,
+      counts: { published: 2, closed: 2 },
+    }),
+    [CLOSED_URL]: listHtml({ state: 'closed', ids: closed, counts: { published: 2, closed: 2 } }),
+  };
+  for (const id of found) {
+    pages[detailUrl(id)] = detailHtml({
+      ghsaId: id,
+      state: 'Published',
+      reportedAt: '2026-03-02T00:00:00Z',
+    });
+  }
+
+  const { clock, storage, collect } = harness(pages);
+  const collected = await collect();
+  assert.deepStrictEqual(
+    collected.crawled.ids,
+    found,
+    'the walk holds them in the order it met them'
+  );
+  assert.deepStrictEqual(
+    collected.corpus.members.map((member) => member.ghsaId),
+    wanted,
+    'the members are ordered by identifier'
+  );
+
+  // The same rows in the order another walk of the same repository could hold
+  // them: the corpus a maintainer exports and the rows they read are in one
+  // order whichever collection built them.
+  /** @type {import('../src/common/crawl.js').CrawledList} */
+  const other = { walks: {}, rows: {} };
+  for (const id of Object.keys(collected.crawled.list.rows).reverse()) {
+    other.rows[id] = /** @type {import('../src/common/crawl.js').CrawledList['rows'][string]} */ (
+      collected.crawled.list.rows[id]
+    );
+  }
+  const again = await corpus.membersOf(REF, other, { storage, at: clock.now(), complete: true });
+  assert.deepStrictEqual(
+    again.members.map((member) => member.ghsaId),
+    collected.corpus.members.map((member) => member.ghsaId),
+    'two collections of one corpus order it the same way'
+  );
+});

@@ -1196,3 +1196,29 @@ test('a collection spends no request on a repository the page has left', async (
     'the advisories the stopped pass was holding'
   );
 });
+
+test('a read that names no advisory offers no write from here', async () => {
+  const read = parseDetail.parseDetail(document(fixture('triage-thread.html')));
+  assert.ok(read !== null && read.ref !== null, 'the fixture reads as an advisory');
+  // The reference comes off one region of the advisory page. A page laid out
+  // without it still reads, still caches, and still reads back as an advisory,
+  // and what it does not carry is the repository and the identifier a write
+  // would go to.
+  const held = await cachedCorpus([
+    { ghsaId: TRIAGE_ID, state: 'closed', record: { ...read, ref: null } },
+  ]);
+  const built = view.memberOf(held, TRIAGE_ID)?.advisory ?? null;
+  assert.ok(built !== null, 'the cached entry read back as an advisory');
+  assert.strictEqual(built.ref, null, 'and it names no advisory to write on');
+
+  const rows = view.rowsOf(held);
+  assert.strictEqual(rows.length, 1, 'the member is a row');
+  assert.strictEqual(rows[0]?.read, true, 'a read backs it');
+  assert.strictEqual(rows[0]?.writable, false, 'and no write can be aimed at it');
+
+  const doc = await page(held);
+  assert.ok(
+    one(doneRow(doc, TRIAGE_ID), 'button.bghsa-done-save').hasAttribute('disabled'),
+    'the control offers a write that would have nowhere to go'
+  );
+});
