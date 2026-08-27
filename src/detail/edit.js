@@ -207,19 +207,48 @@ function discard(key) {
 }
 
 /**
+ * What makes two logins one account. GitHub reads a login case-insensitively,
+ * so `SamuelKarp` and `samuelkarp` are one owner, and the same fold decides
+ * whether the Add button takes a typed login the list already holds.
+ *
+ * @param {string} login
+ * @returns {string}
+ */
+function foldLogin(login) {
+  return login.toLowerCase();
+}
+
+/**
+ * What makes two GHSA identifiers one advisory. GitHub reads the identifier
+ * case-insensitively, so `GHSA-cm76-qm8v-3j95` and `ghsa-cm76-qm8v-3j95` name
+ * one advisory, as they do to {@link keyOf}.
+ *
+ * @param {string | null | undefined} id
+ * @returns {string | null | undefined}
+ */
+function foldGhsaId(id) {
+  return typeof id === 'string' ? id.toLowerCase() : id;
+}
+
+/**
  * Owners and backport targets are sets: REQUIREMENTS.md section 6 has owners be
  * org members and backports be release branches, and neither carries an order
  * that means anything. A value taken off and put back leaves the same set in a
  * different order, and that is not a change.
  *
+ * Sameness is the value's own: `fold` is what makes two spellings one value,
+ * and a login folds where a git branch name, which names one branch only as it
+ * is spelled, does not.
+ *
  * @param {string[]} left
  * @param {string[]} right
+ * @param {(value: string) => string} [fold]
  * @returns {boolean} whether both name the same values.
  */
-function sameList(left, right) {
+function sameList(left, right, fold = (value) => value) {
   if (left.length !== right.length) return false;
-  const one = [...left].sort();
-  const two = [...right].sort();
+  const one = left.map(fold).sort();
+  const two = right.map(fold).sort();
   return one.every((value, index) => value === two[index]);
 }
 
@@ -251,7 +280,7 @@ function staged(tracking, pending) {
   if (pending.triage !== undefined && pending.triage !== tracking.triage) {
     kept.triage = pending.triage;
   }
-  if (pending.owners !== undefined && !sameList(pending.owners, tracking.owners)) {
+  if (pending.owners !== undefined && !sameList(pending.owners, tracking.owners, foldLogin)) {
     kept.owners = pending.owners;
   }
   if (pending.backports !== undefined && !sameList(pending.backports, tracking.backports)) {
@@ -268,7 +297,7 @@ function staged(tracking, pending) {
   }
   if (
     pending.closureDuplicateOf !== undefined &&
-    pending.closureDuplicateOf !== tracking.closureDuplicateOf
+    foldGhsaId(pending.closureDuplicateOf) !== foldGhsaId(tracking.closureDuplicateOf)
   ) {
     kept.closureDuplicateOf = pending.closureDuplicateOf;
   }
@@ -490,7 +519,7 @@ function release(key, captured) {
   if (
     captured.owners !== undefined &&
     kept.owners !== undefined &&
-    sameList(kept.owners, captured.owners)
+    sameList(kept.owners, captured.owners, foldLogin)
   ) {
     delete kept.owners;
   }
@@ -510,7 +539,8 @@ function release(key, captured) {
   }
   if (
     captured.closureDuplicateOf !== undefined &&
-    kept.closureDuplicateOf === captured.closureDuplicateOf
+    kept.closureDuplicateOf !== undefined &&
+    foldGhsaId(kept.closureDuplicateOf) === foldGhsaId(captured.closureDuplicateOf)
   ) {
     delete kept.closureDuplicateOf;
   }
@@ -1107,15 +1137,18 @@ function textControl(doc, className, type, value, placeholder) {
 
 /**
  * The logins the panel offers as owners: the org members this page shows,
- * followed by the members this extension has seen on the advisories it read
- * before. REQUIREMENTS.md section 6 has owners be org members, and a member
- * badge is what says a login is one. A login outside the set is accepted when
- * it is typed, and is flagged where it is shown.
+ * followed by the members this extension has seen on this organization's other
+ * advisories. REQUIREMENTS.md section 6 has owners be org members, and a member
+ * badge is what says a login is one. Membership is per organization, so a
+ * login badged on another organization is not offered here.
+ * A login outside the set is accepted when it is typed, and is flagged where it
+ * is shown.
  *
- * Where no member has been seen anywhere, the advisory's collaborators other
- * than its reporter stand in, so the control is usable before anything has
- * been observed. GitHub counts the reporter as a collaborator on the advisory
- * they reported, which is why the reporter is left out of that fallback.
+ * Where no member of this organization has been seen, the advisory's
+ * collaborators other than its reporter stand in, so the control is usable
+ * before anything has been observed. GitHub counts the reporter as a
+ * collaborator on the advisory they reported, which is why the reporter is left
+ * out of that fallback.
  *
  * @param {EditorContext} context
  * @returns {string[]}
@@ -1123,7 +1156,8 @@ function textControl(doc, className, type, value, placeholder) {
 function ownerCandidates(context) {
   /** @type {string[]} */
   const candidates = [];
-  for (const login of [...context.derived.members, ...globalThis.bghsa.members.known()]) {
+  const seen = globalThis.bghsa.members.known(context.advisory.ref);
+  for (const login of [...context.derived.members, ...seen]) {
     if (!candidates.some((known) => known.toLowerCase() === login.toLowerCase())) {
       candidates.push(login);
     }
@@ -1133,6 +1167,55 @@ function ownerCandidates(context) {
   return context.advisory.collaborators.filter(
     (login) => reporter === null || login.toLowerCase() !== reporter.toLowerCase()
   );
+}
+
+/**
+ * Everything a surface needs to show one advisory's stored state and to write
+ * it: what the advisory's state comments merge to, with a write from this
+ * session preferred over the document it has not reached yet, the
+ * fingerprints the confirmations bind to, the tracking view those two make,
+ * and what the page derives.
+ *
+ * What the advisory says about the repository is taken here, on every surface
+ * that assembles a context. A member badge says a login is an org member, and
+ * a branch a pull request in the private fork targets or a maintainer asked
+ * for a backport on is a branch the repository has. Both are read off the
+ * advisory and both outlive it, so the pickers offer what any surface has
+ * seen and not only what was opened by hand. Holding them is synchronous, so
+ * the caller draws with them however slow storage is.
+ *
+ * @param {ParsedDetail} advisory
+ * @param {object} [options]
+ * @param {() => Promise<void> | void} [options.rerender] What runs a render
+ *   pass on the surface asking, which is how it shows what a write left
+ *   behind.
+ * @param {import('../common/write.js').WriteFetch} [options.fetch]
+ * @param {(html: string) => Document} [options.parseDocument]
+ * @returns {Promise<EditorContext>}
+ */
+async function contextFor(advisory, options = {}) {
+  const merged = preferred(
+    keyOf(advisory),
+    globalThis.bghsa.merge.mergeSnapshots(advisory.comments)
+  );
+  const fingerprints = await globalThis.bghsa.tracking.fingerprints(advisory);
+  const tracking = globalThis.bghsa.tracking.read(merged.state, fingerprints);
+  const derived = globalThis.bghsa.derive.derive(advisory);
+  globalThis.bghsa.members.remember(advisory.ref, derived.members);
+  globalThis.bghsa.branches.remember(advisory.ref, [
+    ...derived.patch.branches.map((patch) => patch.branch),
+    ...tracking.backports,
+  ]);
+  return {
+    advisory,
+    derived,
+    tracking,
+    fingerprints,
+    merged,
+    ...(options.rerender === undefined ? {} : { rerender: options.rerender }),
+    ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
+    ...(options.parseDocument === undefined ? {} : { parseDocument: options.parseDocument }),
+  };
 }
 
 /**
@@ -1302,7 +1385,7 @@ function ownersField(doc, context, key, update) {
     noun: 'an owner',
     placeholder: 'login',
     candidates: ownerCandidates(context),
-    fold: (login) => login.toLowerCase(),
+    fold: foldLogin,
     unknown: 'not a known member',
     drafts,
     held: () => pick(editsFor(key).owners, context.tracking.owners),
@@ -1654,6 +1737,7 @@ globalThis.bghsa.edit = {
   save,
   ownerCandidates,
   backportCandidates,
+  contextFor,
   buildEditor,
 };
 

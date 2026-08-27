@@ -756,10 +756,43 @@ test('a member seen on another advisory is offered on this one', async () => {
   }
   const drawn = await panel.render(other);
   assert.ok(drawn !== null, 'the draft fixture offered no anchor');
-  assert.deepStrictEqual(members.known(), ['dmcgowan'], 'the other advisory taught nothing');
+  assert.deepStrictEqual(
+    members.known({ owner: 'git-utensils' }),
+    ['dmcgowan'],
+    'the other advisory taught nothing'
+  );
 
   const { editor } = await editorFor(fixture('triage-thread.html'));
   assert.deepStrictEqual(candidates(editor), ['samuelkarp', 'dmcgowan']);
+  forget();
+});
+
+test('a member of one organization is not offered on another organization', async () => {
+  forget();
+  members.remember({ owner: 'containerd' }, ['dmcgowan']);
+  members.remember({ owner: 'git-utensils' }, ['samuelkarp']);
+
+  const { editor: utensils, context } = await editorFor(fixture('triage-thread.html'));
+  assert.strictEqual(context.advisory.ref?.owner, 'git-utensils');
+  const offered = candidates(utensils);
+  assert.ok(
+    offered.includes('samuelkarp'),
+    'a member of this organization is not offered as an owner'
+  );
+  assert.ok(
+    !offered.includes('dmcgowan'),
+    "a member of another organization is offered as this one's owner"
+  );
+
+  // With no containerd member seen, that advisory falls back to the
+  // collaborators, and a git-utensils member has no place among them either.
+  forget();
+  members.remember({ owner: 'git-utensils' }, ['samuelkarp']);
+  const { editor: cd } = await editorFor(fixture('published-containerd.html'));
+  assert.ok(
+    !candidates(cd).includes('samuelkarp'),
+    'a member of another organization suppressed the collaborator fallback'
+  );
   forget();
 });
 
@@ -829,6 +862,23 @@ test('an owner taken off and put back holds no change', async () => {
   press(editor, 'button.bghsa-owner-add');
 
   assert.strictEqual(ownersHeld(editor).join(' '), 'dmcgowan samuelkarp');
+  assert.strictEqual(note(editor), 'No unsaved changes.');
+  assert.strictEqual(control(editor, 'button.bghsa-save').hasAttribute('disabled'), true);
+});
+
+test('an owner retyped in a different case holds no change', async () => {
+  forget();
+  const page = fixture('triage-thread.html');
+  const base = await contextFor(page);
+  const editor = edit.buildEditor(page, {
+    ...base,
+    tracking: { ...base.tracking, owners: ['samuelkarp'] },
+  });
+  press(editor, 'button.bghsa-owner-remove');
+  type(control(editor, 'input.bghsa-owner-input'), 'SamuelKarp');
+  press(editor, 'button.bghsa-owner-add');
+
+  assert.strictEqual(ownersHeld(editor).join(' '), 'SamuelKarp');
   assert.strictEqual(note(editor), 'No unsaved changes.');
   assert.strictEqual(control(editor, 'button.bghsa-save').hasAttribute('disabled'), true);
 });
@@ -1193,6 +1243,25 @@ test('a clear the write reads no unknown field against still goes', async () => 
 
   assert.ok(outcome.ok === true, `the save failed: ${outcome.message}`);
   assert.strictEqual(sentSnapshot(talk.calls)['embargo'], undefined);
+  forget();
+});
+
+test('a duplicate advisory retyped in a different case holds no change', async () => {
+  forget();
+  const page = fixture('triage-thread.html');
+  const base = await contextFor(page);
+  const editor = edit.buildEditor(page, {
+    ...base,
+    tracking: {
+      ...base.tracking,
+      closureReason: 'duplicate',
+      closureDuplicateOf: 'GHSA-cm76-qm8v-3j95',
+    },
+  });
+  type(control(editor, 'input.bghsa-closure-duplicate'), 'ghsa-cm76-qm8v-3j95');
+
+  assert.strictEqual(note(editor), 'No unsaved changes.');
+  assert.strictEqual(control(editor, 'button.bghsa-save').hasAttribute('disabled'), true);
   forget();
 });
 

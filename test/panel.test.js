@@ -767,7 +767,7 @@ function offered(doc, name) {
 test('a member storage holds and this page does not reaches the panel', async () => {
   reset(triageDoc);
   members.clear();
-  members.setStorage(fakeStorage({ [members.MEMBERS_KEY]: ['dmcgowan'] }));
+  members.setStorage(fakeStorage({ [members.MEMBERS_KEY]: { 'git-utensils': ['dmcgowan'] } }));
   try {
     const drawn = await panel.render(triageDoc);
     assert.ok(drawn !== null, 'the triage fixture offered no anchor');

@@ -576,38 +576,12 @@ async function render(doc) {
   // A comment this page wrote is on GitHub and not in this document, so the
   // state a write left behind outranks what the document's comments merge to
   // until the page is read again.
-  const merged = edit.preferred(
-    edit.keyOf(advisory),
-    globalThis.bghsa.merge.mergeSnapshots(advisory.comments)
-  );
-  const fingerprints = await globalThis.bghsa.tracking.fingerprints(advisory);
-  const tracking = globalThis.bghsa.tracking.read(merged.state, fingerprints);
-  const derived = globalThis.bghsa.derive.derive(advisory);
-  // A member badge is what says a login is an org member, and this page is one
-  // place it appears. Holding the logins is synchronous, so the panel draws
-  // with the members this advisory shows however slow storage is.
-  globalThis.bghsa.members.remember(derived.members);
-  // A release branch this advisory names is one the repository has, and every
-  // advisory on the repository offers the same branches. The pull requests in
-  // the private fork name the branches they are patching, and the backport
-  // targets name the branches a maintainer has asked for. Holding them is
-  // synchronous for the same reason holding a member is.
-  globalThis.bghsa.branches.remember(advisory.ref, [
-    ...derived.patch.branches.map((patch) => patch.branch),
-    ...tracking.backports,
-  ]);
-  const placed = injectPanel(doc, advisory, derived, tracking, {
-    advisory,
-    derived,
-    tracking,
-    fingerprints,
-    merged,
-    rerender: () => passFor(doc)(),
-  });
+  const context = await edit.contextFor(advisory, { rerender: () => passFor(doc)() });
+  const placed = injectPanel(doc, advisory, context.derived, context.tracking, context);
   // The chips carry the extension's tone classes, and a page offering the
   // panel no anchor still gets them.
   ensureStyle(doc);
-  globalThis.bghsa.comments.markComments(doc, merged);
+  globalThis.bghsa.comments.markComments(doc, context.merged);
   // What storage holds reaches the panel through a pass of its own, because a
   // member and a branch seen on another advisory are worth drawing again and
   // are not worth holding this pass up for.
