@@ -48,6 +48,17 @@ if (typeof require === 'function') {
  */
 
 /**
+ * One page of GitHub HTML, as a caller outside this file asked for it.
+ *
+ * @typedef {object} PageRead
+ * @property {string | null} body What GitHub answered with, and null where the
+ *   read failed.
+ * @property {number | null} status What GitHub answered, and null where nothing
+ *   answered at all.
+ * @property {unknown} reason Why the read failed, and null where it did not.
+ */
+
+/**
  * @typedef {object} QueueOptions
  * @property {{ owner: string, repo: string }} ref The repository whose
  *   advisories this pass reads.
@@ -249,6 +260,31 @@ if (typeof require === 'function') {
     let skipped = 0;
     let failures = 0;
 
+    /**
+     * What this queue has been asked to do, in the order it was asked. One
+     * queue sends one request at a time, and it has two callers: a crawl
+     * reading a list page, and the refresh pass reading advisories.
+     *
+     * @type {Promise<unknown>}
+     */
+    let queued = Promise.resolve();
+
+    /**
+     * @template T
+     * @param {() => Promise<T>} work
+     * @returns {Promise<T>} what `work` answered, run after everything already
+     *   handed to this queue. A caller that failed does not stop the next one:
+     *   the failure belongs to whoever asked for that work.
+     */
+    function serially(work) {
+      const next = queued.then(work, work);
+      queued = next.then(
+        () => {},
+        () => {}
+      );
+      return next;
+    }
+
     /** @returns {QueueProgress} how far this pass has got. */
     function progress() {
       return {
@@ -413,6 +449,25 @@ if (typeof require === 'function') {
     }
 
     /**
+     * Sends one request and reads what came back, inside the bound.
+     *
+     * @param {string} url
+     * @returns {Promise<{ status: number, body: string }>} what GitHub
+     *   answered, with an empty body where the status is not a success.
+     */
+    function request(url) {
+      return within(async (signal) => {
+        const response = await send(url, { ...globalThis.bghsa.write.DETAIL_INIT, signal });
+        if (!(response.status >= 200 && response.status < 300)) {
+          return { status: response.status, body: '' };
+        }
+        // The body is read inside the bound as well: a page that starts
+        // arriving and stops is as unanswered as one that never came.
+        return { status: response.status, body: await response.text() };
+      });
+    }
+
+    /**
      * Fetches one advisory's detail page and holds what it says. Every derived
      * value comes from that one page, so one advisory costs one request.
      *
@@ -424,23 +479,12 @@ if (typeof require === 'function') {
     async function read(ghsaId) {
       const advisory = { owner: ref.owner, repo: ref.repo, ghsaId };
       try {
-        const page = await within(async (signal) => {
-          const response = await send(globalThis.bghsa.write.detailUrl(advisory), {
-            ...globalThis.bghsa.write.DETAIL_INIT,
-            signal,
-          });
-          if (!(response.status >= 200 && response.status < 300)) {
-            return { status: response.status, body: '' };
-          }
-          // The body is read inside the bound as well: a page that starts
-          // arriving and stops is as unanswered as one that never came.
-          return { status: response.status, body: await response.text() };
-        });
-        if (!(page.status >= 200 && page.status < 300)) {
-          fail(ghsaId, `GitHub answered ${page.status}.`);
+        const answered = await request(globalThis.bghsa.write.detailUrl(advisory));
+        if (!(answered.status >= 200 && answered.status < 300)) {
+          fail(ghsaId, `GitHub answered ${answered.status}.`);
           return null;
         }
-        const record = parse(page.body, advisory);
+        const record = parse(answered.body, advisory);
         if (record === null || record === undefined) {
           fail(ghsaId, 'The page did not read as an advisory.');
           return null;
@@ -512,6 +556,44 @@ if (typeof require === 'function') {
       return true;
     }
 
+    /**
+     * Reads one page of GitHub HTML through this queue's slot. A crawl of the
+     * advisory list walks its pages this way.
+     *
+     * A list page costs a request exactly as an advisory read does, and the
+     * rate limit counts requests, so the two spend one slot between them: the
+     * same wait, the same claim written where every queue on this repository
+     * reads it, and the same bound on how long one request may go unanswered.
+     * A crawl that walked pages on a limit of its own would double the rate the
+     * extension can produce.
+     *
+     * @param {string} url
+     * @returns {Promise<PageRead>}
+     */
+    function page(url) {
+      return serially(async () => {
+        await throttle();
+        if (stopped) {
+          return { body: null, status: null, reason: 'The queue was stopped.' };
+        }
+        lastRequestAt = clock();
+        await persist();
+        try {
+          const answered = await request(url);
+          if (!(answered.status >= 200 && answered.status < 300)) {
+            return {
+              body: null,
+              status: answered.status,
+              reason: `GitHub answered ${answered.status}.`,
+            };
+          }
+          return { body: answered.body, status: answered.status, reason: null };
+        } catch (error) {
+          return { body: null, status: null, reason: error };
+        }
+      });
+    }
+
     /** @returns {Promise<QueueSummary>} */
     async function pass() {
       while (!stopped) {
@@ -578,13 +660,13 @@ if (typeof require === 'function') {
       if (running !== null) return running;
       stopped = false;
       if (startedAt === null) startedAt = clock();
-      running = (async () => {
+      running = serially(async () => {
         try {
           return await pass();
         } finally {
           running = null;
         }
-      })();
+      });
       return running;
     }
 
@@ -603,6 +685,7 @@ if (typeof require === 'function') {
       progress,
       load,
       add,
+      page,
       run,
       stop,
       persist,

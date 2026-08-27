@@ -12,6 +12,8 @@ if (typeof require === 'function') {
   require('../common/derive.js');
   require('../common/order.js');
   require('../common/cache.js');
+  require('../common/fetch.js');
+  require('../common/crawl.js');
   require('../detail/tracking.js');
 }
 
@@ -70,6 +72,30 @@ if (typeof require === 'function') {
  * @typedef {object} TableView
  * @property {TableRow[]} rows In the default order.
  * @property {number} at The moment the render read the page, epoch milliseconds.
+ * @property {Map<string, import('../common/parse-list.js').ListRow>} sources What
+ *   the list markup said about each advisory, by GHSA identifier. A read landing
+ *   later rebuilds its row from this and the entry that arrived, so a row is
+ *   replaced where it stands and the rest of the table is left alone.
+ */
+
+/**
+ * @typedef {object} RefreshOptions
+ * @property {import('../common/cache.js').CacheStorage | null} [storage]
+ * @property {() => number} [now]
+ * @property {(ms: number) => Promise<void>} [wait]
+ * @property {import('../common/write.js').WriteFetch} [fetch]
+ * @property {import('../common/parse-list.js').ParsedList} [parsed] The page as
+ *   it was read, and absent to read it here.
+ * @property {string} [href] The URL of the page being looked at, which is what
+ *   says whether it is the first page of its state.
+ */
+
+/**
+ * What one refresh of the table did.
+ *
+ * @typedef {object} RefreshSummary
+ * @property {import('../common/crawl.js').CrawlResult} crawled
+ * @property {import('../common/fetch.js').QueueSummary} read
  */
 
 /**
@@ -471,8 +497,59 @@ if (typeof require === 'function') {
   }
 
   /**
-   * The rows of the table, in the default order, from the list markup on the
-   * page and from what the cache holds of the advisories it names.
+   * @param {import('../common/parse-list.js').ListRow} row
+   * @param {string | null} selected The `?state=` the page is showing.
+   * @returns {string | null} the `?state=` this row belongs to. A row's own chip
+   *   names it where the row carries one, and the tab the page is showing names
+   *   it where the row does not.
+   */
+  function stateOfRow(row, selected) {
+    return globalThis.bghsa.crawl.stateKeyOf(row.state) ?? selected;
+  }
+
+  /**
+   * Every open advisory the table shows: the union of `?state=triage` and
+   * `?state=draft` as the crawl holds it, and the rows of the page being looked
+   * at.
+   *
+   * The page wins where both name an advisory, because GitHub rendered it now
+   * and the crawl's copy is as old as the walk that found it. A published or
+   * closed advisory is not on this table, so a page showing one of those tabs
+   * contributes rows to nothing.
+   *
+   * @param {import('../common/parse-list.js').ParsedList} parsed
+   * @param {ViewOptions} [options]
+   * @returns {Promise<Map<string, import('../common/parse-list.js').ListRow>>} by
+   *   GHSA identifier.
+   */
+  async function listRows(parsed, options = {}) {
+    const cache = globalThis.bghsa.cache;
+    const open = globalThis.bghsa.parseList.OPEN_STATES;
+    const at = options.at ?? cache.now();
+    const held = await cache.getList(parsed, { storage: options.storage, at });
+    const crawled = globalThis.bghsa.crawl.listFrom(held === null ? null : held.record);
+
+    /** @type {Map<string, import('../common/parse-list.js').ListRow>} */
+    const rows = new Map();
+    for (const row of globalThis.bghsa.crawl.rowsIn(crawled, open)) {
+      if (row.ghsaId !== null) rows.set(row.ghsaId, row);
+    }
+    for (const row of parsed.rows) {
+      if (row.ghsaId === null) continue;
+      const state = stateOfRow(row, parsed.selectedState);
+      if (state === null || !open.includes(state)) continue;
+      rows.set(row.ghsaId, row);
+    }
+    return rows;
+  }
+
+  /**
+   * The rows of the table, in the default order, from the crawl of both open
+   * states, from the list markup on the page, and from what the cache holds of
+   * the advisories they name.
+   *
+   * Nothing here waits on the network. The table paints from what is already
+   * known, and the reads that fill it in arrive afterwards.
    *
    * @param {import('../common/parse-list.js').ParsedList} parsed
    * @param {ViewOptions} [options]
@@ -481,18 +558,15 @@ if (typeof require === 'function') {
   async function readView(parsed, options = {}) {
     const cache = globalThis.bghsa.cache;
     const at = options.at ?? cache.now();
-    /** @type {string[]} */
-    const ids = [];
-    for (const row of parsed.rows) {
-      if (row.ghsaId !== null) ids.push(row.ghsaId);
-    }
+    const sources = await listRows(parsed, { ...options, at });
+    const ids = [...sources.keys()];
     const entries = await cache.getAdvisories(parsed, ids, { storage: options.storage, at });
     const rows = await Promise.all(
-      parsed.rows.map((row) =>
+      [...sources.values()].map((row) =>
         viewRow(row, row.ghsaId === null ? null : entries.get(row.ghsaId) ?? null, at)
       )
     );
-    return { rows: globalThis.bghsa.order.sort(rows), at };
+    return { rows: globalThis.bghsa.order.sort(rows), at, sources };
   }
 
   /**
@@ -896,29 +970,68 @@ if (typeof require === 'function') {
   }
 
   /**
-   * @param {Document} doc
-   * @returns {{ owner: string, repo: string } | null} the repository the page
-   *   names, and null where it names none. It is the reading the last render
-   *   took, so asking costs no second parse of the page.
+   * What the last render of each document read from the list markup, by GHSA
+   * identifier. A read landing afterwards rebuilds one row from it.
+   *
+   * @type {WeakMap<Document, Map<string, import('../common/parse-list.js').ListRow>>}
    */
-  function refOf(doc) {
-    const parsed = pageOf(doc);
-    if (parsed === null || parsed.owner === null || parsed.repo === null) return null;
-    return { owner: parsed.owner, repo: parsed.repo };
-  }
+  const sources = new WeakMap();
 
   /**
    * Reads the page and places the table. Returns null when the document is not
    * an advisory list page, or when it offers no anchor.
    *
    * @param {Document} doc
+   * @param {ViewOptions} [options]
    * @returns {Promise<Element | null>}
    */
-  async function render(doc) {
+  async function render(doc, options = {}) {
     const parsed = globalThis.bghsa.parseList.parseList(doc);
     if (parsed === null) return null;
-    const view = await readView(parsed);
+    const view = await readView(parsed, options);
+    sources.set(doc, view.sources);
     return injectTable(doc, view);
+  }
+
+  /**
+   * @param {Document} doc
+   * @param {string} ghsaId
+   * @returns {Element | null} the row standing for that advisory. The identifier
+   *   is compared rather than put into a selector, because it is read off a page
+   *   GitHub rendered and a selector would have to be escaped to hold it.
+   */
+  function rowNode(doc, ghsaId) {
+    const root = doc.getElementById(ROOT_ID);
+    if (root === null) return null;
+    for (const item of root.querySelectorAll('[data-bghsa-ghsa]')) {
+      if (item.getAttribute('data-bghsa-ghsa') === ghsaId) return item;
+    }
+    return null;
+  }
+
+  /**
+   * Puts one advisory's read into the table, where its row stands. The rest of
+   * the table is left alone: a pass reads one advisory a second, and rebuilding
+   * every row for each of them would throw away what the reader was looking at.
+   *
+   * The row keeps its place. Its tier can change when a read lands, and the
+   * order is settled by the render that follows the pass.
+   *
+   * @param {Document} doc
+   * @param {string} ghsaId
+   * @param {import('../common/cache.js').CacheEntry} entry
+   * @param {ViewOptions} [options]
+   * @returns {Promise<boolean>} whether a row was replaced. An advisory the
+   *   table is not showing has none.
+   */
+  async function applyEntry(doc, ghsaId, entry, options = {}) {
+    const source = sources.get(doc)?.get(ghsaId);
+    if (source === undefined) return false;
+    const item = rowNode(doc, ghsaId);
+    if (item === null) return false;
+    const row = await viewRow(source, entry, options.at ?? globalThis.bghsa.cache.now());
+    item.replaceWith(buildRow(doc, row));
+    return true;
   }
 
   /**
@@ -957,6 +1070,7 @@ if (typeof require === 'function') {
       } finally {
         running = false;
       }
+      ensureRefresh(doc);
     };
   }
 
@@ -980,6 +1094,169 @@ if (typeof require === 'function') {
   }
 
   /**
+   * One repository's refresh queue, and whoever is listening to what it reads.
+   *
+   * @typedef {object} QueueHandle
+   * @property {ReturnType<typeof globalThis.bghsa.fetch.createQueue>} queue
+   * @property {Set<(ghsaId: string, entry: import('../common/cache.js').CacheEntry) => void>} listening
+   */
+
+  /**
+   * The one queue each repository's requests go through, by `owner/repo`.
+   *
+   * One throttled serial queue serves a repository. A second instance would
+   * hold the rate privately, and the only thing bounding the two would be each
+   * of them re-reading the claim the other persisted, so neither the crawl nor a
+   * second surface makes one of its own.
+   *
+   * @type {Map<string, QueueHandle>}
+   */
+  const queues = new Map();
+
+  /**
+   * @param {{ owner: string, repo: string }} ref
+   * @param {RefreshOptions} [options] What the queue reads and waits with, used
+   *   when this repository has no queue yet.
+   * @returns {QueueHandle} this repository's queue, made on first use.
+   */
+  function queueFor(ref, options = {}) {
+    const key = `${ref.owner}/${ref.repo}`.toLowerCase();
+    const held = queues.get(key);
+    if (held !== undefined) return held;
+    /** @type {QueueHandle['listening']} */
+    const listening = new Set();
+    const queue = globalThis.bghsa.fetch.createQueue({
+      ref,
+      storage: options.storage,
+      now: options.now,
+      wait: options.wait,
+      fetch: options.fetch,
+      onEntry: (ghsaId, entry) => {
+        for (const listener of [...listening]) {
+          try {
+            listener(ghsaId, entry);
+          } catch {
+            // One surface failing to draw a row is not a reason to keep the
+            // read from the next one.
+          }
+        }
+      },
+    });
+    const handle = { queue, listening };
+    queues.set(key, handle);
+    return handle;
+  }
+
+  /**
+   * The refresh each document has running, so that a render the refresh itself
+   * asked for cannot start a second one beside it.
+   *
+   * @type {WeakMap<Document, Promise<RefreshSummary | null>>}
+   */
+  const running = new WeakMap();
+
+  /**
+   * Fills the table in: it walks both open states of the list, then reads the
+   * advisories they name, stalest first, at one request per second, with each
+   * row updating where it stands as its read lands.
+   *
+   * Calling it while one is running joins that one.
+   *
+   * @param {Document} doc
+   * @param {RefreshOptions} [options]
+   * @returns {Promise<RefreshSummary | null>} null where the page is not an
+   *   advisory list, or does not say which repository it belongs to.
+   */
+  function refresh(doc, options = {}) {
+    const held = running.get(doc);
+    if (held !== undefined) return held;
+    const parsed = options.parsed ?? globalThis.bghsa.parseList.parseList(doc);
+    if (parsed === null || parsed.owner === null || parsed.repo === null) {
+      return Promise.resolve(null);
+    }
+    const started = fill(doc, parsed, options).finally(() => {
+      running.delete(doc);
+    });
+    running.set(doc, started);
+    return started;
+  }
+
+  /**
+   * One refresh, from the crawl to the last row.
+   *
+   * A pass an earlier page load left unfinished is taken back before anything
+   * is queued, so an advisory that pass had already read is not read again.
+   *
+   * @param {Document} doc
+   * @param {import('../common/parse-list.js').ParsedList} parsed
+   * @param {RefreshOptions} options
+   * @returns {Promise<RefreshSummary>}
+   */
+  async function fill(doc, parsed, options) {
+    const ref = {
+      owner: /** @type {string} */ (parsed.owner),
+      repo: /** @type {string} */ (parsed.repo),
+    };
+    const { queue, listening } = queueFor(ref, options);
+    const pass = passFor(doc);
+
+    /** @type {Promise<unknown>[]} */
+    const updates = [];
+    /** @type {(ghsaId: string, entry: import('../common/cache.js').CacheEntry) => void} */
+    const listener = (ghsaId, entry) => {
+      updates.push(applyEntry(doc, ghsaId, entry, { storage: options.storage }));
+    };
+    listening.add(listener);
+
+    try {
+      await queue.load();
+      const crawled = await globalThis.bghsa.crawl.crawl({
+        ref,
+        queue,
+        parsed,
+        href: options.href ?? globalThis.location?.href,
+        storage: options.storage,
+        now: options.now,
+        // A page of the list carries advisories the table was not showing, so
+        // the whole table is drawn again rather than one row of it.
+        onPage: () => {
+          void pass();
+        },
+      });
+      await queue.add(crawled.ids);
+      const read = await queue.run();
+      await Promise.all(updates);
+      // The rows are current and each is where it was. This is what puts one
+      // whose tier changed back in order.
+      await pass();
+      return { crawled, read };
+    } finally {
+      listening.delete(listener);
+    }
+  }
+
+  /**
+   * The documents a refresh has been started for.
+   *
+   * @type {WeakSet<Document>}
+   */
+  const refreshing = new WeakSet();
+
+  /**
+   * @param {Document} doc
+   * @returns {void} starts the one refresh this document runs, where the page it
+   *   is on is an advisory list. It hangs off a render rather than off the
+   *   content script starting, because a list page reached from an advisory with
+   *   no document load is a render and not a load.
+   */
+  function ensureRefresh(doc) {
+    if (refreshing.has(doc)) return;
+    if (doc.getElementById(ROOT_ID) === null) return;
+    refreshing.add(doc);
+    void refresh(doc);
+  }
+
+  /**
    * Watches the document and runs a pass when the list changes, or when the
    * table is gone or has been left behind.
    *
@@ -993,6 +1270,18 @@ if (typeof require === 'function') {
    */
   function observe(doc, pass = renderLoop(doc)) {
     return globalThis.bghsa.dom.watch(doc, { ownedSelector, outOfPlace, pass });
+  }
+
+  /**
+   * @param {Document} doc
+   * @returns {{ owner: string, repo: string } | null} the repository the page
+   *   names, and null where it names none. It is the reading the last render
+   *   took, so asking costs no second parse of the page.
+   */
+  function refOf(doc) {
+    const parsed = pageOf(doc);
+    if (parsed === null || parsed.owner === null || parsed.repo === null) return null;
+    return { owner: parsed.owner, repo: parsed.repo };
   }
 
   /**
@@ -1042,8 +1331,15 @@ if (typeof require === 'function') {
     ensureStyle,
     outOfPlace,
     injectTable,
+    stateOfRow,
+    fill,
+    listRows,
     refOf,
     render,
+    rowNode,
+    applyEntry,
+    queueFor,
+    refresh,
     ownWrite,
     needsRender,
     renderLoop,

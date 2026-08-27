@@ -663,3 +663,70 @@ test('a progress record of another shape resumes nothing', async () => {
   assert.ok(queues.progressFrom(null) === null, 'null read as progress');
   assert.ok(queues.progressFrom(12) === null, 'a number read as progress');
 });
+
+/** One page of the advisory list, as a crawl asks for it. */
+const LIST_URL = '/containerd/containerd/security/advisories?state=triage';
+
+test('a list page read and an advisory read share one second', async () => {
+  const clock = fakeClock(0);
+  const storage = fakeStorage();
+  const fetch = fakeFetch(clock, () => ({ status: 200, body: '<html>page one</html>' }));
+  const queue = queues.createQueue(options(clock, storage, { fetch: fetch.send }));
+
+  const page = await queue.page(LIST_URL);
+  await queue.add([ghsa('aaaa')]);
+  await queue.run();
+
+  assert.ok(page.body === '<html>page one</html>', `the page body was ${page.body}`);
+  assert.ok(page.status === 200, `the page status was ${page.status}`);
+  assert.deepStrictEqual(fetch.urls, [
+    LIST_URL,
+    `/containerd/containerd/security/advisories/${ghsa('aaaa')}`,
+  ]);
+  // The rate limit counts requests, and a list page is one, so the advisory
+  // read waits out the second the page read started.
+  assert.deepStrictEqual(fetch.at, [0, 1000]);
+});
+
+test('a list page read leaves the claim the next page load waits out', async () => {
+  const clock = fakeClock(0);
+  const storage = fakeStorage();
+  const first = fakeFetch(clock);
+  const one = queues.createQueue(options(clock, storage, { fetch: first.send }));
+  await one.page(LIST_URL);
+  assert.deepStrictEqual(first.at, [0]);
+
+  // Another tab, or what a turbo re-injection left behind: it knows of the page
+  // read only through the claim in the progress entry.
+  clock.advance(300);
+  const second = fakeFetch(clock);
+  const two = queues.createQueue(options(clock, storage, { fetch: second.send }));
+  await two.add([ghsa('aaaa')]);
+  await two.run();
+
+  assert.deepStrictEqual(second.at, [1000], 'a crawl page read did not bound the next queue');
+});
+
+test('a list page GitHub refused comes back with the status and no body', async () => {
+  const clock = fakeClock(0);
+  const storage = fakeStorage();
+  const fetch = fakeFetch(clock, () => ({ status: 404 }));
+  const queue = queues.createQueue(options(clock, storage, { fetch: fetch.send }));
+
+  const page = await queue.page(LIST_URL);
+  assert.ok(page.body === null, `a refused page carried a body: ${page.body}`);
+  assert.ok(page.status === 404, `the page status was ${page.status}`);
+  assert.ok(page.reason === 'GitHub answered 404.', `the reason was ${String(page.reason)}`);
+});
+
+test('a stopped queue sends no list page read', async () => {
+  const clock = fakeClock(0);
+  const storage = fakeStorage();
+  const fetch = fakeFetch(clock);
+  const queue = queues.createQueue(options(clock, storage, { fetch: fetch.send }));
+  queue.stop();
+
+  const page = await queue.page(LIST_URL);
+  assert.deepStrictEqual(fetch.urls, [], 'a stopped queue spent a request');
+  assert.ok(page.body === null, `a stopped queue answered with a body: ${page.body}`);
+});

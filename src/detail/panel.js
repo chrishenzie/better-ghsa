@@ -12,6 +12,7 @@ if (typeof require === 'function') {
   require('../common/derive.js');
   require('../common/members.js');
   require('../common/branches.js');
+  require('../common/cache.js');
   require('./tracking.js');
   require('./comments.js');
   require('./preserve.js');
@@ -552,6 +553,25 @@ if (typeof require === 'function') {
   }
 
   /**
+   * Holds what this page says about its advisory.
+   *
+   * REQUIREMENTS.md section 9: opening an advisory's detail page refreshes that
+   * advisory's cache entry. The document is already here, so the read costs no
+   * request, and the list table's next pass finds the entry inside the
+   * staleness threshold and spends its slot on an advisory nobody has opened.
+   *
+   * @param {import('../common/parse-detail.js').ParsedDetail} advisory
+   * @returns {Promise<import('../common/cache.js').CacheEntry | null>} the entry
+   *   as it was written, and null where nothing was written: a page that did not
+   *   say which advisory it is, and storage that refused the write. The panel
+   *   draws either way, because the cache is never authoritative.
+   */
+  function remember(advisory) {
+    if (advisory.ref === null) return Promise.resolve(null);
+    return globalThis.bghsa.cache.putAdvisory(advisory.ref, advisory);
+  }
+
+  /**
    * Reads the document and places the panel. Returns null when the document is
    * not an advisory detail page, or when it offers no anchor.
    *
@@ -565,6 +585,8 @@ if (typeof require === 'function') {
     const edit = globalThis.bghsa.edit;
     const advisory = globalThis.bghsa.parseDetail.parseDetail(doc);
     if (advisory === null) return null;
+    // The panel does not wait on storage: what the page says is on the page.
+    void remember(advisory);
     // A comment this page wrote is on GitHub and not in this document, so the
     // state a write left behind outranks what the document's comments merge to
     // until the page is read again.
@@ -677,6 +699,7 @@ if (typeof require === 'function') {
     ensureStyle,
     outOfPlace,
     injectPanel,
+    remember,
     render,
     ownWrite,
     needsRender,

@@ -14,6 +14,7 @@ const dom = require('../src/common/dom.js');
 const panel = require('../src/detail/panel.js');
 const tracking = require('../src/detail/tracking.js');
 const preserve = require('../src/detail/preserve.js');
+const cache = require('../src/common/cache.js');
 const members = require('../src/common/members.js');
 const branches = require('../src/common/branches.js');
 
@@ -1144,4 +1145,53 @@ test('a press that could not read the advisory page can be pressed again', async
     'Nothing was written: GitHub answered 503 for the advisory page.',
   ]);
   preserve.attempts.clear();
+});
+
+test('opening an advisory refreshes its cache entry at no request cost', async () => {
+  const at = Date.parse('2026-08-27T09:00:00Z');
+  const storage = fakeStorage();
+  const sent = globalThis.fetch;
+  cache.setStorage(storage);
+  cache.setClock(() => at);
+  // Reading this advisory costs a request from the list page and nothing here:
+  // the document is already in front of the maintainer.
+  globalThis.fetch = /** @type {typeof globalThis.fetch} */ (
+    /** @type {unknown} */ (() => {
+      throw new Error('the detail page sent a request');
+    })
+  );
+  try {
+    const drawn = await panel.render(triageDoc);
+    assert.ok(drawn !== null, 'the triage fixture offered no anchor');
+
+    const key = cache.advisoryKey(triage.ref);
+    assert.ok(key === 'adv:git-utensils/spoon-knife:ghsa-jmvx-2wfw-xfgj', `cache key: ${key}`);
+    await until(() => Object.hasOwn(storage.entries, /** @type {string} */ (key)));
+
+    const entry = await cache.getAdvisory(triage.ref, { at });
+    assert.ok(entry !== null, 'the page left no cache entry');
+    assert.ok(entry.observedAt === at, `the entry was observed at ${entry?.observedAt}`);
+    assert.ok(entry.state === 'triage', `the entry state was ${entry?.state}`);
+    const record = /** @type {{ ghsaId?: unknown }} */ (entry.record);
+    assert.ok(
+      record.ghsaId === 'GHSA-jmvx-2wfw-xfgj',
+      `the entry holds ${String(record.ghsaId)}`
+    );
+  } finally {
+    globalThis.fetch = sent;
+    cache.setStorage(null);
+    cache.setClock(null);
+  }
+});
+
+test('a page that does not say which advisory it is leaves no entry', async () => {
+  const storage = fakeStorage();
+  cache.setStorage(storage);
+  try {
+    const held = await panel.remember({ ...triage, ref: null });
+    assert.ok(held === null, 'an advisory with no reference was cached');
+    assert.deepStrictEqual(Object.keys(storage.entries), []);
+  } finally {
+    cache.setStorage(null);
+  }
 });

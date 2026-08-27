@@ -4,7 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
-const { parseHTML } = require('linkedom');
+const { parseHTML, DOMParser } = require('linkedom');
 
 const parseList = require('../src/common/parse-list.js');
 const parseDetail = require('../src/common/parse-detail.js');
@@ -19,7 +19,22 @@ const AT = Date.parse('2026-08-26T12:00:00Z');
 /** The moment the cached advisory reads in this file were taken at. */
 const OBSERVED = Date.parse('2026-08-26T10:00:00Z');
 
-cache.setClock(() => AT);
+/**
+ * The clock every render and every queue here reads. A refresh moves it, so it
+ * is a variable rather than a constant, and a test that moves it puts it back.
+ */
+let clockAt = AT;
+
+cache.setClock(() => clockAt);
+
+// The queue and the crawl turn a fetched page into a document the way a content
+// script does. Nothing in this file reaches the network: every response is a
+// string a test wrote.
+globalThis.DOMParser = /** @type {typeof globalThis.DOMParser} */ (
+  /** @type {unknown} */ (DOMParser)
+);
+
+const MINUTE = 60 * 1000;
 
 /** The repository both list fixtures come from. */
 const REF = { owner: 'git-utensils', repo: 'Spoon-Knife' };
@@ -522,4 +537,260 @@ test('a page that is not an advisory list gets no table', async () => {
   const root = await table.render(doc);
   assert.ok(root === null, 'nothing to render into');
   assert.ok(doc.getElementById(table.ROOT_ID) === null, 'and nothing rendered');
+});
+
+/**
+ * One page of the advisory list for a repository this file invents, in the
+ * shape `parse-list` reads. The repository differs per test so that no two
+ * tests share a refresh queue.
+ *
+ * @param {{ owner: string, repo: string, state: string, ids: readonly string[], next?: string }} page
+ * @returns {string}
+ */
+function listHtml(page) {
+  const label = /** @type {string} */ (parseList.STATES[page.state]);
+  const base = `/${page.owner}/${page.repo}/security/advisories`;
+  const tabs = Object.entries(parseList.STATES)
+    .map(
+      ([state, name]) =>
+        `<li><a href="${base}?state=${state}"${
+          state === page.state ? ' aria-current="true"' : ''
+        }>1 ${name}</a></li>`
+    )
+    .join('');
+  const rows = page.ids
+    .map(
+      (id) =>
+        '<div class="Box-row Box-row--drag-hide">' +
+        `<a class="Link--primary" href="${base}/${id}">Title ${id}</a>` +
+        `<span class="tooltipped" aria-label="${label} advisory"></span>` +
+        '<span class="opened-by">opened <relative-time datetime="2026-08-01T00:00:00Z">' +
+        '</relative-time> by <a class="author" href="/prakleumas">prakleumas</a></span>' +
+        '</div>'
+    )
+    .join('');
+  const next = page.next === undefined ? '' : `<a rel="next" href="${page.next}">Next</a>`;
+  return (
+    `<div id="advisories"><segmented-control><ul>${tabs}</ul></segmented-control>` +
+    `<div class="Box">${rows}</div>${next}</div>`
+  );
+}
+
+/**
+ * The smallest document `parse-detail` reads as an advisory: the header meta
+ * carrying the state, the severity, and the identifier. A row filled in from
+ * one of these carries what a read supplies and nothing the fixtures add.
+ *
+ * @param {string} ghsaId
+ * @param {string} state
+ * @returns {string}
+ */
+function detailHtml(ghsaId, state) {
+  return (
+    '<!doctype html><html><body><div class="gh-header-meta">' +
+    `<span class="State">${state}</span>` +
+    '<span class="Label Label--large" title="Severity: High">High</span>' +
+    `<span class="user-select-contain">${ghsaId}</span>` +
+    '</div></body></html>'
+  );
+}
+
+/**
+ * A fetch that answers from a table of pages and records what was asked for.
+ *
+ * @param {Record<string, string>} pages
+ */
+function fakeFetch(pages) {
+  /** @type {string[]} */
+  const urls = [];
+  /** @type {import('../src/common/write.js').WriteFetch} */
+  const send = async (url) => {
+    urls.push(String(url));
+    const body = pages[String(url)];
+    if (body === undefined) return { status: 404, text: async () => '' };
+    return { status: 200, text: async () => body };
+  };
+  return { urls, send };
+}
+
+/**
+ * The wait a refresh here spends between requests: it moves the clock and
+ * returns, so a pass costs no real time and the intervals are still exact.
+ *
+ * @param {number} ms
+ * @returns {Promise<void>}
+ */
+async function advance(ms) {
+  clockAt += ms;
+}
+
+/**
+ * @param {string} html
+ * @returns {Document}
+ */
+function pageOf(html) {
+  return /** @type {Document} */ (
+    /** @type {unknown} */ (
+      parseHTML(`<!doctype html><html><body><div id="repo-content-turbo-frame">${html}</div></body></html>`)
+        .document
+    )
+  );
+}
+
+test('a read lands in the row where it stands', async () => {
+  const owner = 'crawl-place';
+  const ghsaId = 'GHSA-aaaa-aaaa-aaaa';
+  const doc = pageOf(listHtml({ owner, repo: 'repo', state: 'triage', ids: [ghsaId] }));
+  const storage = fakeStorage();
+  cache.setStorage(storage);
+  const root = await table.render(doc);
+  if (root === null) throw new Error('the page offered no anchor');
+
+  assert.ok(chipLine(/** @type {Element} */ (tableRows(doc)[0])) === '', 'an unread row has chips');
+
+  const detail = parseDetail.parseDetail(
+    /** @type {Document} */ (/** @type {unknown} */ (parseHTML(detailHtml(ghsaId, 'Triage')).document))
+  );
+  const applied = await table.applyEntry(doc, ghsaId, {
+    record: detail,
+    observedAt: AT - 30 * MINUTE,
+    state: 'triage',
+  });
+
+  assert.ok(applied, 'no row was replaced');
+  // The table around the row is untouched: a pass reads one advisory a second,
+  // and a reader looking at the table keeps what they were looking at.
+  assert.ok(doc.getElementById(table.ROOT_ID) === root, 'the whole table was rebuilt');
+  const rows = tableRows(doc);
+  assert.ok(rows.length === 1, `rows after the read: ${rows.length}`);
+  const row = /** @type {Element} */ (rows[0]);
+  assert.ok(
+    chipLine(row) === 'Never reviewed[danger] | High, unconfirmed',
+    `chips after the read: ${chipLine(row)}`
+  );
+  const observed = textOf(row, '.bghsa-list-observed');
+  assert.ok(observed === 'Observed 2026-08-26 11:30 UTC', `observed: ${observed}`);
+});
+
+test('a read for an advisory the table is not showing replaces nothing', async () => {
+  const doc = pageOf(
+    listHtml({ owner: 'crawl-absent', repo: 'repo', state: 'triage', ids: ['GHSA-aaaa-aaaa-aaaa'] })
+  );
+  cache.setStorage(fakeStorage());
+  await table.render(doc);
+  const applied = await table.applyEntry(doc, 'GHSA-zzzz-zzzz-zzzz', {
+    record: { state: 'Triage' },
+    observedAt: AT,
+    state: 'triage',
+  });
+  assert.ok(!applied, 'a row was replaced for an advisory the table does not hold');
+});
+
+test('a refresh crawls both open states and fills every row in', async () => {
+  const owner = 'crawl-union';
+  const repo = 'repo';
+  const base = `/${owner}/${repo}/security/advisories`;
+  const triage = 'GHSA-aaaa-aaaa-aaaa';
+  const draft = 'GHSA-bbbb-bbbb-bbbb';
+  const doc = pageOf(listHtml({ owner, repo, state: 'triage', ids: [triage] }));
+  const storage = fakeStorage();
+  cache.setStorage(storage);
+  const fetch = fakeFetch({
+    [`${base}?state=draft`]: listHtml({ owner, repo, state: 'draft', ids: [draft] }),
+    [`${base}/${triage}`]: detailHtml(triage, 'Triage'),
+    [`${base}/${draft}`]: detailHtml(draft, 'Draft'),
+  });
+
+  const started = clockAt;
+  try {
+    await table.render(doc);
+    assert.ok(tableRows(doc).length === 1, 'the first paint showed more than the page carried');
+
+    const summary = await table.refresh(doc, {
+      storage,
+      fetch: fetch.send,
+      wait: advance,
+      href: `https://github.com${base}?state=triage`,
+    });
+
+    // The page being looked at is the first page of triage, so the walk asks
+    // for the other open state and for the two advisories, and for nothing it
+    // already has.
+    assert.deepStrictEqual(fetch.urls, [
+      `${base}?state=draft`,
+      `${base}/${triage}`,
+      `${base}/${draft}`,
+    ]);
+    assert.ok(summary !== null && summary.read.fetched === 2, 'both advisories were not read');
+
+    const rows = tableRows(doc);
+    assert.ok(rows.length === 2, `rows after the refresh: ${rows.length}`);
+    const ids = rows.map((row) => row.getAttribute('data-bghsa-ghsa')).sort();
+    assert.deepStrictEqual(ids, [triage, draft].sort());
+    const chips = new Map(rows.map((row) => [row.getAttribute('data-bghsa-ghsa'), chipLine(row)]));
+    assert.ok(
+      chips.get(triage) === 'Never reviewed[danger] | High, unconfirmed',
+      `the triage row after the refresh: ${chips.get(triage)}`
+    );
+    // A draft is a maintainer's own writing, so nobody is waiting on a review
+    // of it and it is the maintainers who are holding it.
+    assert.ok(
+      chips.get(draft) === 'Blocked on us | High, unconfirmed',
+      `the draft row after the refresh: ${chips.get(draft)}`
+    );
+  } finally {
+    clockAt = started;
+  }
+});
+
+test('an advisory observed four minutes ago is not read again', async () => {
+  const owner = 'crawl-fresh';
+  const repo = 'repo';
+  const base = `/${owner}/${repo}/security/advisories`;
+  const fresh = 'GHSA-aaaa-aaaa-aaaa';
+  const stale = 'GHSA-bbbb-bbbb-bbbb';
+  const doc = pageOf(listHtml({ owner, repo, state: 'triage', ids: [fresh, stale] }));
+  const storage = fakeStorage();
+  cache.setStorage(storage);
+  const started = clockAt;
+  try {
+    await cache.putAdvisory(
+      { owner, repo, ghsaId: fresh },
+      { state: 'Triage', comments: [], timeline: [] },
+      { storage, at: clockAt - 4 * MINUTE }
+    );
+    await cache.putAdvisory(
+      { owner, repo, ghsaId: stale },
+      { state: 'Triage', comments: [], timeline: [] },
+      { storage, at: clockAt - 6 * MINUTE }
+    );
+    const fetch = fakeFetch({
+      [`${base}?state=draft`]: listHtml({ owner, repo, state: 'draft', ids: [] }),
+      [`${base}/${stale}`]: detailHtml(stale, 'Triage'),
+    });
+
+    const summary = await table.refresh(doc, {
+      storage,
+      fetch: fetch.send,
+      wait: advance,
+      href: `${base}?state=triage`,
+    });
+
+    assert.deepStrictEqual(fetch.urls, [`${base}?state=draft`, `${base}/${stale}`]);
+    assert.ok(summary !== null && summary.read.skipped === 1, 'the fresh advisory was not skipped');
+  } finally {
+    clockAt = started;
+  }
+});
+
+test('one repository has one refresh queue', () => {
+  const first = table.queueFor({ owner: 'crawl-one', repo: 'repo' });
+  const again = table.queueFor({ owner: 'crawl-one', repo: 'repo' });
+  assert.ok(first === again, 'a second queue was made for one repository');
+  // GitHub treats an owner and a repository name case-insensitively, and two
+  // queues would each hold the rate limit privately.
+  const spelled = table.queueFor({ owner: 'Crawl-One', repo: 'Repo' });
+  assert.ok(spelled === first, 'another spelling of one repository made a second queue');
+  const other = table.queueFor({ owner: 'crawl-two', repo: 'repo' });
+  assert.ok(other !== first, 'two repositories shared one queue');
 });
