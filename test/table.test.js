@@ -125,9 +125,25 @@ function textOf(scope, selector) {
 }
 
 /**
- * Every chip under one row's title, as one line. A chip carrying a tone names it
- * in brackets, so one string covers both what the chips read and which of them
- * are colored.
+ * How one rendered chip is colored: every class on it other than `Label`, in
+ * the order the chip carries them. A chip with nothing but `Label` answers
+ * empty, which no chip the table draws does.
+ *
+ * @param {Element} label
+ * @returns {string}
+ */
+function chipColor(label) {
+  return (label.getAttribute('class') ?? '')
+    .split(/\s+/)
+    .filter((name) => name !== '' && name !== 'Label')
+    .join(' ');
+}
+
+/**
+ * Every chip under one row's title, as one line. Each names in brackets exactly
+ * which classes color it, so one string covers what the chips read and how each
+ * one is painted, and a chip painted the wrong color fails rather than passing
+ * on being painted at all.
  *
  * @param {Element} row
  * @returns {string}
@@ -136,9 +152,7 @@ function chipLine(row) {
   return Array.from(one(row, '.bghsa-list-chips').querySelectorAll('span.Label'))
     .map((label) => {
       const text = (label.textContent ?? '').replace(/\s+/g, ' ').trim();
-      if (label.classList.contains('bghsa-tone-danger')) return `${text}[danger]`;
-      if (label.classList.contains('bghsa-tone-attention')) return `${text}[attention]`;
-      return text;
+      return `${text}[${chipColor(label)}]`;
     })
     .join(' | ');
 }
@@ -199,8 +213,11 @@ test("a triage row carries what GitHub's row carried, from the list markup alone
   const state = textOf(row, '.bghsa-list-state');
   assert.ok(state === 'Triage', `state: ${state}`);
 
+  // GitHub paints this row's own severity chip `Label--orange`, and the table
+  // reuses that class rather than deriving one from the word `high`. Nobody has
+  // confirmed the scoring, so it is dimmed.
   const chips = chipLine(row);
-  assert.ok(chips === 'High', `chips with nothing read: ${chips}`);
+  assert.ok(chips === 'High[Label--orange bghsa-dim]', `chips with nothing read: ${chips}`);
 
   const observed = textOf(row, '.bghsa-list-observed');
   assert.ok(observed === 'Observed 2026-08-26 12:00 UTC', `observed: ${observed}`);
@@ -216,8 +233,11 @@ test('a cached advisory read fills the triage row', async () => {
   const chips = chipLine(row);
   assert.ok(
     chips ===
-      'Blocked on the reporter | Patch in review | Backports 0 of 1 | High, unconfirmed |' +
-        ' Embargo lifts 2026-09-30[attention]',
+      'Blocked on the reporter[Label--secondary bghsa-tone-attention] |' +
+        ' Patch in review[Label--secondary bghsa-tone-information] |' +
+        ' Backports 0 of 1[Label--secondary bghsa-tone-attention] |' +
+        ' High, unconfirmed[Label--orange bghsa-dim] |' +
+        ' Embargo lifts 2026-09-30[Label--secondary bghsa-tone-attention]',
     `chips from the cached read: ${chips}`
   );
 
@@ -259,6 +279,97 @@ test('an owner login is encoded the same way in the link and the avatar', () => 
   assert.ok(
     src === 'https://github.com/a%20b%2Fc%3Fd%23e.png?size=40',
     `owner avatar source: ${src}`
+  );
+});
+
+/** One open pull request on the private fork, as a cached read holds it. */
+const OPEN_PATCH = {
+  cloneUrl: null,
+  repository: 'git-utensils/Spoon-Knife-ghsa-fork',
+  deleteUrl: null,
+  pullRequests: [
+    {
+      number: 1,
+      url: null,
+      title: 'Fix it',
+      state: 'open',
+      baseRef: 'main',
+      headRef: 'fix',
+      author: 'samuelkarp',
+      openedAt: '2026-08-26T00:00:00Z',
+      assignees: [],
+    },
+  ],
+};
+
+/**
+ * @param {unknown} record A cached advisory read.
+ * @param {unknown} fork What its private fork holds.
+ * @returns {unknown} that read with its fork replaced, leaving the original as
+ *   it was.
+ */
+function withFork(record, fork) {
+  return { ...structuredClone(/** @type {object} */ (record)), fork };
+}
+
+/**
+ * @param {Document} doc
+ * @returns {string} how the first row's state chip is colored.
+ */
+function stateChipColor(doc) {
+  const row = /** @type {Element} */ (tableRows(doc)[0]);
+  return chipColor(one(row, '.bghsa-list-state span.Label'));
+}
+
+test('the stylesheet carries a rule for every color the chips invent', () => {
+  // Primer paints the classes GitHub's own chips carry. These four are the
+  // extension's own, so a chip carrying one and no rule defining it would draw
+  // as though it carried no color at all.
+  for (const name of [
+    'bghsa-tone-attention',
+    'bghsa-tone-information',
+    'bghsa-tone-danger',
+    'bghsa-dim',
+  ]) {
+    assert.ok(table.STYLE_TEXT.includes(`.${name} {`), `no rule defines .${name}`);
+  }
+});
+
+test('a draft nobody has started patching is the state chip that carries color', async () => {
+  // Four rows that differ in one thing each, so the color can only be coming
+  // from the rule and not from the state, the patch, or the read on its own.
+  const unread = listPage('list-page-draft.html');
+  await render(unread);
+  assert.ok(
+    stateChipColor(unread) === 'Label--secondary',
+    `a draft nothing has been read on: ${stateChipColor(unread)}`
+  );
+
+  const waiting = listPage('list-page-draft.html');
+  await render(waiting, { [keyFor('GHSA-5hg2-rfq2-8fm5')]: entryOf(DRAFT_RECORD, 'draft') });
+  assert.ok(
+    stateChipColor(waiting) === 'Label--secondary bghsa-tone-attention',
+    `a draft with no patch yet: ${stateChipColor(waiting)}`
+  );
+
+  const patched = listPage('list-page-draft.html');
+  await render(patched, {
+    [keyFor('GHSA-5hg2-rfq2-8fm5')]: entryOf(withFork(DRAFT_RECORD, OPEN_PATCH), 'draft'),
+  });
+  assert.ok(
+    stateChipColor(patched) === 'Label--secondary',
+    `a draft somebody has opened a patch on: ${stateChipColor(patched)}`
+  );
+
+  // A triage advisory with no patch either, so what colors the draft is the
+  // state and not the missing patch.
+  const triage = listPage('list-page-triage.html');
+  await render(triage, {
+    [keyFor('GHSA-jmvx-2wfw-xfgj')]: entryOf(withFork(TRIAGE_RECORD, null), 'triage'),
+  });
+  assert.ok(
+    stateChipColor(triage) === 'Label--secondary',
+    `a triage advisory with no patch: ${stateChipColor(triage)}`
   );
 });
 
@@ -467,6 +578,7 @@ function listRow(ghsaId, openedAt) {
     state: 'Triage',
     severity: null,
     severityLabel: null,
+    severityClass: null,
     openedAt,
     reporter: 'prakleumas',
   };
@@ -487,7 +599,16 @@ function rowWith(changes = {}) {
 function chipsOf(changes = {}) {
   return table
     .chipsFor(rowWith(changes))
-    .map((spec) => (spec.tone === undefined ? spec.text : `${spec.text}[${spec.tone}]`))
+    .map((spec) => {
+      /** @type {string[]} */
+      const marks = [];
+      if (spec.tone !== undefined) marks.push(spec.tone);
+      if (spec.severityClass !== undefined && spec.severityClass !== null) {
+        marks.push(spec.severityClass);
+      }
+      if (spec.dim === true) marks.push('dim');
+      return marks.length === 0 ? spec.text : `${spec.text}[${marks.join(' ')}]`;
+    })
     .join(' | ');
 }
 
@@ -502,57 +623,126 @@ test('a chip stands for a condition that holds and is absent when it does not', 
   assert.ok(activity === 'New activity[attention]', `new activity: ${activity}`);
 
   const blocked = chipsOf({ read: true, triage: 'evaluating' });
-  assert.ok(blocked === 'Blocked on us', `a state the advisory is simply in stays dimmed: ${blocked}`);
+  assert.ok(blocked === 'Blocked on us[danger]', `what a maintainer owes is loud: ${blocked}`);
+
+  const reporter = chipsOf({ read: true, triage: 'awaiting reporter' });
+  assert.ok(
+    reporter === 'Blocked on the reporter[attention]',
+    `what the reporter owes is quieter: ${reporter}`
+  );
 
   const text = chipsOf({ read: true, textConfirmed: true });
-  assert.ok(text === 'Blocked on us | Text confirmed', `text confirmed: ${text}`);
+  assert.ok(text === 'Blocked on us[danger] | Text confirmed', `text confirmed: ${text}`);
 
   // An unconfirmed track says nothing, so no chip reads `label: no`.
   const unconfirmed = chipsOf({ read: true, textConfirmed: false });
-  assert.ok(unconfirmed === 'Blocked on us', `text unconfirmed: ${unconfirmed}`);
+  assert.ok(unconfirmed === 'Blocked on us[danger]', `text unconfirmed: ${unconfirmed}`);
 });
 
 test('the severity chip carries the scoring confirmation', () => {
   const unread = chipsOf({ severityLabel: 'Critical' });
-  assert.ok(unread === 'Critical', `nothing read, so nothing is claimed: ${unread}`);
+  assert.ok(unread === 'Critical[dim]', `nothing read, so nobody has confirmed it: ${unread}`);
 
   const unconfirmed = chipsOf({ read: true, severityLabel: 'Critical' });
   assert.ok(
-    unconfirmed === 'Blocked on us | Critical, unconfirmed',
+    unconfirmed === 'Blocked on us[danger] | Critical, unconfirmed[dim]',
     `severity nobody confirmed: ${unconfirmed}`
   );
 
   const confirmed = chipsOf({ read: true, severityLabel: 'Low', severityConfirmed: true });
-  assert.ok(confirmed === 'Blocked on us | Low, confirmed', `severity a maintainer confirmed: ${confirmed}`);
+  assert.ok(
+    confirmed === 'Blocked on us[danger] | Low, confirmed',
+    `severity a maintainer confirmed: ${confirmed}`
+  );
 
   // With no severity set there is no chip for the mark to ride, so it stands
   // alone rather than going unsaid.
   const noSeverity = chipsOf({ read: true, severityConfirmed: true });
-  assert.ok(noSeverity === 'Blocked on us | Scoring confirmed', `no severity set: ${noSeverity}`);
+  assert.ok(
+    noSeverity === 'Blocked on us[danger] | Scoring confirmed',
+    `no severity set: ${noSeverity}`
+  );
+});
+
+test('the severity chip takes the class GitHub painted, not one off the level', () => {
+  // The level is deliberately at odds with the class, which is a pairing no
+  // level-to-color table would produce: GitHub paints critical one way and this
+  // row carries the class it paints high with. What comes out is the class the
+  // row carried, so the color is read off GitHub's chip and never derived.
+  const carried = chipsOf({
+    read: true,
+    severityLabel: 'Critical',
+    severityClass: 'Label--orange',
+    severityConfirmed: true,
+  });
+  assert.ok(
+    carried === 'Blocked on us[danger] | Critical, confirmed[Label--orange]',
+    `the class GitHub painted: ${carried}`
+  );
+
+  const dimmed = chipsOf({ read: true, severityLabel: 'Critical', severityClass: 'Label--orange' });
+  assert.ok(
+    dimmed === 'Blocked on us[danger] | Critical, unconfirmed[Label--orange dim]',
+    `the same class, held back while nobody has confirmed it: ${dimmed}`
+  );
+
+  // A severity chip GitHub carried no modifier on leaves nothing to reuse, and
+  // the extension paints nothing of its own in its place.
+  const bare = chipsOf({ read: true, severityLabel: 'Critical', severityConfirmed: true });
+  assert.ok(
+    bare === 'Blocked on us[danger] | Critical, confirmed',
+    `no class on GitHub's chip: ${bare}`
+  );
 });
 
 test('the CVE, patch, backport, and embargo chips read what the advisory holds', () => {
   const assigned = chipsOf({ read: true, cve: 'CVE-2026-12345' });
-  assert.ok(assigned === 'Blocked on us | CVE-2026-12345', `an assigned CVE: ${assigned}`);
+  assert.ok(
+    assigned === 'Blocked on us[danger] | CVE-2026-12345',
+    `an assigned CVE: ${assigned}`
+  );
 
   const patch = chipsOf({ read: true, patch: 'Patch merged' });
-  assert.ok(patch === 'Blocked on us | Patch merged', `patch state: ${patch}`);
+  assert.ok(patch === 'Blocked on us[danger] | Patch merged', `patch state: ${patch}`);
+
+  // A patch under review is where the work stands and carries color; one that
+  // landed and one that was closed are finished and stay dimmed.
+  const inReview = chipsOf({ read: true, patch: 'Patch in review' });
+  assert.ok(
+    inReview === 'Blocked on us[danger] | Patch in review[information]',
+    `a patch under review: ${inReview}`
+  );
+
+  const closed = chipsOf({ read: true, patch: 'Patch closed' });
+  assert.ok(closed === 'Blocked on us[danger] | Patch closed', `a closed patch: ${closed}`);
 
   const backports = chipsOf({ read: true, backportTargets: 3, backportsDone: 2 });
-  assert.ok(backports === 'Blocked on us | Backports 2 of 3', `backport progress: ${backports}`);
+  assert.ok(
+    backports === 'Blocked on us[danger] | Backports 2 of 3[attention]',
+    `backports short of the targets set: ${backports}`
+  );
+
+  const complete = chipsOf({ read: true, backportTargets: 3, backportsDone: 3 });
+  assert.ok(
+    complete === 'Blocked on us[danger] | Backports 3 of 3',
+    `every target carries a merged pull request: ${complete}`
+  );
 
   const embargo = chipsOf({ read: true, embargo: true, embargoLift: '2026-09-30' });
   assert.ok(
-    embargo === 'Blocked on us | Embargo lifts 2026-09-30[attention]',
+    embargo === 'Blocked on us[danger] | Embargo lifts 2026-09-30[attention]',
     `an embargo in force: ${embargo}`
   );
 
   const undated = chipsOf({ read: true, embargo: true });
-  assert.ok(undated === 'Blocked on us | Embargoed[attention]', `an embargo with no date: ${undated}`);
+  assert.ok(
+    undated === 'Blocked on us[danger] | Embargoed[attention]',
+    `an embargo with no date: ${undated}`
+  );
 
   const overdue = chipsOf({ read: true, embargo: true, embargoLift: '2026-08-01', embargoOverdue: true });
   assert.ok(
-    overdue === 'Blocked on us | Embargo overdue[danger]',
+    overdue === 'Blocked on us[danger] | Embargo overdue[danger]',
     `an embargo a maintainer has to act on: ${overdue}`
   );
 });
@@ -628,13 +818,16 @@ function listHtml(page) {
  * @param {string} ghsaId
  * @param {string} state
  * @param {string} [severity]
+ * @param {string} [severityClass] The modifier GitHub paints the severity chip
+ *   with, and the empty string for a chip carrying none.
  * @returns {string}
  */
-function detailHtml(ghsaId, state, severity = 'High') {
+function detailHtml(ghsaId, state, severity = 'High', severityClass = '') {
+  const modifiers = severityClass === '' ? '' : ` ${severityClass}`;
   return (
     '<!doctype html><html><body><div class="gh-header-meta">' +
     `<span class="State">${state}</span>` +
-    `<span class="Label Label--large" title="Severity: ${severity}">${severity}</span>` +
+    `<span class="Label Label--large${modifiers}" title="Severity: ${severity}">${severity}</span>` +
     `<span class="user-select-contain">${ghsaId}</span>` +
     '</div></body></html>'
   );
@@ -726,6 +919,7 @@ test('a row shows when its data was observed, not when it was drawn', async () =
             state: 'Triage',
             severity: null,
             severityLabel: null,
+            severityClass: null,
             openedAt: '2026-08-01T00:00:00Z',
             reporter: 'prakleumas',
           },
@@ -769,6 +963,7 @@ test('a read supplies every value on the row it stamps', async () => {
       state: 'Triage',
       severity: 'low',
       severityLabel: 'Low',
+      severityClass: 'Label--secondary',
       openedAt: '2026-08-01T00:00:00Z',
       reporter: 'prakleumas',
     },
@@ -778,7 +973,9 @@ test('a read supplies every value on the row it stamps', async () => {
     record: parseDetail.parseDetail(
       /** @type {Document} */ (
         /** @type {unknown} */ (
-          parseHTML(detailHtml('GHSA-aaaa-aaaa-aaaa', 'Draft', 'Critical')).document
+          parseHTML(
+            detailHtml('GHSA-aaaa-aaaa-aaaa', 'Draft', 'Critical', 'Label--orange')
+          ).document
         )
       )
     ),
@@ -792,10 +989,37 @@ test('a read supplies every value on the row it stamps', async () => {
   assert.ok(row.state === 'Draft', `state: ${row.state}`);
   assert.ok(row.severity === 'critical', `severity: ${row.severity}`);
   assert.ok(row.severityLabel === 'Critical', `severity label: ${row.severityLabel}`);
+  // The color travels with the level. The two pages paint the chip differently,
+  // and the row takes the color off the page whose level it took.
+  assert.ok(row.severityClass === 'Label--orange', `severity class: ${row.severityClass}`);
   // The read's page carries no title, so the list row is what fills that in:
   // the read supplies what it holds and nothing is invented for what it does
   // not.
   assert.ok(row.title === 'What the list row says', `title: ${row.title}`);
+});
+
+test('a read that names no severity leaves the list row painting the chip', async () => {
+  const source = {
+    row: {
+      ghsaId: 'GHSA-aaaa-aaaa-aaaa',
+      owner: 'observed-mix',
+      repo: 'repo',
+      href: '/observed-mix/repo/security/advisories/GHSA-aaaa-aaaa-aaaa',
+      title: 'What the list row says',
+      state: 'Triage',
+      severity: 'low',
+      severityLabel: 'Low',
+      severityClass: 'Label--secondary',
+      openedAt: '2026-08-01T00:00:00Z',
+      reporter: 'prakleumas',
+    },
+    seenAt: AT,
+  };
+  // `draft.html` is a real advisory with no severity set on it, so the read
+  // holds neither a level nor a color and the list row supplies both.
+  const row = await table.viewRow(source, entryOf(DRAFT_RECORD, 'draft'), AT);
+  assert.ok(row.severityLabel === 'Low', `severity label: ${row.severityLabel}`);
+  assert.ok(row.severityClass === 'Label--secondary', `severity class: ${row.severityClass}`);
 });
 
 test('a read lands in the row where it stands', async () => {
@@ -826,7 +1050,8 @@ test('a read lands in the row where it stands', async () => {
   assert.ok(rows.length === 1, `rows after the read: ${rows.length}`);
   const row = /** @type {Element} */ (rows[0]);
   assert.ok(
-    chipLine(row) === 'Never reviewed[danger] | High, unconfirmed',
+    chipLine(row) === 'Never reviewed[Label--secondary bghsa-tone-danger] |' +
+      ' High, unconfirmed[Label--secondary bghsa-dim]',
     `chips after the read: ${chipLine(row)}`
   );
   const observed = textOf(row, '.bghsa-list-observed');
@@ -998,13 +1223,16 @@ test('a refresh crawls both open states and fills every row in', async () => {
     assert.deepStrictEqual(ids, [triage, draft].sort());
     const chips = new Map(rows.map((row) => [row.getAttribute('data-bghsa-ghsa'), chipLine(row)]));
     assert.ok(
-      chips.get(triage) === 'Never reviewed[danger] | High, unconfirmed',
+      chips.get(triage) === 'Never reviewed[Label--secondary bghsa-tone-danger] |' +
+      ' High, unconfirmed[Label--secondary bghsa-dim]',
       `the triage row after the refresh: ${chips.get(triage)}`
     );
     // A draft is a maintainer's own writing, so nobody is waiting on a review
     // of it and it is the maintainers who are holding it.
     assert.ok(
-      chips.get(draft) === 'Blocked on us | High, unconfirmed',
+      chips.get(draft) ===
+        'Blocked on us[Label--secondary bghsa-tone-danger] |' +
+          ' High, unconfirmed[Label--secondary bghsa-dim]',
       `the draft row after the refresh: ${chips.get(draft)}`
     );
   } finally {
@@ -1163,7 +1391,8 @@ test('a soft navigation to another repository crawls that repository', async () 
       'the table held an advisory from the repository the page left'
     );
     const chips = chipLine(/** @type {Element} */ (rows[0]));
-    assert.ok(chips === 'Never reviewed[danger] | High, unconfirmed', `chips: ${chips}`);
+    assert.ok(chips === 'Never reviewed[Label--secondary bghsa-tone-danger] |' +
+      ' High, unconfirmed[Label--secondary bghsa-dim]', `chips: ${chips}`);
   } finally {
     release();
     observer?.disconnect();
@@ -2160,7 +2389,8 @@ test('a read landing leaves the sort and the filter a maintainer picked alone', 
   assert.ok(shownIds(doc) === `${ghsaId} GHSA-aaaa-aaaa-aaaa`, `after the read: ${shownIds(doc)}`);
   const row = /** @type {Element} */ (tableRows(doc)[0]);
   assert.ok(
-    chipLine(row) === 'Never reviewed[danger] | High, unconfirmed',
+    chipLine(row) === 'Never reviewed[Label--secondary bghsa-tone-danger] |' +
+      ' High, unconfirmed[Label--secondary bghsa-dim]',
     `the row took the read in: ${chipLine(row)}`
   );
   // The read turned up a severity no row carried, and the control offers it.

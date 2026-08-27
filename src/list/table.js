@@ -19,12 +19,18 @@ if (typeof require === 'function') {
 }
 
 /**
- * One chip on a row. A tone names a Primer state token, and a chip with no tone
- * is dimmed.
+ * One chip on a row. A tone names a Primer state token, and a chip carrying
+ * neither a tone nor a severity color is dimmed.
  *
  * @typedef {object} ChipSpec
  * @property {string} text
- * @property {'attention' | 'danger'} [tone]
+ * @property {'attention' | 'information' | 'danger'} [tone]
+ * @property {string | null} [severityClass] The `Label--` modifiers GitHub
+ *   painted this advisory's own severity chip with, which is what the severity
+ *   chip takes in place of the dimmed one.
+ * @property {boolean} [dim] Whether to hold the chip back from its full color.
+ *   A severity nobody confirmed is dimmed this way, so it reads as the severity
+ *   it is and still parts from a severity a maintainer confirmed.
  */
 
 /**
@@ -39,6 +45,9 @@ if (typeof require === 'function') {
  * @property {string | null} state `Triage` or `Draft`, as GitHub names it.
  * @property {string | null} severity The severity, lowercased.
  * @property {string | null} severityLabel The severity as displayed.
+ * @property {string | null} severityClass The color GitHub painted this
+ *   advisory's own severity chip with, read off whichever page supplied the
+ *   level.
  * @property {boolean} severityConfirmed Whether a maintainer confirmed the
  *   scoring the severity comes from.
  * @property {string | null} openedAt
@@ -192,6 +201,9 @@ if (typeof require === 'function') {
   /** What marks an element the extension is holding out of view. */
   const HIDDEN_CLASS = 'bghsa-hidden';
 
+  /** What holds a chip back from its full color while keeping its hue. */
+  const DIM_CLASS = 'bghsa-dim';
+
   /** Every rule the list surface adds to the page. */
   const STYLE_TEXT = [
     // Primer's own display utilities carry `!important`, so holding one of its
@@ -206,9 +218,13 @@ if (typeof require === 'function') {
     '.bghsa-tone-attention { color: var(--fgColor-default);' +
       ' background-color: var(--bgColor-attention);' +
       ' border-color: var(--bgColor-attention); }',
+    '.bghsa-tone-information { color: var(--fgColor-default);' +
+      ' background-color: var(--bgColor-accent);' +
+      ' border-color: var(--bgColor-accent); }',
     '.bghsa-tone-danger { color: var(--fgColor-default);' +
       ' background-color: var(--bgColor-danger);' +
       ' border-color: var(--bgColor-danger); }',
+    `.${DIM_CLASS} { opacity: 0.55; }`,
   ].join('\n');
 
   /** What the sort control reads while the table is in its default order. */
@@ -257,8 +273,9 @@ if (typeof require === 'function') {
    * @returns {Element}
    */
   function chip(doc, spec) {
-    const classes = ['Label', 'Label--secondary'];
+    const classes = ['Label', spec.severityClass ?? 'Label--secondary'];
     if (spec.tone !== undefined) classes.push(`bghsa-tone-${spec.tone}`);
+    if (spec.dim === true) classes.push(DIM_CLASS);
     return element(doc, 'span', classes.join(' '), spec.text);
   }
 
@@ -306,6 +323,12 @@ if (typeof require === 'function') {
     return new Date(parsed).toISOString().slice(0, 10);
   }
 
+  /** What the patch chip reads while the fork holds an open pull request. */
+  const PATCH_IN_REVIEW = 'Patch in review';
+
+  /** The state GitHub gives an advisory nobody has published or closed yet. */
+  const DRAFT_STATE = 'Draft';
+
   /**
    * The furthest state the advisory's private fork reached. A pull request whose
    * state went unread leaves this null where nothing else is open or merged,
@@ -317,7 +340,7 @@ if (typeof require === 'function') {
    */
   function patchStateOf(patch) {
     const states = patch.pullRequests.map((pull) => pull.state);
-    if (states.includes('open')) return 'Patch in review';
+    if (states.includes('open')) return PATCH_IN_REVIEW;
     if (states.includes('merged')) return 'Patch merged';
     if (patch.incomplete || states.length === 0) return null;
     return 'Patch closed';
@@ -365,6 +388,7 @@ if (typeof require === 'function') {
       state: listRow.state,
       severity: listRow.severity,
       severityLabel: listRow.severityLabel,
+      severityClass: listRow.severityClass,
       severityConfirmed: false,
       openedAt: listRow.openedAt,
       reporter: listRow.reporter,
@@ -421,6 +445,10 @@ if (typeof require === 'function') {
       state: advisory.state ?? listRow.state,
       severity: advisory.severity ?? listRow.severity,
       severityLabel: advisory.severityLabel ?? listRow.severityLabel,
+      // The color comes from whichever read supplied the level, so a severity
+      // the advisory page has since changed is not painted the old one's color.
+      severityClass:
+        advisory.severityLabel === null ? listRow.severityClass : advisory.severityClass,
       severityConfirmed: tracking.scoring.status === 'confirmed',
       openedAt: advisory.reportedAt ?? listRow.openedAt,
       reporter: advisory.reporter ?? listRow.reporter,
@@ -527,14 +555,14 @@ if (typeof require === 'function') {
    * lists them.
    *
    * A chip standing for a boolean is there while the condition holds and absent
-   * while it does not. Color marks what a maintainer has to act on now: an
-   * advisory nobody has reviewed, a reporter waiting on an answer, an embargo
-   * running out. A chip naming a state the advisory is simply in stays dimmed.
+   * while it does not. Color carries where the work stands, so the row is
+   * readable before any of it is read.
    *
    * The scoring confirmation rides on the severity chip, because the scoring
    * track is the severity and its vector, and a second chip beside the severity
    * would say the same thing twice. Where the advisory sets no severity there is
-   * no chip to ride, and the confirmation stands on its own.
+   * no chip to ride, and the confirmation stands on its own. The severity takes
+   * GitHub's own color, and takes it dimmed while nobody has confirmed it.
    *
    * @param {TableRow} row
    * @returns {ChipSpec[]}
@@ -552,12 +580,22 @@ if (typeof require === 'function') {
       const waiting = { text: sentenceCase(order.tierName(tier)) };
       if (tier === order.TIERS.NEVER_REVIEWED) waiting.tone = 'danger';
       else if (tier === order.TIERS.NEW_ACTIVITY) waiting.tone = 'attention';
+      else if (tier === order.TIERS.BLOCKED_ON_US) waiting.tone = 'danger';
+      else waiting.tone = 'attention';
       chips.push(waiting);
     }
 
-    if (row.patch !== null) chips.push({ text: row.patch });
+    if (row.patch !== null) {
+      /** @type {ChipSpec} */
+      const patch = { text: row.patch };
+      if (row.patch === PATCH_IN_REVIEW) patch.tone = 'information';
+      chips.push(patch);
+    }
     if (row.backportTargets > 0) {
-      chips.push({ text: `Backports ${row.backportsDone} of ${row.backportTargets}` });
+      /** @type {ChipSpec} */
+      const backports = { text: `Backports ${row.backportsDone} of ${row.backportTargets}` };
+      if (row.backportsDone < row.backportTargets) backports.tone = 'attention';
+      chips.push(backports);
     }
     if (row.textConfirmed) chips.push({ text: 'Text confirmed' });
 
@@ -569,6 +607,8 @@ if (typeof require === 'function') {
         text: row.read
           ? `${severity}, ${row.severityConfirmed ? 'confirmed' : 'unconfirmed'}`
           : severity,
+        severityClass: row.severityClass,
+        dim: !row.severityConfirmed,
       });
     } else if (row.severityConfirmed) {
       chips.push({ text: 'Scoring confirmed' });
@@ -1076,7 +1116,15 @@ if (typeof require === 'function') {
     item.append(main);
 
     const state = element(doc, 'div', 'pl-2 flex-shrink-0 bghsa-list-state');
-    if (row.state !== null) state.append(chip(doc, { text: row.state }));
+    if (row.state !== null) {
+      // A draft the maintainers have not started patching is the one state chip
+      // that carries color. It takes a read to say it, so a row nothing has
+      // been read on leaves the chip dimmed.
+      /** @type {ChipSpec} */
+      const spec = { text: row.state };
+      if (row.read && row.state === DRAFT_STATE && row.patch === null) spec.tone = 'attention';
+      state.append(chip(doc, spec));
+    }
     item.append(state);
 
     if (row.owners.length > 0) {

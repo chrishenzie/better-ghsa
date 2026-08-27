@@ -10,6 +10,7 @@ if (typeof require === 'function') {
   require('../common/merge.js');
   require('../common/parse-detail.js');
   require('../common/derive.js');
+  require('../common/order.js');
   require('../common/members.js');
   require('../common/branches.js');
   require('../common/cache.js');
@@ -86,7 +87,7 @@ if (typeof require === 'function') {
 
   /**
    * A chip. A tone names a Primer state token, and a chip with no tone is
-   * neutral.
+   * dimmed.
    *
    * @param {Document} doc
    * @param {string} text
@@ -204,6 +205,30 @@ if (typeof require === 'function') {
   }
 
   /**
+   * The advisory states the confirmations are not shown in.
+   *
+   * @type {readonly string[]}
+   */
+  const SETTLED_STATES = ['published', 'closed'];
+
+  /**
+   * Whether this advisory is past the point the confirmations answer for.
+   *
+   * A confirmation says whether the text was made publishable and the score
+   * approved, publication answers that by having happened, and a closed advisory
+   * will never be published. A state this reader could not read is not one of
+   * these, because an advisory on its way to publication is where the answer
+   * still matters.
+   *
+   * @param {import('../common/parse-detail.js').ParsedDetail} advisory
+   * @returns {boolean}
+   */
+  function settled(advisory) {
+    const state = advisory.state === null ? null : advisory.state.toLowerCase();
+    return state !== null && SETTLED_STATES.includes(state);
+  }
+
+  /**
    * The confirmations, which are what the panel is for: whether the advisory
    * text was rewritten for publication and whether the score was approved.
    *
@@ -260,7 +285,13 @@ if (typeof require === 'function') {
     if (tracking.triage !== null) {
       const built = row(doc, 'Triage');
       built.body.className = 'flex-auto bghsa-chips';
-      built.body.append(chip(doc, sentenceCase(tracking.triage)));
+      // The triage value is which side the advisory is waiting on, and the two
+      // sides are painted apart: what a maintainer owes takes the loud tone. A
+      // value this reader does not know is waiting on us.
+      const blocked = globalThis.bghsa.order.classifyTriage(tracking.triage);
+      built.body.append(
+        chip(doc, sentenceCase(tracking.triage), blocked === 'us' ? 'danger' : 'attention')
+      );
       const since = globalThis.bghsa.text.formatTime(tracking.triageSince);
       if (since !== null) built.body.append(element(doc, 'span', 'bghsa-since', `since ${since}`));
       rows.push(built.row);
@@ -438,7 +469,7 @@ if (typeof require === 'function') {
       panel.append(warning(doc, 'A pull request named a state this extension does not read.'));
     }
 
-    panel.append(buildConfirmations(doc, tracking));
+    if (!settled(advisory)) panel.append(buildConfirmations(doc, tracking));
     for (const track of buildTracks(doc, tracking, embargoOverdue)) panel.append(track);
 
     const descriptionRow = row(doc, 'Description');
@@ -693,6 +724,8 @@ if (typeof require === 'function') {
     PANEL_ID,
     STYLE_ID,
     MISSING,
+    SETTLED_STATES,
+    settled,
     missingValues,
     when,
     sentenceCase,

@@ -2,6 +2,12 @@
 
 globalThis.bghsa ??= /** @type {BghsaNamespace} */ ({});
 
+// The manifest orders content scripts; under Node the dependency is named here.
+if (typeof require === 'function') {
+  require('./text.js');
+  require('./parse-detail.js');
+}
+
 /**
  * @typedef {object} ListRow
  * @property {string | null} ghsaId
@@ -13,6 +19,9 @@ globalThis.bghsa ??= /** @type {BghsaNamespace} */ ({});
  * @property {string | null} severity The severity, lowercased, and null where
  *   the advisory sets none.
  * @property {string | null} severityLabel The severity as displayed.
+ * @property {string | null} severityClass The color GitHub paints the severity
+ *   chip with, as the `Label--` modifiers it carries, and null where the chip
+ *   carries none.
  * @property {string | null} openedAt The time the report was opened.
  * @property {string | null} reporter The login the row names as opening it.
  */
@@ -69,23 +78,11 @@ globalThis.bghsa ??= /** @type {BghsaNamespace} */ ({});
   /** A state tab link, as `/{owner}/{repo}/security/advisories?state={state}`. */
   const LIST_HREF = /^\/([^/?#]+)\/([^/?#]+)\/security\/advisories(?:[?#]|$)/;
 
-  /**
-   * @param {string | null | undefined} value
-   * @returns {string} `value` with runs of whitespace collapsed to one space and
-   *   the ends trimmed.
-   */
-  function collapse(value) {
-    return String(value ?? '').replace(/\s+/g, ' ').trim();
-  }
+  /** How every reader here squares up the text a page carries. */
+  const collapse = globalThis.bghsa.text.collapse;
 
-  /**
-   * @param {string} value
-   * @returns {string | null} `value`, or null when it is empty after trimming.
-   */
-  function orNull(value) {
-    const trimmed = value.trim();
-    return trimmed === '' ? null : trimmed;
-  }
+  /** How every reader here reads an empty value as nothing. */
+  const orNull = globalThis.bghsa.text.orNull;
 
   /**
    * @param {string} href
@@ -137,33 +134,24 @@ globalThis.bghsa ??= /** @type {BghsaNamespace} */ ({});
   }
 
   /**
-   * The state Label a row carries beside its severity, where it carries one. A
-   * `triage` row holds `Triage` in a `Label--secondary`; a `draft` row holds no
-   * Label at all.
-   *
-   * @param {Element} row
-   * @returns {Element | null}
-   */
-  function stateLabelOf(row) {
-    for (const label of row.querySelectorAll('span.Label')) {
-      if (stateKey(collapse(label.textContent)) !== null) return label;
-    }
-    return null;
-  }
-
-  /**
    * The severity a row shows, and null where the advisory sets none.
    *
-   * The row's `title` is what names the level. The modifier class does not: the
-   * state Label and the severity Label are both `span.Label`, the state Label
-   * comes first, and it takes `Label--secondary`, which is also a severity color.
-   * So the title is read first, and a Label that is not the state Label stands in
-   * where no title names a severity.
+   * The row's `title` is what names the level. Neither position nor the modifier
+   * class does: the state Label and the severity Label are both `span.Label`,
+   * the state Label comes first, and it takes `Label--secondary`, which is also
+   * a severity color. A row carrying no `Severity: {level}` title states no
+   * severity, whatever else it labels, so a Label this reader does not know
+   * yields nothing rather than a level nobody set.
+   *
+   * The class is carried out beside the level so the extension's own chip can be
+   * painted the color GitHub painted this one.
    *
    * @param {Element} row
-   * @returns {{ severity: string | null, severityLabel: string | null }}
+   * @returns {{ severity: string | null, severityLabel: string | null,
+   *   severityClass: string | null }}
    */
   function severityOf(row) {
+    const modifiers = globalThis.bghsa.parseDetail.labelModifiers;
     const labels = Array.from(row.querySelectorAll('span.Label'));
     for (const label of labels) {
       const match = /Severity:\s*(\S+)/.exec(collapse(label.getAttribute('title')));
@@ -171,16 +159,10 @@ globalThis.bghsa ??= /** @type {BghsaNamespace} */ ({});
       return {
         severity: /** @type {string} */ (match[1]).toLowerCase(),
         severityLabel: orNull(collapse(label.textContent)),
+        severityClass: modifiers(label),
       };
     }
-    const state = stateLabelOf(row);
-    for (const label of labels) {
-      if (label === state) continue;
-      const text = orNull(collapse(label.textContent));
-      if (text === null) continue;
-      return { severity: text.toLowerCase(), severityLabel: text };
-    }
-    return { severity: null, severityLabel: null };
+    return { severity: null, severityLabel: null, severityClass: null };
   }
 
   /**
@@ -212,6 +194,7 @@ globalThis.bghsa ??= /** @type {BghsaNamespace} */ ({});
       state: rowStateFromTooltip(row),
       severity: severity.severity,
       severityLabel: severity.severityLabel,
+      severityClass: severity.severityClass,
       openedAt: time === null ? null : orNull(time.getAttribute('datetime') ?? ''),
       reporter:
         authorHref !== null

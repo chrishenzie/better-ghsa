@@ -189,6 +189,20 @@ function chipLine(row) {
 }
 
 /**
+ * @param {Element} row
+ * @returns {string[]} how each chip under one row's title is colored: every
+ *   class on it other than `Label`, in the order it carries them.
+ */
+function chipColors(row) {
+  return Array.from(row.querySelectorAll('.bghsa-done-chips span.Label')).map((label) =>
+    (label.getAttribute('class') ?? '')
+      .split(/\s+/)
+      .filter((name) => name !== '' && name !== 'Label')
+      .join(' ')
+  );
+}
+
+/**
  * @param {Document} doc
  * @param {string} ghsaId
  * @returns {Element} that advisory's row on the done view. The table carries a
@@ -300,6 +314,7 @@ function advisory(fields) {
     state: null,
     severity: null,
     severityLabel: null,
+    severityClass: null,
     reportedAt: null,
     reporter: null,
     title: null,
@@ -326,6 +341,7 @@ function advisory(fields) {
  *   state: string,
  *   title?: string | null,
  *   severity?: string | null,
+ *   severityClass?: string | null,
  *   openedAt?: string | null,
  *   advisory?: import('../src/common/parse-detail.js').ParsedDetail | null,
  * }} fields
@@ -348,6 +364,7 @@ function member(fields) {
       state: fields.state,
       severity: fields.severity ?? null,
       severityLabel: null,
+      severityClass: fields.severityClass ?? null,
       openedAt: fields.openedAt ?? null,
       reporter: 'prakleumas',
     },
@@ -585,6 +602,61 @@ test("the three views converge, and GitHub's own view comes back whole", async (
   assert.ok(
     doc.getElementById(view.ROOT_ID) !== null,
     'the done view is held out of view, not taken away'
+  );
+});
+
+test("the severity chip takes GitHub's own color and no other chip does", async () => {
+  const painted = ghsa('aaaa');
+  const read = ghsa('bbbb');
+  const bare = ghsa('cccc');
+  const doc = await page(
+    await corpusOf([
+      // The class GitHub painted this advisory's own severity chip with. It is
+      // not the class for `low`, so what comes out can only be what was carried.
+      member({
+        ghsaId: painted,
+        state: 'closed',
+        severity: 'low',
+        severityClass: 'Label--orange',
+      }),
+      // A read supplies the level, so it supplies the color with it.
+      member({
+        ghsaId: read,
+        state: 'published',
+        severity: 'low',
+        severityClass: 'Label--orange',
+        advisory: advisory({
+          ref: { ...REF, ghsaId: read },
+          ghsaId: read,
+          state: 'Published',
+          severity: 'moderate',
+          severityLabel: 'Moderate',
+          severityClass: 'Label--warning',
+        }),
+      }),
+      // Nothing to reuse, so the chip stays dimmed like the rest.
+      member({ ghsaId: bare, state: 'closed', severity: 'low' }),
+    ])
+  );
+
+  assert.deepStrictEqual(chipLine(doneRow(doc, painted)), 'Closed Low Unread');
+  assert.deepStrictEqual(
+    chipColors(doneRow(doc, painted)),
+    ['Label--secondary', 'Label--orange', 'Label--secondary'],
+    'the state and the unread mark stay dimmed beside a severity that does not'
+  );
+
+  assert.deepStrictEqual(chipLine(doneRow(doc, read)), 'Published Moderate');
+  assert.deepStrictEqual(
+    chipColors(doneRow(doc, read)),
+    ['Label--secondary', 'Label--warning'],
+    'the color comes from whichever read supplied the level'
+  );
+
+  assert.deepStrictEqual(
+    chipColors(doneRow(doc, bare)),
+    ['Label--secondary', 'Label--secondary', 'Label--secondary'],
+    'a severity GitHub carried no modifier on'
   );
 });
 

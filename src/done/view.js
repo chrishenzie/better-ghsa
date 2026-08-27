@@ -29,6 +29,9 @@ if (typeof require === 'function') {
  * @property {string | null} title
  * @property {string | null} state As GitHub names it.
  * @property {string | null} severityLabel
+ * @property {string | null} severityClass The color GitHub painted this
+ *   advisory's own severity chip with, read off whichever page supplied the
+ *   level.
  * @property {string | null} openedAt
  * @property {string | null} reporter
  * @property {string | null} closureReason The stored reason, and null where the
@@ -239,16 +242,20 @@ if (typeof require === 'function') {
   const element = globalThis.bghsa.dom.element;
 
   /**
-   * A dimmed chip. Color is kept for a condition a maintainer has to act on
-   * now, and nothing this view shows is one: a crawl still running finishes on
-   * its own, and an advisory nobody has read is read next.
+   * A chip. It is dimmed unless GitHub's own color for it is handed in, which
+   * here is the severity and nothing else. Color marks where the work stands,
+   * and a state an advisory has finished in, a crawl still running and an
+   * advisory nobody has read are none of them work waiting on a maintainer.
    *
    * @param {Document} doc
    * @param {string} text
+   * @param {string | null} [severityClass] The `Label--` modifiers GitHub
+   *   painted this advisory's severity chip with.
    * @returns {Element}
    */
-  function chip(doc, text) {
-    return element(doc, 'span', 'Label Label--secondary', text);
+  function chip(doc, text, severityClass) {
+    const modifiers = severityClass ?? 'Label--secondary';
+    return element(doc, 'span', `Label ${modifiers}`, text);
   }
 
   /**
@@ -313,16 +320,16 @@ if (typeof require === 'function') {
     return corpus.members.map((member) => {
       const advisory = member.advisory;
       const state = advisory?.state ?? member.row.state ?? member.state;
+      // The color comes from whichever read supplied the level, so a severity
+      // the advisory page has since changed is not painted the old one's color.
+      const read = advisory?.severityLabel ?? advisory?.severity ?? null;
       return {
         ghsaId: member.ghsaId,
         href: member.row.href,
         title: advisory?.title ?? member.row.title,
         state,
-        severityLabel:
-          advisory?.severityLabel ??
-          advisory?.severity ??
-          member.row.severityLabel ??
-          member.row.severity,
+        severityLabel: read ?? member.row.severityLabel ?? member.row.severity,
+        severityClass: read === null ? member.row.severityClass : advisory?.severityClass ?? null,
         openedAt: advisory?.reportedAt ?? member.row.openedAt,
         reporter: advisory?.reporter ?? member.row.reporter,
         closureReason: reasonOf(advisory),
@@ -511,7 +518,9 @@ if (typeof require === 'function') {
     const chips = element(doc, 'div', 'mt-1 bghsa-done-chips');
     if (row.state !== null) chips.append(chip(doc, globalThis.bghsa.table.sentenceCase(row.state)));
     if (row.severityLabel !== null) {
-      chips.append(chip(doc, globalThis.bghsa.table.sentenceCase(row.severityLabel)));
+      chips.append(
+        chip(doc, globalThis.bghsa.table.sentenceCase(row.severityLabel), row.severityClass)
+      );
     }
     if (!row.read) chips.append(chip(doc, UNREAD_TEXT));
     main.append(chips);

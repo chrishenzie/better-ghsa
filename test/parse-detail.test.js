@@ -38,6 +38,10 @@ test('the triage advisory header yields identity, state, severity, and reporter'
   assert.strictEqual(advisory.state, 'Triage');
   assert.strictEqual(advisory.severity, 'high');
   assert.strictEqual(advisory.severityLabel, 'High');
+  // What GitHub paints a high severity. `Label--large` is the size the detail
+  // page draws the chip at and the selector this parser found it by, so it is
+  // not carried out as color.
+  assert.strictEqual(advisory.severityClass, 'Label--orange');
   assert.strictEqual(advisory.reportedAt, '2026-08-25T22:15:18Z');
   assert.strictEqual(advisory.reporter, 'prakleumas');
   assert.deepStrictEqual(advisory.collaborators, ['prakleumas']);
@@ -63,6 +67,7 @@ test('a severity the maintainer has not set reads as absent', () => {
   assert.strictEqual(advisory.state, 'Draft');
   assert.strictEqual(advisory.severity, null);
   assert.strictEqual(advisory.severityLabel, null);
+  assert.strictEqual(advisory.severityClass, null);
   assert.strictEqual(advisory.severityField, null);
   assert.strictEqual(advisory.severityFieldPresent, true);
   assert.strictEqual(advisory.cvssV3, null);
@@ -97,6 +102,9 @@ test('a published advisory carries its assigned CVE in the metadata form', () =>
   if (advisory === null) throw new Error('published-containerd.html did not parse');
   assert.strictEqual(advisory.state, 'Published');
   assert.strictEqual(advisory.severity, 'moderate');
+  // GitHub paints a moderate severity with a different modifier than a high
+  // one, and neither modifier names the level.
+  assert.strictEqual(advisory.severityClass, 'Label--warning');
   assert.strictEqual(advisory.severityField, 'moderate');
   assert.strictEqual(advisory.cveId, 'CVE-2026-31984');
   assert.strictEqual(advisory.cveSelection, 'existing');

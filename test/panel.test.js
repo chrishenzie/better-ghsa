@@ -311,7 +311,7 @@ test('the panel reports whether the description is the original text', () => {
 });
 
 test('the panel leads with the three confirmations', () => {
-  const built = build(published);
+  const built = build(triage);
   assert.deepStrictEqual(texts(built, '.bghsa-confirmation-name'), [
     'Advisory title',
     'Advisory description',
@@ -322,6 +322,55 @@ test('the panel leads with the three confirmations', () => {
     first?.classList.contains('bghsa-confirmed') === true,
     'the confirmations are not the first thing under the chip row'
   );
+});
+
+test('the confirmations go with the state, and with nothing else about the page', () => {
+  // One advisory, read once, rendered under each state GitHub gives it. The
+  // record is the same every time, so what parts is the state and not the
+  // fixture.
+  /** @type {readonly [string | null, boolean][]} */
+  const states = [
+    ['Triage', true],
+    ['Draft', true],
+    ['Published', false],
+    ['published', false],
+    ['Closed', false],
+    [null, true],
+  ];
+  for (const [state, shown] of states) {
+    const built = build({ ...triage, state });
+    assert.strictEqual(
+      built.querySelector('.bghsa-confirmed') !== null,
+      shown,
+      `the confirmations under the state ${String(state)}`
+    );
+    assert.strictEqual(
+      text(built).includes('Not confirmed'),
+      shown,
+      `an absence reported under the state ${String(state)}`
+    );
+  }
+});
+
+test('a published advisory keeps every part of the panel but the confirmations', async () => {
+  const payload = { triage: 'awaiting reporter', owners: ['samuelkarp'] };
+  const open = await buildWith({ ...triage, state: 'Draft' }, payload);
+  const done = await buildWith({ ...triage, state: 'Published' }, payload);
+  assert.deepStrictEqual(panelParts(open), [
+    'bghsa-chips',
+    'bghsa-confirmed',
+    'Triage',
+    'Owners',
+    'Description',
+    'Original report',
+  ]);
+  assert.deepStrictEqual(panelParts(done), [
+    'bghsa-chips',
+    'Triage',
+    'Owners',
+    'Description',
+    'Original report',
+  ]);
 });
 
 test('a confirmed value names who confirmed it and when', async () => {
@@ -440,6 +489,45 @@ test('the stored tracks the triage advisory carries are shown', async () => {
   ]);
   assert.deepStrictEqual(texts(built, '.bghsa-since'), ['since 2026-08-25 18:04 UTC']);
   assert.strictEqual(rowText(built, 'Embargo'), 'Lifts 2026-09-30');
+});
+
+test('the triage chip says which side the advisory is waiting on', () => {
+  // One chip, four values, and only the side that owes the next move parts
+  // them. Two of the four open with the same word, so nothing shallower than
+  // the triage vocabulary can tell them apart.
+  const base = tracking.untracked();
+  /**
+   * @param {string} value
+   * @returns {{ text: string, classes: string }}
+   */
+  const triageChip = (value) => rowChip(build(triage, { ...base, triage: value }), 'Triage');
+
+  const evaluating = triageChip('evaluating');
+  assert.ok(evaluating.text === 'Evaluating', `the chip reads ${evaluating.text}`);
+  assert.ok(
+    evaluating.classes === 'Label Label--secondary bghsa-tone-danger',
+    `evaluating is on us: ${evaluating.classes}`
+  );
+
+  const ours = triageChip('awaiting maintainer input');
+  assert.ok(
+    ours.classes === 'Label Label--secondary bghsa-tone-danger',
+    `awaiting maintainer input is on us: ${ours.classes}`
+  );
+
+  const theirs = triageChip('awaiting reporter');
+  assert.ok(
+    theirs.classes === 'Label Label--secondary bghsa-tone-attention',
+    `awaiting reporter is on the reporter: ${theirs.classes}`
+  );
+
+  // A value this reader does not know leaves the advisory on us: it takes a
+  // maintainer to say otherwise.
+  const unknown = triageChip('waiting for the weekend');
+  assert.ok(
+    unknown.classes === 'Label Label--secondary bghsa-tone-danger',
+    `a value this reader does not know: ${unknown.classes}`
+  );
 });
 
 test('a track the snapshot says nothing about carries no row', () => {

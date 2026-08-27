@@ -210,6 +210,7 @@ if (typeof require === 'function') {
       state: textOf(value.state),
       severity: textOf(value.severity),
       severityLabel: textOf(value.severityLabel),
+      severityClass: textOf(value.severityClass),
       openedAt: textOf(value.openedAt),
       reporter: textOf(value.reporter),
     };

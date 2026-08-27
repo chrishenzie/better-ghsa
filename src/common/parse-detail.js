@@ -81,6 +81,9 @@ if (typeof require === 'function') {
  * @property {string | null} state `Triage`, `Draft`, `Published`, or `Closed`.
  * @property {string | null} severity The severity, lowercased, or null when unset.
  * @property {string | null} severityLabel The severity as displayed.
+ * @property {string | null} severityClass The color GitHub paints the severity
+ *   chip with, as the `Label--` modifiers it carries, and null where the chip
+ *   carries none. See {@link labelModifiers}.
  * @property {string | null} reportedAt The time the report was opened, from the
  *   description Box header.
  * @property {string | null} reporter The login the description Box header names.
@@ -149,6 +152,28 @@ if (typeof require === 'function') {
 
   /** How every reader here reads an empty value as nothing. */
   const orNull = globalThis.bghsa.text.orNull;
+
+  /**
+   * The `Label--` modifiers a chip carries, which is what GitHub colors it with.
+   *
+   * The level a severity chip names does not say which modifier it takes:
+   * GitHub paints high with `Label--orange` and moderate with `Label--warning`.
+   * So the extension reads the modifier off GitHub's own chip and reuses it,
+   * and paints a level it has never seen correctly without being told about it.
+   *
+   * @param {Element | null} label
+   * @param {readonly string[]} [except] Modifiers that carry no color, such as
+   *   the size the chip is drawn at.
+   * @returns {string | null} the modifiers in the order the chip carries them,
+   *   and null for a chip carrying none.
+   */
+  function labelModifiers(label, except = []) {
+    if (label === null) return null;
+    const held = collapse(label.getAttribute('class'))
+      .split(' ')
+      .filter((name) => name.startsWith('Label--') && !except.includes(name));
+    return held.length === 0 ? null : held.join(' ');
+  }
 
   /**
    * @param {Element | null} element
@@ -517,6 +542,9 @@ if (typeof require === 'function') {
             ? null
             : orNull(collapse(severity.textContent).toLowerCase()),
       severityLabel: severity === null ? null : orNull(collapse(severity.textContent)),
+      // `Label--large` is the size the detail page draws the chip at, and it is
+      // the selector this parser found the chip by, so it is not its color.
+      severityClass: labelModifiers(severity, ['Label--large']),
       reportedAt: datetimeOf(descriptionHeader),
       reporter: descriptionHeader === null ? null : authorIn(descriptionHeader),
       title: metadataField(root, 'title').value,
@@ -546,6 +574,7 @@ if (typeof require === 'function') {
     DESCRIPTION_HEADER,
     EXTENSION_CHIP_ATTRIBUTE,
     isCommentForm,
+    labelModifiers,
     parseDetail,
     parseComments,
     parseTimeline,

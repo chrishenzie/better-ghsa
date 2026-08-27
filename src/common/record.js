@@ -178,6 +178,7 @@ if (typeof require === 'function') {
       state: text(record.state),
       severity: text(record.severity),
       severityLabel: text(record.severityLabel),
+      severityClass: text(record.severityClass),
       reportedAt: text(record.reportedAt),
       reporter: text(record.reporter),
       title: text(record.title),

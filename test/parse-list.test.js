@@ -55,6 +55,10 @@ test('a triage row carries the advisory the table paints before any fetch', () =
   assert.strictEqual(row.state, 'Triage');
   assert.strictEqual(row.severity, 'high');
   assert.strictEqual(row.severityLabel, 'High');
+  // What GitHub paints a high severity: the modifier names the color and not
+  // the level, so it is carried out beside the level rather than derived from
+  // it.
+  assert.strictEqual(row.severityClass, 'Label--orange');
   assert.strictEqual(row.openedAt, '2026-08-25T22:15:18Z');
   assert.strictEqual(row.reporter, 'prakleumas');
 });
@@ -68,6 +72,7 @@ test('a draft row carries no state Label and no severity', () => {
   assert.strictEqual(row.state, 'Draft');
   assert.strictEqual(row.severity, null);
   assert.strictEqual(row.severityLabel, null);
+  assert.strictEqual(row.severityClass, null);
   assert.strictEqual(row.openedAt, '2026-08-25T22:19:40Z');
   assert.strictEqual(row.reporter, 'samuelkarp');
 });
@@ -143,10 +148,11 @@ test('the next link walks the page number of the state showing', () => {
   assert.strictEqual(parsed?.next?.page, 4);
 });
 
-test('the state Label is not read as the severity', () => {
+test('only a Label titled with the level names the severity', () => {
   // The row carries two `span.Label`, the state first, and `Label--secondary`
   // is both the state Label's color and a severity color. The title is what
-  // names the level, and a row whose only Label is the state has no severity.
+  // names the level, so a row carrying no titled Label has no severity,
+  // whatever else it labels.
   const stateOnly = parse.parseRow(
     element(`<div class="d-flex Box-row--drag-hide">
       <span class="tooltipped" aria-label="Triage advisory"></span>
@@ -165,8 +171,32 @@ test('the state Label is not read as the severity', () => {
       <span class="Label Label--secondary">Low</span>
     </div>`)
   );
-  assert.strictEqual(both?.severity, 'low', 'an untitled Label other than the state is severity');
-  assert.strictEqual(both?.severityLabel, 'Low');
+  assert.strictEqual(both?.severity, null, 'an untitled Label names no severity');
+  assert.strictEqual(both?.severityLabel, null);
+  assert.strictEqual(both?.severityClass, null);
+});
+
+test('the severity class is every Label modifier the chip carries', () => {
+  const painted = parse.parseRow(
+    element(`<div class="d-flex Box-row--drag-hide">
+      <span class="tooltipped" aria-label="Triage advisory"></span>
+      <a class="Link--primary" href="/o/r/security/advisories/GHSA-aaaa-bbbb-cccc">T</a>
+      <span title="Severity: high" class="Label Label--orange mr-2 tmp-mr-2">High</span>
+    </div>`)
+  );
+  // Only the modifiers come out. `mr-2` and `tmp-mr-2` are the spacing GitHub's
+  // own row needs and would move the extension's chip if they came with it.
+  assert.strictEqual(painted?.severityClass, 'Label--orange');
+
+  const bare = parse.parseRow(
+    element(`<div class="d-flex Box-row--drag-hide">
+      <span class="tooltipped" aria-label="Triage advisory"></span>
+      <a class="Link--primary" href="/o/r/security/advisories/GHSA-aaaa-bbbb-cccc">T</a>
+      <span title="Severity: unknown" class="Label mr-2">Unknown</span>
+    </div>`)
+  );
+  assert.strictEqual(bare?.severity, 'unknown');
+  assert.strictEqual(bare?.severityClass, null, 'a chip with no modifier leaves nothing to reuse');
 });
 
 test('a document carrying no advisory list parses as none', () => {
