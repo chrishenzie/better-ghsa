@@ -6,6 +6,7 @@
 interface BghsaNamespace {
   dom: typeof import('../src/common/dom.js');
   text: typeof import('../src/common/text.js');
+  storage: typeof import('../src/common/storage.js');
   allowlist: typeof import('../src/common/allowlist.js');
   trust: typeof import('../src/common/trust.js');
   schema: typeof import('../src/common/schema.js');
@@ -16,6 +17,7 @@ interface BghsaNamespace {
   order: typeof import('../src/common/order.js');
   members: typeof import('../src/common/members.js');
   branches: typeof import('../src/common/branches.js');
+  cache: typeof import('../src/common/cache.js');
   write: typeof import('../src/common/write.js');
   tracking: typeof import('../src/detail/tracking.js');
   comments: typeof import('../src/detail/comments.js');

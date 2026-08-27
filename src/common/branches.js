@@ -3,7 +3,10 @@
 globalThis.bghsa ??= /** @type {BghsaNamespace} */ ({});
 
 // The manifest orders content scripts; under Node the dependency is named here.
-if (typeof require === 'function') require('./schema.js');
+if (typeof require === 'function') {
+  require('./storage.js');
+  require('./schema.js');
+}
 
 /**
  * The part of `browser.storage.local` this file uses. `chrome.storage.local`
@@ -65,14 +68,7 @@ if (typeof require === 'function') require('./schema.js');
    *   every environment outside a browser.
    */
   function browserStorage() {
-    const global = /** @type {Record<string, unknown>} */ (/** @type {unknown} */ (globalThis));
-    for (const name of ['browser', 'chrome']) {
-      const api = /** @type {{ storage?: { local?: BranchStorage } } | undefined} */ (global[name]);
-      const local = api?.storage?.local;
-      if (local === undefined || local === null) continue;
-      if (typeof local.get === 'function' && typeof local.set === 'function') return local;
-    }
-    return null;
+    return /** @type {BranchStorage | null} */ (globalThis.bghsa.storage.local());
   }
 
   /**
