@@ -56,6 +56,10 @@ if (typeof require === 'function') {
  * @property {number | null} status What GitHub answered, and null where nothing
  *   answered at all.
  * @property {unknown} reason Why the read failed, and null where it did not.
+ * @property {boolean} stopped Whether the queue was stopped before the request
+ *   went out, in which case nothing was asked of GitHub and nothing is known
+ *   about the page. It is the work being taken back, and a caller counting how
+ *   often a page would not answer counts none of it.
  */
 
 /**
@@ -67,6 +71,8 @@ if (typeof require === 'function') {
  *   test moves time without spending it.
  * @property {(ms: number) => Promise<void>} [wait] What the queue waits with
  *   between requests. Injected for the same reason.
+ * @property {() => number} [random] Where the spread on a wait is drawn from,
+ *   as a fraction in [0, 1). Injected so a test can name the draw.
  * @property {number} [timeoutMs] How long one request may go unanswered before
  *   it counts as a failed read. Injected so a test does not spend the bound.
  * @property {import('./write.js').WriteFetch} [fetch]
@@ -85,6 +91,29 @@ if (typeof require === 'function') {
    * rate for one caller.
    */
   const RATE_MS = 1000;
+
+  /**
+   * How much longer than the interval it owes a wait may last.
+   *
+   * `browser.storage.local` offers no compare-and-set, so the claim every queue
+   * on a repository shares is read, decided on, and only then written. Two
+   * queues that read the same claim compute the same moment to send at, and
+   * from then on they stay in step: each wakes inside the other's storage
+   * latency, neither sees the other's claim, and the repository takes two
+   * requests a second with every advisory fetched twice.
+   *
+   * Drawing the tail of each wait at random is what stops two queues computing
+   * the same wake. The one that wakes second reads the claim the first wrote
+   * and waits out a fresh interval from it.
+   *
+   * This is a spread and not mutual exclusion: two queues can still draw close
+   * enough to send inside one interval, and nothing here can rule that out. A
+   * quarter of a second is far longer than a storage round trip, so a collision
+   * needs the two draws themselves to land within it. A wait is never shorter
+   * than the interval it owes, so the spread costs a fraction of a second and
+   * never buys a request sooner.
+   */
+  const SPREAD_MS = 250;
 
   /**
    * How long one request may go unanswered before the pass gives up on it.
@@ -230,6 +259,7 @@ if (typeof require === 'function') {
     const storage = options.storage;
     const clock = options.now ?? (() => globalThis.bghsa.cache.now());
     const wait = options.wait ?? sleep;
+    const draw = options.random ?? Math.random;
     const timeout = options.timeoutMs ?? REQUEST_TIMEOUT_MS;
     const send =
       options.fetch ??
@@ -283,6 +313,17 @@ if (typeof require === 'function') {
         () => {}
       );
       return next;
+    }
+
+    /**
+     * @returns {number} the tail of one wait, drawn fresh each time. A draw
+     *   outside [0, 1) is no tail at all, which is the shortest wait the
+     *   interval allows and never a shorter one.
+     */
+    function spread() {
+      const fraction = draw();
+      if (!(typeof fraction === 'number' && fraction >= 0 && fraction < 1)) return 0;
+      return Math.round(fraction * SPREAD_MS);
     }
 
     /** @returns {QueueProgress} how far this pass has got. */
@@ -375,21 +416,30 @@ if (typeof require === 'function') {
      * the page went away the cache holds it and the staleness check takes it out
      * of the queue without spending a second request.
      *
+     * Taking a pass back is what starts a stopped queue again: a page that came
+     * back to a repository it had left asks for the pass it left there. The take
+     * runs through this queue's slot, so it waits out whatever the queue is
+     * still finishing and never reads the pass back from under a pass that is
+     * still running.
+     *
      * @returns {Promise<QueueProgress | null>} what was resumed, and null where
      *   there was nothing to resume.
      */
-    async function load() {
-      const held = progressFrom(
-        await globalThis.bghsa.cache.getProgress(ref, { storage, at: clock() })
-      );
-      if (held === null) return null;
-      pending = idsOf(held.inFlight === null ? held.pending : [held.inFlight, ...held.pending]);
-      inFlight = null;
-      done = [...held.done];
-      failed = [...held.failed];
-      lastRequestAt = held.lastRequestAt;
-      startedAt = held.startedAt;
-      return held;
+    function load() {
+      return serially(async () => {
+        stopped = false;
+        const held = progressFrom(
+          await globalThis.bghsa.cache.getProgress(ref, { storage, at: clock() })
+        );
+        if (held === null) return null;
+        pending = idsOf(held.inFlight === null ? held.pending : [held.inFlight, ...held.pending]);
+        inFlight = null;
+        done = [...held.done];
+        failed = [...held.failed];
+        lastRequestAt = held.lastRequestAt;
+        startedAt = held.startedAt;
+        return held;
+      });
     }
 
     /**
@@ -516,6 +566,11 @@ if (typeof require === 'function') {
      * already waited out. A queue therefore yields to a request that lands
      * during its wait, and a time that does not move costs one wait.
      *
+     * Every wait carries a spread, the one in {@link SPREAD_MS}, and a queue
+     * that owes no interval at all still spends it. Two queues that wake on the
+     * same claim would otherwise both find nothing owed and send together,
+     * which is the head of a pass and the common way two tabs lock into step.
+     *
      * @returns {Promise<void>}
      */
     async function throttle() {
@@ -527,12 +582,13 @@ if (typeof require === 'function') {
         } else if (waited) {
           return;
         }
-        if (lastRequestAt === null) return;
         // A time later than the clock reads, which a clock moved backwards
         // leaves behind, is one interval of wait and not the difference.
-        const since = Math.max(0, clock() - lastRequestAt);
-        if (since >= RATE_MS) return;
-        await wait(RATE_MS - since);
+        const since = lastRequestAt === null ? RATE_MS : Math.max(0, clock() - lastRequestAt);
+        const owed = since >= RATE_MS ? 0 : RATE_MS - since;
+        const delay = owed + spread();
+        if (delay === 0) return;
+        await wait(delay);
         waited = true;
       }
     }
@@ -567,6 +623,10 @@ if (typeof require === 'function') {
      * A crawl that walked pages on a limit of its own would double the rate the
      * extension can produce.
      *
+     * A read a stop reaches first sends nothing and comes back marked stopped,
+     * which is what tells a caller its work was put down and not that GitHub
+     * would not serve the page.
+     *
      * @param {string} url
      * @returns {Promise<PageRead>}
      */
@@ -574,7 +634,7 @@ if (typeof require === 'function') {
       return serially(async () => {
         await throttle();
         if (stopped) {
-          return { body: null, status: null, reason: 'The queue was stopped.' };
+          return { body: null, status: null, reason: 'The queue was stopped.', stopped: true };
         }
         lastRequestAt = clock();
         await persist();
@@ -585,11 +645,12 @@ if (typeof require === 'function') {
               body: null,
               status: answered.status,
               reason: `GitHub answered ${answered.status}.`,
+              stopped: false,
             };
           }
-          return { body: answered.body, status: answered.status, reason: null };
+          return { body: answered.body, status: answered.status, reason: null, stopped: false };
         } catch (error) {
-          return { body: null, status: null, reason: error };
+          return { body: null, status: null, reason: error, stopped: false };
         }
       });
     }
@@ -671,13 +732,16 @@ if (typeof require === 'function') {
     }
 
     /**
-     * @returns {void} stops the pass after the request in flight, and at once
-     *   where none is: a stop during the wait between requests sends no
+     * @returns {Promise<void>} stops the pass after the request in flight, and
+     *   at once where none is: a stop during the wait between requests sends no
      *   further request. What is left, the advisory that was waiting included,
-     *   stays in the progress entry for the next page load.
+     *   stays in the progress entry for the next page load. The promise settles
+     *   when the work already handed to this queue has wound down, which is what
+     *   a caller waits on to know no further request will go out.
      */
     function stop() {
       stopped = true;
+      return queued.then(() => {});
     }
 
     return {
@@ -696,6 +760,7 @@ if (typeof require === 'function') {
 
   const exported = {
     RATE_MS,
+    SPREAD_MS,
     REQUEST_TIMEOUT_MS,
     idsOf,
     progressFrom,

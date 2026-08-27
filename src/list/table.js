@@ -98,15 +98,26 @@ if (typeof require === 'function') {
  */
 
 /**
+ * One advisory as a list page showed it, and when that page was read.
+ *
+ * @typedef {object} RowSource
+ * @property {import('../common/parse-list.js').ListRow} row
+ * @property {number} seenAt When the markup this row came from was read, epoch
+ *   milliseconds. The page being looked at was read now; a row that is on the
+ *   table from the crawl alone was read when the walk that found it ran, which
+ *   can be days ago.
+ */
+
+/**
  * The table as one render assembled it.
  *
  * @typedef {object} TableView
  * @property {TableRow[]} rows In the default order.
  * @property {number} at The moment the render read the page, epoch milliseconds.
- * @property {Map<string, import('../common/parse-list.js').ListRow>} sources What
- *   the list markup said about each advisory, by GHSA identifier. A read landing
- *   later rebuilds its row from this and the entry that arrived, so a row is
- *   replaced where it stands and the rest of the table is left alone.
+ * @property {Map<string, RowSource>} sources What the list markup said about each
+ *   advisory and when it said it, by GHSA identifier. A read landing later
+ *   rebuilds its row from this and the entry that arrived, so a row is replaced
+ *   where it stands and the rest of the table is left alone.
  */
 
 /**
@@ -460,10 +471,11 @@ if (typeof require === 'function') {
    * A row carrying nothing but what the list markup said.
    *
    * @param {import('../common/parse-list.js').ListRow} listRow
-   * @param {number} at When the list markup was read.
+   * @param {number} seenAt When the markup this row came from was read, which is
+   *   the moment the row stands for.
    * @returns {TableRow}
    */
-  function unreadRow(listRow, at) {
+  function unreadRow(listRow, seenAt) {
     return {
       ghsaId: listRow.ghsaId,
       href: listRow.href,
@@ -475,7 +487,7 @@ if (typeof require === 'function') {
       openedAt: listRow.openedAt,
       reporter: listRow.reporter,
       owners: [],
-      observedAt: at,
+      observedAt: seenAt,
       read: false,
       neverReviewed: false,
       newActivity: false,
@@ -494,18 +506,25 @@ if (typeof require === 'function') {
   }
 
   /**
-   * One row, from the list markup and from what the cache holds of that
-   * advisory. The list markup wins on the values GitHub's own row carried: the
-   * page was rendered now and the cached read was not.
+   * One row, from what the cache holds of that advisory and from the list markup
+   * that named it.
    *
-   * @param {import('../common/parse-list.js').ListRow} listRow
+   * A row carries one observation time, so what stands under that time is one
+   * observation. Where an advisory read backs the row, the read supplies every
+   * value it holds and the row is stamped with the moment it was taken, and the
+   * list markup fills in only what the read does not hold. The identifier and
+   * the path are the advisory's own, and are neither read nor observed.
+   *
+   * @param {RowSource} source The advisory as a list page showed it.
    * @param {import('../common/cache.js').CacheEntry | null} entry
-   * @param {number} at When the list markup was read.
+   * @param {number} at The moment this render is happening, which is what says
+   *   whether an embargo has run out.
    * @returns {Promise<TableRow>}
    */
-  async function viewRow(listRow, entry, at) {
+  async function viewRow(source, entry, at) {
+    const listRow = source.row;
     const advisory = entry === null ? null : advisoryFrom(entry.record);
-    if (advisory === null || entry === null) return unreadRow(listRow, at);
+    if (advisory === null || entry === null) return unreadRow(listRow, source.seenAt);
 
     const merged = globalThis.bghsa.merge.mergeSnapshots(advisory.comments);
     const tracking = await globalThis.bghsa.tracking.readAdvisory(advisory, merged);
@@ -515,20 +534,20 @@ if (typeof require === 'function') {
     return {
       ghsaId: listRow.ghsaId ?? advisory.ghsaId,
       href: listRow.href,
-      title: listRow.title ?? advisory.title,
-      state: listRow.state ?? advisory.state,
-      severity: listRow.severity ?? advisory.severity,
-      severityLabel: listRow.severityLabel ?? advisory.severityLabel,
+      title: advisory.title ?? listRow.title,
+      state: advisory.state ?? listRow.state,
+      severity: advisory.severity ?? listRow.severity,
+      severityLabel: advisory.severityLabel ?? listRow.severityLabel,
       severityConfirmed: tracking.scoring.status === 'confirmed',
-      openedAt: listRow.openedAt ?? advisory.reportedAt,
-      reporter: listRow.reporter ?? advisory.reporter,
+      openedAt: advisory.reportedAt ?? listRow.openedAt,
+      reporter: advisory.reporter ?? listRow.reporter,
       owners: tracking.owners,
       observedAt: entry.observedAt,
       read: true,
       neverReviewed: derived.neverReviewed,
       newActivity: derived.newActivity,
       triage: tracking.triage,
-      waitingSince: tracking.triageSince ?? listRow.openedAt ?? advisory.reportedAt,
+      waitingSince: tracking.triageSince ?? advisory.reportedAt ?? listRow.openedAt,
       embargo: tracking.embargo,
       embargoLift,
       embargoOverdue: globalThis.bghsa.derive.embargoOverdue(advisory, embargoLift, at),
@@ -559,14 +578,14 @@ if (typeof require === 'function') {
    * at.
    *
    * The page wins where both name an advisory, because GitHub rendered it now
-   * and the crawl's copy is as old as the walk that found it. A published or
-   * closed advisory is not on this table, so a page showing one of those tabs
-   * contributes rows to nothing.
+   * and the crawl's copy is as old as the walk that found it. Each source
+   * carries when it was read, which is what its row stands for until an advisory
+   * read backs it. A published or closed advisory is not on this table, so a
+   * page showing one of those tabs contributes rows to nothing.
    *
    * @param {import('../common/parse-list.js').ParsedList} parsed
    * @param {ViewOptions} [options]
-   * @returns {Promise<Map<string, import('../common/parse-list.js').ListRow>>} by
-   *   GHSA identifier.
+   * @returns {Promise<Map<string, RowSource>>} by GHSA identifier.
    */
   async function listRows(parsed, options = {}) {
     const cache = globalThis.bghsa.cache;
@@ -575,16 +594,17 @@ if (typeof require === 'function') {
     const held = await cache.getList(parsed, { storage: options.storage, at });
     const crawled = globalThis.bghsa.crawl.listFrom(held === null ? null : held.record);
 
-    /** @type {Map<string, import('../common/parse-list.js').ListRow>} */
+    /** @type {Map<string, RowSource>} */
     const rows = new Map();
-    for (const row of globalThis.bghsa.crawl.rowsIn(crawled, open)) {
-      if (row.ghsaId !== null) rows.set(row.ghsaId, row);
+    for (const found of Object.values(crawled.rows)) {
+      if (!open.includes(found.state) || found.row.ghsaId === null) continue;
+      rows.set(found.row.ghsaId, { row: found.row, seenAt: found.seenAt });
     }
     for (const row of parsed.rows) {
       if (row.ghsaId === null) continue;
       const state = stateOfRow(row, parsed.selectedState);
       if (state === null || !open.includes(state)) continue;
-      rows.set(row.ghsaId, row);
+      rows.set(row.ghsaId, { row, seenAt: at });
     }
     return rows;
   }
@@ -608,8 +628,12 @@ if (typeof require === 'function') {
     const ids = [...sources.keys()];
     const entries = await cache.getAdvisories(parsed, ids, { storage: options.storage, at });
     const rows = await Promise.all(
-      [...sources.values()].map((row) =>
-        viewRow(row, row.ghsaId === null ? null : entries.get(row.ghsaId) ?? null, at)
+      [...sources.values()].map((source) =>
+        viewRow(
+          source,
+          source.row.ghsaId === null ? null : entries.get(source.row.ghsaId) ?? null,
+          at
+        )
       )
     );
     return { rows: globalThis.bghsa.order.sort(rows), at, sources };
@@ -1605,6 +1629,42 @@ if (typeof require === 'function') {
   const views = new WeakMap();
 
   /**
+   * The page as the last render of each document read it, and null where that
+   * render found no advisory list on it.
+   *
+   * A render reads the page to draw the table, and the refresh that follows
+   * needs the same reading to learn which repository the page names. Renders
+   * run on every mutation burst GitHub produces and a list page is not small,
+   * so the reading is held here and taken back.
+   *
+   * @type {WeakMap<Document, import('../common/parse-list.js').ParsedList | null>}
+   */
+  const parses = new WeakMap();
+
+  /**
+   * @param {Document} doc
+   * @returns {import('../common/parse-list.js').ParsedList | null} the page as
+   *   the last render of this document read it, and the page read here where no
+   *   render has run on it.
+   */
+  function pageOf(doc) {
+    if (parses.has(doc)) return parses.get(doc) ?? null;
+    return globalThis.bghsa.parseList.parseList(doc);
+  }
+
+  /**
+   * @param {Document} doc
+   * @returns {{ owner: string, repo: string } | null} the repository the page
+   *   names, and null where it names none. It is the reading the last render
+   *   took, so asking costs no second parse of the page.
+   */
+  function refOf(doc) {
+    const parsed = pageOf(doc);
+    if (parsed === null || parsed.owner === null || parsed.repo === null) return null;
+    return { owner: parsed.owner, repo: parsed.repo };
+  }
+
+  /**
    * Reads the page and places the table. Returns null when the document is not
    * an advisory list page, or when it offers no anchor.
    *
@@ -1614,6 +1674,7 @@ if (typeof require === 'function') {
    */
   async function render(doc, options = {}) {
     const parsed = globalThis.bghsa.parseList.parseList(doc);
+    parses.set(doc, parsed);
     if (parsed === null) return null;
     const view = await readView(parsed, options);
     return injectTable(doc, view);
@@ -1661,9 +1722,11 @@ if (typeof require === 'function') {
     const source = view?.sources.get(ghsaId);
     if (view === undefined || source === undefined) return false;
     const row = await viewRow(source, entry, options.at ?? globalThis.bghsa.cache.now());
+    // The render built a row for every source, and the source was just found,
+    // so the view is holding this advisory's row.
     const at = view.rows.findIndex((held) => held.ghsaId === ghsaId);
-    if (at === -1) view.rows.push(row);
-    else view.rows[at] = row;
+    if (at === -1) return false;
+    view.rows[at] = row;
     syncFilterOptions(doc);
     const item = rowNode(doc, ghsaId);
     if (item === null) return false;
@@ -1688,9 +1751,11 @@ if (typeof require === 'function') {
    * into that one.
    *
    * @param {Document} doc
+   * @param {RefreshOptions} [options] What the refresh a pass starts reads and
+   *   waits with.
    * @returns {() => Promise<void>}
    */
-  function renderLoop(doc) {
+  function renderLoop(doc, options = {}) {
     let running = false;
     let again = false;
     return async function pass() {
@@ -1707,20 +1772,8 @@ if (typeof require === 'function') {
       } finally {
         running = false;
       }
-      ensureRefresh(doc);
+      ensureRefresh(doc, options);
     };
-  }
-
-  /**
-   * @param {Document} doc
-   * @returns {{ owner: string, repo: string } | null} the repository the page
-   *   names, and null where it names none. It is the reading the last render
-   *   took, so asking costs no second parse of the page.
-   */
-  function refOf(doc) {
-    const parsed = pageOf(doc);
-    if (parsed === null || parsed.owner === null || parsed.repo === null) return null;
-    return { owner: parsed.owner, repo: parsed.repo };
   }
 
   /**
@@ -1732,12 +1785,14 @@ if (typeof require === 'function') {
 
   /**
    * @param {Document} doc
+   * @param {RefreshOptions} [options] What the refresh a pass starts reads and
+   *   waits with, used when this document has no loop yet.
    * @returns {() => Promise<void>} that document's loop, made on first use.
    */
-  function passFor(doc) {
+  function passFor(doc, options = {}) {
     const held = loops.get(doc);
     if (held !== undefined) return held;
-    const loop = renderLoop(doc);
+    const loop = renderLoop(doc, options);
     loops.set(doc, loop);
     return loop;
   }
@@ -1764,12 +1819,22 @@ if (typeof require === 'function') {
 
   /**
    * @param {{ owner: string, repo: string }} ref
+   * @returns {string} what names one repository here. GitHub treats an owner and
+   *   a repository name case-insensitively, so two spellings of one repository
+   *   are one repository.
+   */
+  function refKey(ref) {
+    return `${ref.owner}/${ref.repo}`.toLowerCase();
+  }
+
+  /**
+   * @param {{ owner: string, repo: string }} ref
    * @param {RefreshOptions} [options] What the queue reads and waits with, used
    *   when this repository has no queue yet.
    * @returns {QueueHandle} this repository's queue, made on first use.
    */
   function queueFor(ref, options = {}) {
-    const key = `${ref.owner}/${ref.repo}`.toLowerCase();
+    const key = refKey(ref);
     const held = queues.get(key);
     if (held !== undefined) return held;
     /** @type {QueueHandle['listening']} */
@@ -1797,10 +1862,22 @@ if (typeof require === 'function') {
   }
 
   /**
-   * The refresh each document has running, so that a render the refresh itself
-   * asked for cannot start a second one beside it.
+   * The refresh each document has running, and the repository it is for, so that
+   * a render the refresh itself asked for cannot start a second one beside it.
    *
-   * @type {WeakMap<Document, Promise<RefreshSummary | null>>}
+   * The repository is held beside the promise because GitHub replaces the turbo
+   * frame on a soft navigation and keeps the document. One document therefore
+   * covers a list of one repository and then a list of another, and a refresh
+   * of the first is not a refresh of the second.
+   *
+   * @type {WeakMap<
+   *   Document,
+   *   {
+   *     key: string,
+   *     queue: ReturnType<typeof globalThis.bghsa.fetch.createQueue>,
+   *     started: Promise<RefreshSummary | null>,
+   *   }
+   * >}
    */
   const running = new WeakMap();
 
@@ -1809,7 +1886,8 @@ if (typeof require === 'function') {
    * advisories they name, stalest first, at one request per second, with each
    * row updating where it stands as its read lands.
    *
-   * Calling it while one is running joins that one.
+   * Calling it while one is running on the same repository joins that one. A
+   * page that has come to name another repository is another refresh.
    *
    * @param {Document} doc
    * @param {RefreshOptions} [options]
@@ -1817,16 +1895,21 @@ if (typeof require === 'function') {
    *   advisory list, or does not say which repository it belongs to.
    */
   function refresh(doc, options = {}) {
-    const held = running.get(doc);
-    if (held !== undefined) return held;
     const parsed = options.parsed ?? globalThis.bghsa.parseList.parseList(doc);
     if (parsed === null || parsed.owner === null || parsed.repo === null) {
       return Promise.resolve(null);
     }
+    const ref = { owner: parsed.owner, repo: parsed.repo };
+    const key = refKey(ref);
+    const held = running.get(doc);
+    if (held !== undefined && held.key === key) return held.started;
+    const { queue } = queueFor(ref, options);
     const started = fill(doc, parsed, options).finally(() => {
-      running.delete(doc);
+      // A refresh of another repository may have taken the entry over while
+      // this one was finishing, and that one is the one still running.
+      if (running.get(doc)?.started === started) running.delete(doc);
     });
-    running.set(doc, started);
+    running.set(doc, { key, queue, started });
     return started;
   }
 
@@ -1847,7 +1930,7 @@ if (typeof require === 'function') {
       repo: /** @type {string} */ (parsed.repo),
     };
     const { queue, listening } = queueFor(ref, options);
-    const pass = passFor(doc);
+    const pass = passFor(doc, options);
 
     /** @type {Promise<unknown>[]} */
     const updates = [];
@@ -1885,24 +1968,77 @@ if (typeof require === 'function') {
   }
 
   /**
-   * The documents a refresh has been started for.
+   * The repository each document last had a refresh started for, and when.
    *
-   * @type {WeakSet<Document>}
+   * @type {WeakMap<Document, { key: string, at: number }>}
    */
-  const refreshing = new WeakSet();
+  const refreshed = new WeakMap();
 
   /**
+   * Stops the refresh a document has running for a repository its page no longer
+   * names.
+   *
+   * The rate this extension puts on github.com is one request a second, and the
+   * claim the queues hold each other to is written per repository. A pass left
+   * running on the repository the page came from holds a claim of its own, so
+   * one tab showing one list page sends two requests a second, and half of them
+   * read a repository nobody is looking at.
+   *
+   * The pass stops after the request in flight. What it had left, the advisory
+   * that request was for included, stays in the progress entry, and the record
+   * of when this document last had a refresh started goes with it: a maintainer
+   * who leaves and comes straight back is taking back an unfinished pass, and
+   * the threshold that holds off a burst of crawls is not what decides whether
+   * they get it.
+   *
    * @param {Document} doc
-   * @returns {void} starts the one refresh this document runs, where the page it
-   *   is on is an advisory list. It hangs off a render rather than off the
-   *   content script starting, because a list page reached from an advisory with
-   *   no document load is a render and not a load.
+   * @param {NonNullable<ReturnType<typeof running.get>>} held
+   * @returns {void}
    */
-  function ensureRefresh(doc) {
-    if (refreshing.has(doc)) return;
+  function leave(doc, held) {
+    void held.queue.stop();
+    if (running.get(doc) === held) running.delete(doc);
+    refreshed.delete(doc);
+  }
+
+  /**
+   * Starts the refresh this page's repository is due, where the page is an
+   * advisory list and the table is on it, and stops the one its page has left.
+   *
+   * It hangs off a render rather than off the content script starting, because a
+   * list page reached from an advisory with no document load is a render and not
+   * a load. That navigation replaces the turbo frame and keeps the document, and
+   * the repository the page names changes with it, so what a refresh is
+   * remembered against is the repository and not the document alone. A page that
+   * came to name another repository, or none at all, is a page whose refresh has
+   * nobody left to read for.
+   *
+   * A refresh running on that repository is left to finish and none is started
+   * beside it. One that finished starts again once the staleness threshold has
+   * passed: inside it a pass reads nothing, because no entry is stale and no
+   * completed walk is due, so a burst of renders costs one refresh and the
+   * burst of crawls it could otherwise start is what the threshold holds off.
+   *
+   * @param {Document} doc
+   * @param {RefreshOptions} [options] What the refresh reads and waits with.
+   * @returns {void}
+   */
+  function ensureRefresh(doc, options = {}) {
+    const parsed = pageOf(doc);
+    const key =
+      parsed === null || parsed.owner === null || parsed.repo === null
+        ? null
+        : refKey({ owner: parsed.owner, repo: parsed.repo });
+    const left = running.get(doc);
+    if (left !== undefined && left.key !== key) leave(doc, left);
+    if (parsed === null || key === null) return;
     if (doc.getElementById(ROOT_ID) === null) return;
-    refreshing.add(doc);
-    void refresh(doc);
+    if (running.get(doc)?.key === key) return;
+    const at = options.now?.() ?? globalThis.bghsa.cache.now();
+    const held = refreshed.get(doc);
+    if (held?.key === key && at - held.at < globalThis.bghsa.cache.STALE_MS) return;
+    refreshed.set(doc, { key, at });
+    void refresh(doc, { ...options, parsed });
   }
 
   /**
@@ -1922,15 +2058,18 @@ if (typeof require === 'function') {
   }
 
   /**
-   * @returns {void} renders the table into this page and keeps it there. The
-   *   first pass and every pass the observer asks for run through one loop, so
-   *   no two of them read and write the document together.
+   * Renders the table into this page and keeps it there. The first pass and
+   * every pass the observer asks for run through one loop, so no two of them
+   * read and write the document together.
+   *
+   * @returns {MutationObserver | null} what is watching the page, and null where
+   *   the document offers nothing to watch or no observer to watch it with.
    */
   function start() {
     const doc = globalThis.document;
     const pass = passFor(doc);
     void pass();
-    observe(doc, pass);
+    return observe(doc, pass);
   }
 
   const exported = {
@@ -1997,8 +2136,10 @@ if (typeof require === 'function') {
     render,
     rowNode,
     applyEntry,
+    refKey,
     queueFor,
     refresh,
+    ensureRefresh,
     ownWrite,
     needsRender,
     renderLoop,

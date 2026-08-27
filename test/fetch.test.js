@@ -130,6 +130,10 @@ function options(clock, storage, extra = {}) {
     now: clock.now,
     wait: clock.wait,
     parse: (_html, ref) => ({ state: 'triage', ghsaId: ref.ghsaId }),
+    // A draw of zero is the shortest spread there is, so a test that names no
+    // draw sees the interval on its own. The tests about two queues waking
+    // together name their own.
+    random: () => 0,
     ...extra,
   };
 }
@@ -270,6 +274,50 @@ test('two queues running at once share one second between them', async () => {
   );
   assert.deepStrictEqual(asked.slice().sort(), ids, 'an advisory was read more than once');
   assert.ok(oneSummary.complete && twoSummary.complete, 'a pass did not finish');
+});
+
+test('two queues that wake together do not send inside one second', async () => {
+  const clock = sharedClock(0);
+  const storage = fakeStorage();
+  const ids = [ghsa('aaaa'), ghsa('bbbb'), ghsa('cccc')];
+
+  /** @type {{ tab: string, at: number, ghsaId: string }[]} */
+  const sent = [];
+  /**
+   * @param {string} tab
+   * @returns {import('../src/common/write.js').WriteFetch}
+   */
+  const sender = (tab) => async (url) => {
+    sent.push({ tab, at: clock.now(), ghsaId: String(String(url).split('/').pop()) });
+    return { status: 200, text: async () => '<html></html>' };
+  };
+
+  // Two tabs on one repository, waking on the same claim: neither has sent
+  // anything, so both compute the same moment to send at. They draw different
+  // spreads, which is the only thing keeping them apart.
+  const one = queues.createQueue(
+    options(clock, storage, { fetch: sender('one'), random: () => 0.1 })
+  );
+  const two = queues.createQueue(
+    options(clock, storage, { fetch: sender('two'), random: () => 0.9 })
+  );
+  await one.add(ids);
+  await two.add(ids);
+  const both = Promise.all([one.run(), two.run()]);
+  await clock.pump();
+  await both;
+
+  const at = sent.map((request) => request.at);
+  const intervals = at.slice(1).map((moment, index) => moment - Number(at[index]));
+  assert.ok(
+    intervals.every((interval) => interval >= 1000),
+    `requests went out ${intervals.join(', ')} milliseconds apart`
+  );
+  assert.deepStrictEqual(
+    sent.map((request) => request.ghsaId).sort(),
+    ids,
+    'an advisory was fetched more than once'
+  );
 });
 
 test('a request time in the future costs one wait and not the difference', async () => {
@@ -717,6 +765,7 @@ test('a list page GitHub refused comes back with the status and no body', async 
   assert.ok(page.body === null, `a refused page carried a body: ${page.body}`);
   assert.ok(page.status === 404, `the page status was ${page.status}`);
   assert.ok(page.reason === 'GitHub answered 404.', `the reason was ${String(page.reason)}`);
+  assert.ok(page.stopped === false, 'a page GitHub refused was reported stopped');
 });
 
 test('a stopped queue sends no list page read', async () => {
@@ -729,4 +778,7 @@ test('a stopped queue sends no list page read', async () => {
   const page = await queue.page(LIST_URL);
   assert.deepStrictEqual(fetch.urls, [], 'a stopped queue spent a request');
   assert.ok(page.body === null, `a stopped queue answered with a body: ${page.body}`);
+  // Nothing was asked of GitHub, and the answer says so: the caller counting
+  // pages that would not answer has this one to leave out.
+  assert.ok(page.stopped === true, 'a stop was not told apart from a page that would not answer');
 });

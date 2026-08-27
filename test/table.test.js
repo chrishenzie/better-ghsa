@@ -11,6 +11,7 @@ const parseDetail = require('../src/common/parse-detail.js');
 const cache = require('../src/common/cache.js');
 const order = require('../src/common/order.js');
 const table = require('../src/list/table.js');
+const fetchQueue = require('../src/common/fetch.js');
 
 const { fakeStorage } = require('../test-support/storage.js');
 
@@ -654,6 +655,107 @@ function pageOf(html) {
   );
 }
 
+test('a row shows when its data was observed, not when it was drawn', async () => {
+  const owner = 'observed-crawl';
+  const repo = 'repo';
+  const ghsaId = 'GHSA-aaaa-aaaa-aaaa';
+  const base = `/${owner}/${repo}/security/advisories`;
+  const seenAt = Date.parse('2026-08-24T09:00:00Z');
+
+  // The page being looked at is the draft tab, and GitHub rendered its row
+  // now. The triage advisory below is on the table from the crawl alone: a
+  // walk saw it two days ago, and every walk since has written the record
+  // again without seeing it again.
+  const drawn = 'GHSA-bbbb-bbbb-bbbb';
+  const doc = pageOf(listHtml({ owner, repo, state: 'draft', ids: [drawn] }));
+  const storage = fakeStorage();
+  await cache.putList(
+    { owner, repo },
+    {
+      walks: {},
+      rows: {
+        [ghsaId]: {
+          row: {
+            ghsaId,
+            owner,
+            repo,
+            href: `${base}/${ghsaId}`,
+            title: `Title ${ghsaId}`,
+            state: 'Triage',
+            severity: null,
+            severityLabel: null,
+            openedAt: '2026-08-01T00:00:00Z',
+            reporter: 'prakleumas',
+          },
+          state: 'triage',
+          seenAt,
+        },
+      },
+    },
+    { storage, at: AT }
+  );
+  cache.setStorage(storage);
+  await table.render(doc);
+
+  const rows = tableRows(doc);
+  assert.ok(rows.length === 2, `rows on the page: ${rows.length}`);
+  const observed = new Map(
+    rows.map((row) => [row.getAttribute('data-bghsa-ghsa'), textOf(row, '.bghsa-list-observed')])
+  );
+  assert.ok(
+    observed.get(ghsaId) === 'Observed 2026-08-24 09:00 UTC',
+    `the crawled row: ${observed.get(ghsaId)}`
+  );
+  // The row GitHub rendered was read now, and says so.
+  assert.ok(
+    observed.get(drawn) === 'Observed 2026-08-26 12:00 UTC',
+    `the row on the page: ${observed.get(drawn)}`
+  );
+});
+
+test('a read supplies every value on the row it stamps', async () => {
+  // GitHub rendered the list row now and it says one thing; the advisory read
+  // the cache holds was taken two hours ago and says another. The row carries
+  // one observation time, so it carries what that observation said.
+  const source = {
+    row: {
+      ghsaId: 'GHSA-aaaa-aaaa-aaaa',
+      owner: 'observed-mix',
+      repo: 'repo',
+      href: '/observed-mix/repo/security/advisories/GHSA-aaaa-aaaa-aaaa',
+      title: 'What the list row says',
+      state: 'Triage',
+      severity: 'low',
+      severityLabel: 'Low',
+      openedAt: '2026-08-01T00:00:00Z',
+      reporter: 'prakleumas',
+    },
+    seenAt: AT,
+  };
+  const entry = {
+    record: parseDetail.parseDetail(
+      /** @type {Document} */ (
+        /** @type {unknown} */ (
+          parseHTML(detailHtml('GHSA-aaaa-aaaa-aaaa', 'Draft', 'Critical')).document
+        )
+      )
+    ),
+    observedAt: OBSERVED,
+    state: 'draft',
+  };
+
+  const row = await table.viewRow(source, entry, AT);
+
+  assert.ok(row.observedAt === OBSERVED, `the row was stamped ${row.observedAt}`);
+  assert.ok(row.state === 'Draft', `state: ${row.state}`);
+  assert.ok(row.severity === 'critical', `severity: ${row.severity}`);
+  assert.ok(row.severityLabel === 'Critical', `severity label: ${row.severityLabel}`);
+  // The read's page carries no title, so the list row is what fills that in:
+  // the read supplies what it holds and nothing is invented for what it does
+  // not.
+  assert.ok(row.title === 'What the list row says', `title: ${row.title}`);
+});
+
 test('a read lands in the row where it stands', async () => {
   const owner = 'crawl-place';
   const ghsaId = 'GHSA-aaaa-aaaa-aaaa';
@@ -797,6 +899,443 @@ test('an advisory observed four minutes ago is not read again', async () => {
     assert.ok(summary !== null && summary.read.skipped === 1, 'the fresh advisory was not skipped');
   } finally {
     clockAt = started;
+  }
+});
+
+/**
+ * Waits for the surface's own machinery to get somewhere. A test that drives the
+ * page rather than calling into it waits the way the page does: the observer
+ * delivers its records, the loop takes its delay, and the refresh runs on its
+ * own.
+ *
+ * @param {string} what What the surface was waited on to do, for the failure.
+ * @param {() => boolean} done
+ * @returns {Promise<void>}
+ */
+async function until(what, done) {
+  for (let round = 0; round < 400; round += 1) {
+    if (done()) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error(`the surface never ${what}`);
+}
+
+/**
+ * @returns {Promise<void>} long enough for a request the surface should not
+ *   send to have gone out if it were going to.
+ */
+async function quiet() {
+  for (let round = 0; round < 20; round += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
+test('a soft navigation to another repository crawls that repository', async () => {
+  const alpha = { owner: 'soft-nav-alpha', repo: 'repo' };
+  const beta = { owner: 'soft-nav-beta', repo: 'repo' };
+  const alphaBase = `/${alpha.owner}/${alpha.repo}/security/advisories`;
+  const betaBase = `/${beta.owner}/${beta.repo}/security/advisories`;
+  const alphaId = 'GHSA-aaaa-aaaa-aaaa';
+  const betaId = 'GHSA-cccc-cccc-cccc';
+  const alphaList = listHtml({ ...alpha, state: 'triage', ids: [alphaId] });
+  const betaList = listHtml({ ...beta, state: 'triage', ids: [betaId] });
+
+  /** @type {Record<string, string>} */
+  const pages = {
+    [`${alphaBase}?state=triage`]: alphaList,
+    [`${alphaBase}?state=draft`]: listHtml({ ...alpha, state: 'draft', ids: [] }),
+    [`${alphaBase}/${alphaId}`]: detailHtml(alphaId, 'Triage'),
+    [`${betaBase}?state=triage`]: betaList,
+    [`${betaBase}?state=draft`]: listHtml({ ...beta, state: 'draft', ids: [] }),
+    [`${betaBase}/${betaId}`]: detailHtml(betaId, 'Triage'),
+  };
+  /** @type {string[]} */
+  const urls = [];
+  /** @type {() => void} */
+  let release = () => {};
+  // The advisory read on the repository the page opened on does not answer
+  // until this test lets it, so the navigation happens with a pass in flight.
+  const holding = new Promise((resolve) => {
+    release = () => resolve(undefined);
+  });
+  /** @type {import('../src/common/write.js').WriteFetch} */
+  const send = async (url) => {
+    const asked = String(url);
+    urls.push(asked);
+    if (asked === `${alphaBase}/${alphaId}`) await holding;
+    const body = pages[asked];
+    if (body === undefined) return { status: 404, text: async () => '' };
+    return { status: 200, text: async () => body };
+  };
+
+  const doc = pageOf(alphaList);
+  const storage = fakeStorage();
+  cache.setStorage(storage);
+  const started = clockAt;
+  /** @type {MutationObserver | null} */
+  let observer = null;
+  try {
+    // The page as the content script finds it: one render loop, and an observer
+    // watching for GitHub replacing the frame.
+    const pass = table.passFor(doc, { storage, fetch: send, wait: advance });
+    observer = table.observe(doc, pass);
+    assert.ok(observer !== null, 'the document offered nothing to watch');
+    await pass();
+    await until('crawled the repository it opened on', () => urls.length === 3);
+    assert.deepStrictEqual(urls, [
+      `${alphaBase}?state=triage`,
+      `${alphaBase}?state=draft`,
+      `${alphaBase}/${alphaId}`,
+    ]);
+
+    // GitHub replaces the frame and keeps the document, and what is in it is
+    // another repository's advisory list. The pass on the repository the page
+    // left is still in flight.
+    one(doc, '#repo-content-turbo-frame').innerHTML = betaList;
+
+    await until('crawled the repository it navigated to', () => urls.length === 6);
+    assert.deepStrictEqual(urls.slice(3), [
+      `${betaBase}?state=triage`,
+      `${betaBase}?state=draft`,
+      `${betaBase}/${betaId}`,
+    ]);
+
+    release();
+    await until('filled the row it read', () => {
+      const drawn = tableRows(doc);
+      return drawn.length === 1 && chipLine(/** @type {Element} */ (drawn[0])) !== '';
+    });
+    await quiet();
+    const rows = tableRows(doc);
+    assert.deepStrictEqual(
+      rows.map((row) => row.getAttribute('data-bghsa-ghsa')),
+      [betaId],
+      'the table held an advisory from the repository the page left'
+    );
+    const chips = chipLine(/** @type {Element} */ (rows[0]));
+    assert.ok(chips === 'Never reviewed[danger] | High, unconfirmed', `chips: ${chips}`);
+  } finally {
+    release();
+    observer?.disconnect();
+    clockAt = started;
+  }
+});
+
+test('a list page reached again refreshes once the threshold has passed', async () => {
+  const ref = { owner: 'soft-nav-back', repo: 'repo' };
+  const base = `/${ref.owner}/${ref.repo}/security/advisories`;
+  const ghsaId = 'GHSA-aaaa-aaaa-aaaa';
+  const second = `${base}?state=triage&page=2`;
+  const list = listHtml({ ...ref, state: 'triage', ids: [ghsaId], next: second });
+  // Page two answers nothing, so the triage walk never reaches its last page
+  // and every crawl that runs asks for it again. That is what makes a second
+  // refresh visible: with every walk done and every advisory read, one would
+  // spend nothing and there would be nothing to count.
+  const walked = [`${base}?state=triage`, second, `${base}?state=draft`, `${base}/${ghsaId}`];
+
+  const doc = pageOf(list);
+  const storage = fakeStorage();
+  cache.setStorage(storage);
+  const fetch = fakeFetch({
+    [`${base}?state=triage`]: list,
+    [`${base}?state=draft`]: listHtml({ ...ref, state: 'draft', ids: [] }),
+    [`${base}/${ghsaId}`]: detailHtml(ghsaId, 'Triage'),
+  });
+
+  const started = clockAt;
+  /** @type {MutationObserver | null} */
+  let observer = null;
+  try {
+    const pass = table.passFor(doc, { storage, fetch: fetch.send, wait: advance });
+    observer = table.observe(doc, pass);
+    await pass();
+    await until('crawled the repository it opened on', () => fetch.urls.length === 4);
+    assert.deepStrictEqual(fetch.urls, walked);
+
+    // The maintainer opens an advisory and comes back, twice. Neither is a
+    // document load: the frame is replaced, and the table goes and comes back
+    // with it.
+    const frame = one(doc, '#repo-content-turbo-frame');
+    for (const round of [1, 2]) {
+      frame.innerHTML = '<div id="show_dialog"></div>';
+      await until(`took the table away, round ${round}`, () => {
+        return doc.getElementById(table.ROOT_ID) === null;
+      });
+      frame.innerHTML = list;
+      await until(`put the table back, round ${round}`, () => {
+        return doc.getElementById(table.ROOT_ID) !== null;
+      });
+      await quiet();
+      assert.deepStrictEqual(
+        fetch.urls,
+        walked,
+        `coming back inside the threshold spent a request, round ${round}`
+      );
+    }
+
+    // Six minutes on, the walks and the read are due again, and coming back to
+    // the list is what starts them.
+    clockAt += 6 * MINUTE;
+    frame.innerHTML = '<div id="show_dialog"></div>';
+    await until('took the table away again', () => doc.getElementById(table.ROOT_ID) === null);
+    frame.innerHTML = list;
+
+    await until('crawled the repository again', () => fetch.urls.length === 7);
+    assert.deepStrictEqual(fetch.urls.slice(4), [
+      second,
+      `${base}?state=draft`,
+      `${base}/${ghsaId}`,
+    ]);
+  } finally {
+    observer?.disconnect();
+    clockAt = started;
+  }
+});
+
+test('a pass stops when the page it is reading for goes to another repository', async () => {
+  const alpha = { owner: 'stop-alpha', repo: 'repo' };
+  const beta = { owner: 'stop-beta', repo: 'repo' };
+  const alphaBase = `/${alpha.owner}/${alpha.repo}/security/advisories`;
+  const betaBase = `/${beta.owner}/${beta.repo}/security/advisories`;
+  const first = 'GHSA-aaaa-aaaa-aaaa';
+  const second = 'GHSA-bbbb-bbbb-bbbb';
+  const betaId = 'GHSA-cccc-cccc-cccc';
+  const alphaList = listHtml({ ...alpha, state: 'triage', ids: [first, second] });
+  const betaList = listHtml({ ...beta, state: 'triage', ids: [betaId] });
+
+  /** @type {Record<string, string>} */
+  const pages = {
+    [`${alphaBase}?state=triage`]: alphaList,
+    [`${alphaBase}?state=draft`]: listHtml({ ...alpha, state: 'draft', ids: [] }),
+    [`${alphaBase}/${first}`]: detailHtml(first, 'Triage'),
+    [`${alphaBase}/${second}`]: detailHtml(second, 'Triage'),
+    [`${betaBase}?state=triage`]: betaList,
+    [`${betaBase}?state=draft`]: listHtml({ ...beta, state: 'draft', ids: [] }),
+    [`${betaBase}/${betaId}`]: detailHtml(betaId, 'Triage'),
+  };
+  /** @type {string[]} */
+  const urls = [];
+  /** @type {() => void} */
+  let release = () => {};
+  // The first advisory read on the repository the page opened on does not
+  // answer until this test lets it, so the navigation happens with a request in
+  // flight and a second advisory still queued behind it.
+  const holding = new Promise((resolve) => {
+    release = () => resolve(undefined);
+  });
+  /** @type {import('../src/common/write.js').WriteFetch} */
+  const send = async (url) => {
+    const asked = String(url);
+    urls.push(asked);
+    if (asked === `${alphaBase}/${first}`) await holding;
+    const body = pages[asked];
+    if (body === undefined) return { status: 404, text: async () => '' };
+    return { status: 200, text: async () => body };
+  };
+
+  const doc = pageOf(alphaList);
+  const storage = fakeStorage();
+  cache.setStorage(storage);
+  const started = clockAt;
+  /** @type {MutationObserver | null} */
+  let observer = null;
+  try {
+    const pass = table.passFor(doc, { storage, fetch: send, wait: advance });
+    observer = table.observe(doc, pass);
+    await pass();
+    await until('asked for the first advisory', () => urls.length === 3);
+
+    // GitHub replaces the frame and keeps the document, and what is in it is
+    // another repository's advisory list.
+    one(doc, '#repo-content-turbo-frame').innerHTML = betaList;
+    await until('crawled the repository it navigated to', () => urls.length === 6);
+
+    release();
+    await quiet();
+    assert.deepStrictEqual(
+      urls.filter((asked) => asked.startsWith(alphaBase)),
+      [`${alphaBase}?state=triage`, `${alphaBase}?state=draft`, `${alphaBase}/${first}`],
+      'the repository the page left went on spending requests'
+    );
+    assert.deepStrictEqual(
+      urls.filter((asked) => asked.startsWith(betaBase)),
+      [`${betaBase}?state=triage`, `${betaBase}?state=draft`, `${betaBase}/${betaId}`],
+      'the repository the page went to was not read through'
+    );
+    // The advisory the stopped pass had left is waiting where the next page
+    // load reads it, and the one it read is not.
+    const progress = await cache.getProgress(alpha, { storage, at: clockAt });
+    const held = fetchQueue.progressFrom(progress);
+    assert.deepStrictEqual(held === null ? null : held.pending, [second]);
+    assert.deepStrictEqual(held === null ? null : held.done, [first]);
+  } finally {
+    release();
+    observer?.disconnect();
+    clockAt = started;
+  }
+});
+
+test('a page left and come straight back to takes its pass back', async () => {
+  const ref = { owner: 'stop-and-back', repo: 'repo' };
+  const base = `/${ref.owner}/${ref.repo}/security/advisories`;
+  const first = 'GHSA-aaaa-aaaa-aaaa';
+  const second = 'GHSA-bbbb-bbbb-bbbb';
+  const page2 = `${base}?state=triage&page=2`;
+  const list = listHtml({ ...ref, state: 'triage', ids: [first, second], next: page2 });
+  // Page two answers nothing, so the triage walk never reaches its last page and
+  // the walk that comes back to this repository asks for that page again. What
+  // the pass left behind is a walk part way through as well as an advisory
+  // unread.
+  const walked = [`${base}?state=triage`, page2, `${base}?state=draft`];
+
+  /** @type {Record<string, string>} */
+  const pages = {
+    [`${base}?state=triage`]: list,
+    [`${base}?state=draft`]: listHtml({ ...ref, state: 'draft', ids: [] }),
+    [`${base}/${first}`]: detailHtml(first, 'Triage'),
+    [`${base}/${second}`]: detailHtml(second, 'Triage'),
+  };
+  /** @type {string[]} */
+  const urls = [];
+  /** @type {() => void} */
+  let release = () => {};
+  const holding = new Promise((resolve) => {
+    release = () => resolve(undefined);
+  });
+  /** @type {import('../src/common/write.js').WriteFetch} */
+  const send = async (url) => {
+    const asked = String(url);
+    urls.push(asked);
+    if (asked === `${base}/${first}`) await holding;
+    const body = pages[asked];
+    if (body === undefined) return { status: 404, text: async () => '' };
+    return { status: 200, text: async () => body };
+  };
+
+  const doc = pageOf(list);
+  const storage = fakeStorage();
+  cache.setStorage(storage);
+  const started = clockAt;
+  /** @type {MutationObserver | null} */
+  let observer = null;
+  try {
+    const pass = table.passFor(doc, { storage, fetch: send, wait: advance });
+    observer = table.observe(doc, pass);
+    await pass();
+    await until('asked for the first advisory', () => urls.length === 4);
+
+    // The maintainer opens something that is not an advisory list. The frame is
+    // replaced and the table goes with it, and the pass is reading for a page
+    // nobody is on.
+    const frame = one(doc, '#repo-content-turbo-frame');
+    frame.innerHTML = '<div id="show_dialog"></div>';
+    assert.ok(doc.getElementById(table.ROOT_ID) === null, 'the table went with the frame');
+    // Long enough for the surface to take the page in: the observer delivers
+    // its records and the loop takes its delay, and the stop lands on a pass
+    // whose request is still in flight.
+    await quiet();
+    release();
+    await quiet();
+    assert.deepStrictEqual(
+      urls,
+      [...walked, `${base}/${first}`],
+      'the pass went on reading a repository the page had left'
+    );
+
+    // Straight back to the list. The pass is taken back where it stopped: the
+    // walk carries on from the page it was holding, the advisory already read
+    // is in the cache and costs nothing, and the one never reached is read.
+    frame.innerHTML = list;
+    await until('read the advisory the pass had left', () => urls.length === 6);
+    await quiet();
+    assert.deepStrictEqual(
+      urls.slice(4),
+      [page2, `${base}/${second}`],
+      'coming back read something other than what was left'
+    );
+
+    await until('filled both rows', () => {
+      const drawn = tableRows(doc);
+      return drawn.length === 2 && drawn.every((row) => chipLine(row) !== '');
+    });
+  } finally {
+    release();
+    observer?.disconnect();
+    clockAt = started;
+  }
+});
+
+
+test('the surface puts the table on the document it is given', async () => {
+  const ref = { owner: 'soft-nav-start', repo: 'repo' };
+  const ghsaId = 'GHSA-aaaa-aaaa-aaaa';
+  const doc = pageOf(listHtml({ ...ref, state: 'triage', ids: [ghsaId] }));
+  const storage = fakeStorage();
+
+  /**
+   * @returns {import('../src/common/crawl.js').StateWalk} a walk that reached
+   *   its last page a moment ago, so nothing about it is due.
+   */
+  const finished = () => ({
+    next: null,
+    started: true,
+    complete: true,
+    startedAt: clockAt,
+    completedAt: clockAt,
+    pages: 1,
+    failures: 0,
+    stalled: false,
+    abandonedAt: 0,
+  });
+  await cache.putList(
+    ref,
+    { walks: { triage: finished(), draft: finished() }, rows: {} },
+    { storage, at: clockAt }
+  );
+  await cache.putAdvisory(
+    { ...ref, ghsaId },
+    { state: 'Triage', comments: [], timeline: [] },
+    { storage, at: clockAt }
+  );
+  cache.setStorage(storage);
+
+  // `start` reads the document off the global and the queue it makes reads the
+  // global fetch, because nothing on a page injects either. Everything here is
+  // fresh, so a surface that behaves sends nothing at all.
+  /** @type {string[]} */
+  const sent = [];
+  const held = Object.getOwnPropertyDescriptor(globalThis, 'fetch');
+  Object.defineProperty(globalThis, 'fetch', {
+    configurable: true,
+    writable: true,
+    value: async (/** @type {unknown} */ url) => {
+      sent.push(String(url));
+      throw new Error('the surface sent a request');
+    },
+  });
+  Object.defineProperty(globalThis, 'document', { configurable: true, writable: true, value: doc });
+  /** @type {MutationObserver | null} */
+  let observer = null;
+  try {
+    observer = table.start();
+    assert.ok(observer !== null, 'the surface watched nothing');
+    await until('put the table on the page', () => doc.getElementById(table.ROOT_ID) !== null);
+    await quiet();
+    assert.deepStrictEqual(sent, [], 'a surface holding fresh data sent a request');
+    assert.deepStrictEqual(
+      tableRows(doc).map((row) => row.getAttribute('data-bghsa-ghsa')),
+      [ghsaId]
+    );
+  } finally {
+    observer?.disconnect();
+    // @ts-expect-error the global is put back the way it was found.
+    delete globalThis.document;
+    if (held === undefined) {
+      // @ts-expect-error as above.
+      delete globalThis.fetch;
+    } else {
+      Object.defineProperty(globalThis, 'fetch', held);
+    }
   }
 });
 
@@ -1226,7 +1765,7 @@ test('every filter reads the fixture the cache holds', async () => {
   const source = parsed.rows[0];
   if (source === undefined) throw new Error('the fixture carries no row');
 
-  const read = await table.viewRow(source, entryOf(TRIAGE_RECORD, 'triage'), AT);
+  const read = await table.viewRow({ row: source, seenAt: AT }, entryOf(TRIAGE_RECORD, 'triage'), AT);
   assert.ok(
     facetLine(read) ===
       'waiting=Blocked on the reporter severity=High owner=samuelkarp reporter=prakleumas' +
@@ -1332,10 +1871,14 @@ function tableOver(rows) {
   const doc = listPage('list-page-triage.html');
   cache.setStorage(fakeStorage());
   table.setViewState(doc, table.defaultViewState());
-  /** @type {Map<string, import('../src/common/parse-list.js').ListRow>} */
+  /** @type {Map<string, import('../src/list/table.js').RowSource>} */
   const sources = new Map();
   for (const row of rows) {
-    if (row.ghsaId !== null) sources.set(row.ghsaId, listRow(row.ghsaId, '2026-08-01T00:00:00Z'));
+    if (row.ghsaId === null) continue;
+    sources.set(row.ghsaId, {
+      row: listRow(row.ghsaId, '2026-08-01T00:00:00Z'),
+      seenAt: AT,
+    });
   }
   const root = table.injectTable(doc, { rows: rows.slice(), at: AT, sources });
   if (root === null) throw new Error('the page offered no anchor');

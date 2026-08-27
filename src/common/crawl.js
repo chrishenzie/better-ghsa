@@ -32,6 +32,13 @@ if (typeof require === 'function') {
  * @property {number} completedAt When it reached the last page, and 0 while it
  *   has not.
  * @property {number} pages How many pages it has read.
+ * @property {number} failures How many times in a row reading {@link next}
+ *   failed. A page that lands puts it back to none.
+ * @property {boolean} stalled Whether the walk gave up on the page it was
+ *   holding. It did not reach the last page, so it is not complete, and it
+ *   prunes nothing; the next walk of that state to fall due starts from the
+ *   first page.
+ * @property {number} abandonedAt When it gave up, and 0 while it has not.
  */
 
 /**
@@ -87,6 +94,24 @@ if (typeof require === 'function') {
    * page holds twenty-five.
    */
   const MAX_PAGES = 50;
+
+  /**
+   * How many times in a row a walk may fail to read the page it is holding
+   * before it gives that page up.
+   *
+   * A page that fails once is a network on a bad day, and the walk keeps its
+   * place so the next page load asks for that page and no page before it. A
+   * page that fails every time is one GitHub will not serve at all, and a walk
+   * holding one never reaches its last page: it prunes nothing, so an advisory
+   * that left the state stays on the table, and it spends a dead request on
+   * every page load for as long as the record lasts.
+   *
+   * The walk that gives up has not finished and does not say it has. It drops
+   * the page it could not read, and the next walk of that state to fall due
+   * starts from the first page, following the links the pages themselves carry.
+   * That is what clears a stored page that has gone out of range.
+   */
+  const MAX_FAILURES = 3;
 
   /**
    * @param {unknown} value
@@ -203,6 +228,9 @@ if (typeof require === 'function') {
       startedAt: timeOf(value.startedAt),
       completedAt: timeOf(value.completedAt),
       pages: Math.max(0, Math.trunc(timeOf(value.pages))),
+      failures: Math.max(0, Math.trunc(timeOf(value.failures))),
+      stalled: value.stalled === true,
+      abandonedAt: timeOf(value.abandonedAt),
     };
   }
 
@@ -249,6 +277,9 @@ if (typeof require === 'function') {
         startedAt: 0,
         completedAt: 0,
         pages: 0,
+        failures: 0,
+        stalled: false,
+        abandonedAt: 0,
       }
     );
   }
@@ -325,14 +356,53 @@ if (typeof require === 'function') {
    * @param {string} state
    * @param {number} at
    * @returns {boolean} whether that state is worth walking now: it has never
-   *   been walked, a walk of it stopped part way, or the last walk finished
-   *   longer ago than the staleness threshold.
+   *   been walked, a walk of it stopped part way, the last walk finished longer
+   *   ago than the staleness threshold, or a walk gave up that long ago.
    */
   function isDue(list, state, at) {
     const walk = walkOf(list, state);
+    // A walk that gave up waits out the staleness threshold before it starts
+    // over, so a state whose pages GitHub refuses costs one attempt a threshold
+    // and not one a page load.
+    if (walk.stalled) return at - walk.abandonedAt >= globalThis.bghsa.cache.STALE_MS;
     if (!walk.started) return true;
     if (!walk.complete) return true;
     return at - walk.completedAt >= globalThis.bghsa.cache.STALE_MS;
+  }
+
+  /**
+   * Records that a walk could not read the page it is holding, and gives that
+   * page up once the attempts are spent.
+   *
+   * @param {CrawledList} list
+   * @param {string} state
+   * @param {number} at
+   * @returns {boolean} whether the walk gave up.
+   */
+  function noteFailure(list, state, at) {
+    const walk = walkOf(list, state);
+    const failures = walk.failures + 1;
+    const stalled = failures >= MAX_FAILURES;
+    list.walks[state] = {
+      ...walk,
+      next: stalled ? null : walk.next,
+      failures,
+      stalled,
+      abandonedAt: stalled ? at : walk.abandonedAt,
+    };
+    return stalled;
+  }
+
+  /**
+   * @param {CrawledList} list
+   * @param {string} state
+   * @returns {boolean} whether a walk of that state is under way: it started, it
+   *   has not reached its last page, and it has not given up, so it is holding a
+   *   page still to read.
+   */
+  function inProgress(list, state) {
+    const walk = walkOf(list, state);
+    return walk.started && !walk.complete && !walk.stalled;
   }
 
   /**
@@ -340,6 +410,12 @@ if (typeof require === 'function') {
    * now at no request cost, and where it is the first page of its state the walk
    * of that state starts from it rather than asking GitHub for a page it already
    * has.
+   *
+   * A walk already under way carries on from the page it had reached. Page one
+   * is the common way back to a list, and starting the walk over there would
+   * ask GitHub again for every page between one and the page the walk was
+   * holding. The rows on the page are still taken in, so coming back to page
+   * one costs nothing and gains what the page shows.
    *
    * @param {CrawledList} list
    * @param {import('./parse-list.js').ParsedList} parsed
@@ -354,6 +430,7 @@ if (typeof require === 'function') {
       selected !== null &&
       where.states.includes(selected) &&
       where.page === 1 &&
+      !inProgress(list, selected) &&
       isDue(list, selected, at)
     ) {
       const next = advisoriesPath(parsed.next?.href, where.ref);
@@ -364,6 +441,9 @@ if (typeof require === 'function') {
         startedAt: at,
         completedAt: next === null ? at : 0,
         pages: 1,
+        failures: 0,
+        stalled: false,
+        abandonedAt: 0,
       };
     }
 
@@ -457,10 +537,16 @@ if (typeof require === 'function') {
 
     let fetched = 0;
     let failed = 0;
+    // Set when the queue reports the work stopped. The states left are not
+    // walked: the queue answers every further read the same way, and each walk
+    // stands where it stands until a page load takes the work back.
+    let stopped = false;
 
     for (const state of states) {
+      if (stopped) break;
       if (!isDue(list, state, clock())) continue;
-      if (!walkOf(list, state).started || walkOf(list, state).complete) {
+      const held = walkOf(list, state);
+      if (!held.started || held.complete || held.stalled) {
         list.walks[state] = {
           next: listUrl(ref, state),
           started: true,
@@ -468,6 +554,9 @@ if (typeof require === 'function') {
           startedAt: clock(),
           completedAt: 0,
           pages: 0,
+          failures: 0,
+          stalled: false,
+          abandonedAt: 0,
         };
         await persist();
       }
@@ -478,10 +567,21 @@ if (typeof require === 'function') {
         if (walk.complete || url === null) break;
 
         const answer = await options.queue.page(url);
+        if (answer.stopped) {
+          // Nothing was asked of GitHub, so nothing is known about the page the
+          // walk is holding. The work was put down and will be taken back, and
+          // the walk keeps its place as it does across any other interruption:
+          // no attempt spent, and the next page load asks for this same page.
+          stopped = true;
+          break;
+        }
         if (answer.body === null) {
           // The page the walk had reached stays in the record, so the next page
-          // load asks for that one and for no page before it.
+          // load asks for that one and for no page before it. A page that has
+          // failed its attempts is given up on instead.
           failed += 1;
+          noteFailure(list, state, clock());
+          await persist();
           fail(state, url, answer.reason);
           break;
         }
@@ -490,6 +590,8 @@ if (typeof require === 'function') {
         const page = parse(answer.body);
         if (page === null) {
           failed += 1;
+          noteFailure(list, state, clock());
+          await persist();
           fail(state, url, 'The page did not read as an advisory list.');
           break;
         }
@@ -506,6 +608,9 @@ if (typeof require === 'function') {
           startedAt: walk.startedAt,
           completedAt: complete ? at : 0,
           pages,
+          failures: 0,
+          stalled: false,
+          abandonedAt: 0,
         };
         // A walk that gave up at the page bound has not seen the whole state, so
         // what it did not see this time is not gone.
@@ -527,6 +632,7 @@ if (typeof require === 'function') {
 
   const exported = {
     MAX_PAGES,
+    MAX_FAILURES,
     stateKeyOf,
     listUrl,
     advisoriesPath,
@@ -539,6 +645,8 @@ if (typeof require === 'function') {
     rowsIn,
     idsIn,
     isDue,
+    inProgress,
+    noteFailure,
     seed,
     crawl,
   };
