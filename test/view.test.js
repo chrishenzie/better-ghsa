@@ -943,3 +943,41 @@ test('a second visit to the done view spends no request on the corpus', async ()
   assert.strictEqual(held?.members.length, 3, 'and it still drew the whole corpus');
   assert.deepStrictEqual(held?.unread, [], 'every row backed by a read, from the cache alone');
 });
+
+test("a corpus is not drawn under the repository the maintainer moved to", async () => {
+  const other = { owner: 'git-utensils', repo: 'Fork-Knife' };
+  const doc = await page(await cachedCorpus([{ ghsaId: ghsa('nnnn'), state: 'closed' }]));
+  assert.strictEqual(
+    doc.querySelectorAll(`#${view.ROOT_ID} li.bghsa-done-row`).length,
+    1,
+    'the corpus is drawn on the repository it was collected on'
+  );
+  assert.strictEqual(table.refOf(doc)?.repo, REF.repo, 'which is the one the page names');
+
+  // GitHub replaces the turbo frame on a soft navigation and keeps the
+  // document. The page now names another repository.
+  one(doc, '#repo-content-turbo-frame').innerHTML = listHtml({
+    state: 'published',
+    ids: [ghsa('oooo')],
+  }).replaceAll(`/${REF.owner}/${REF.repo}/`, `/${other.owner}/${other.repo}/`);
+  const root = await table.render(doc);
+  if (root === null) throw new Error('the page offered no anchor');
+  assert.strictEqual(table.refOf(doc)?.repo, other.repo, 'the page names the repository moved to');
+
+  assert.strictEqual(
+    doc.querySelectorAll(`#${view.ROOT_ID} li.bghsa-done-row`).length,
+    0,
+    "the previous repository's rows are drawn under the new page"
+  );
+  assert.strictEqual(
+    textOf(doc, `#${view.ROOT_ID} .bghsa-done-count`),
+    '0 advisories',
+    'and its count with them'
+  );
+  assert.ok(
+    one(doc, `#${view.ROOT_ID} button.bghsa-done-export`).hasAttribute('disabled'),
+    'and the export offers a file of them'
+  );
+  assert.strictEqual(view.exportCsv(doc), null, 'a file of them can still be asked for');
+  assert.strictEqual(view.stateOf(doc).corpus, null, 'the view is still holding them');
+});

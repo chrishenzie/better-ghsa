@@ -186,6 +186,40 @@ if (typeof require === 'function') {
     return next;
   }
 
+  /** Which repository the list surface says the page is on. */
+  const refOf = globalThis.bghsa.table.refOf;
+
+  /**
+   * @param {Document} doc
+   * @param {{ owner: string, repo: string }} ref
+   * @returns {boolean} whether the page still names that repository.
+   */
+  function names(doc, ref) {
+    const table = globalThis.bghsa.table;
+    const here = refOf(doc);
+    return here !== null && table.refKey(here) === table.refKey(ref);
+  }
+
+  /**
+   * What the view holds for this document, with a corpus collected on a
+   * repository the page no longer names dropped.
+   *
+   * GitHub replaces the turbo frame on a soft navigation and keeps the
+   * document, so one document covers one repository's advisory list and then
+   * another's. A corpus is a hundred-odd advisories of one repository, and the
+   * rows, the statistics and the export built from it say nothing about the
+   * next one. What the view holds is therefore keyed to the repository, as the
+   * list surface's refresh is.
+   *
+   * @param {Document} doc
+   * @returns {Held}
+   */
+  function current(doc) {
+    const state = stateOf(doc);
+    if (state.ref === null || names(doc, state.ref)) return state;
+    return setState(doc, { corpus: null, ref: null });
+  }
+
   /** How every surface builds an element. */
   const element = globalThis.bghsa.dom.element;
 
@@ -345,7 +379,7 @@ if (typeof require === 'function') {
    *   where the view holds no read of that advisory.
    */
   async function setReason(doc, ghsaId, reason, options) {
-    const corpus = stateOf(doc).corpus;
+    const corpus = current(doc).corpus;
     const advisory = corpus === null ? null : (memberOf(corpus, ghsaId)?.advisory ?? null);
     if (advisory === null || advisory.ref === null) {
       notes.set(ghsaId, { ok: false, message: UNREADABLE_MESSAGE });
@@ -664,10 +698,10 @@ if (typeof require === 'function') {
    * advisories.
    *
    * @param {Document} doc
-   * @param {Held} state
    * @returns {Element}
    */
-  function buildView(doc, state) {
+  function buildView(doc) {
+    const state = current(doc);
     const root = element(doc, 'div', 'Box mb-3 bghsa-done-box');
     root.id = ROOT_ID;
     root.setAttribute('data-bghsa-done', '1');
@@ -710,7 +744,7 @@ if (typeof require === 'function') {
    *   there is nothing to write or no way to hand it over.
    */
   function exportCsv(doc, options) {
-    const state = stateOf(doc);
+    const state = current(doc);
     if (state.corpus === null || state.ref === null) return null;
     const csv = globalThis.bghsa.csv;
     const at = globalThis.bghsa.cache.now();
@@ -752,7 +786,7 @@ if (typeof require === 'function') {
     const table = globalThis.bghsa.table;
     const surface = doc.getElementById(table.ROOT_ID);
     if (surface === null) return null;
-    const root = buildView(doc, stateOf(doc));
+    const root = buildView(doc);
     const existing = doc.getElementById(ROOT_ID);
     if (existing !== null) existing.replaceWith(root);
     else surface.append(root);
@@ -841,6 +875,7 @@ if (typeof require === 'function') {
     const listener = (ghsaId, entry) => {
       // A read landing fills one member in where it stands, so the corpus grows
       // current under the reader rather than in one jump at the end.
+      if (!names(doc, ref)) return;
       const corpus = stateOf(doc).corpus;
       if (corpus === null) return;
       const member = memberOf(corpus, ghsaId);
@@ -867,12 +902,15 @@ if (typeof require === 'function') {
         storage: options.storage,
         now: options.now,
         onPage: (corpus) => {
+          // A page landing after the maintainer has gone to another repository
+          // is a page of the one they left.
+          if (!names(doc, ref)) return;
           setState(doc, { corpus });
           draw(doc);
         },
       })
       .then((collected) => {
-        setState(doc, { corpus: collected.corpus });
+        if (names(doc, ref)) setState(doc, { corpus: collected.corpus });
         return collected.corpus;
       })
       .finally(() => {
@@ -905,6 +943,7 @@ if (typeof require === 'function') {
     notes,
     stateOf,
     setState,
+    current,
     nameOf,
     formatDuration,
     formatRatio,

@@ -275,3 +275,33 @@ test('the download is a blob made in the page, taken by a synthetic anchor', asy
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.deepStrictEqual(dropped, ['blob:https://github.com/0'], 'and is released after it');
 });
+
+test('a page with nowhere to press leaves no blob URL behind', () => {
+  /** @type {string[]} */
+  const made = [];
+  /** @type {string[]} */
+  const dropped = [];
+  const nowhere = /** @type {Document} */ (
+    /** @type {unknown} */ ({
+      body: null,
+      documentElement: null,
+      /** @param {string} tag */
+      createElement: (tag) => {
+        throw new Error(`nothing should have been built: ${tag}`);
+      },
+    })
+  );
+
+  const url = csv.download(nowhere, 'corpus.csv', 'ghsa_id\r\n', {
+    Blob: /** @type {typeof globalThis.Blob} */ (/** @type {unknown} */ (class {})),
+    createObjectURL: () => {
+      made.push('blob:https://github.com/leaked');
+      return 'blob:https://github.com/leaked';
+    },
+    revokeObjectURL: (each) => dropped.push(each),
+  });
+
+  assert.strictEqual(url, null, 'a file was reported handed over');
+  assert.deepStrictEqual(made, [], 'a blob URL nothing can release was made');
+  assert.deepStrictEqual(dropped, [], 'and nothing was released, because nothing was made');
+});

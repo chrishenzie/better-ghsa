@@ -177,13 +177,16 @@ if (typeof require === 'function') {
     const drop = options.revokeObjectURL ?? ((url) => urls.revokeObjectURL(url));
     const BlobType = options.Blob ?? globalThis.Blob;
     if (typeof BlobType !== 'function') return null;
+    // A blob URL holds the file in memory until it is released, and nothing
+    // releases one the page never handed over, so it is made once the press
+    // has somewhere to happen.
+    const host = doc.body ?? doc.documentElement;
+    if (host === null) return null;
     const url = make(new BlobType([text], { type: MIME }));
     const anchor = doc.createElement('a');
     anchor.setAttribute('href', url);
     anchor.setAttribute('download', name);
     anchor.setAttribute('hidden', '');
-    const host = doc.body ?? doc.documentElement;
-    if (host === null) return null;
     host.append(anchor);
     /** @type {{ click?: () => void }} */ (/** @type {unknown} */ (anchor)).click?.();
     anchor.remove();
