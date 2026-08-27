@@ -83,6 +83,19 @@ if (typeof require === 'function') {
   const DRAFT_EVENT = /\baccepted this report\b/;
 
   /**
+   * What a timeline event reads when an advisory is closed.
+   *
+   * A maintainer closes an advisory through the comment box, so the page words
+   * a close one way, and REQUIREMENTS.md section 1 records that closing an
+   * advisory stores no reason, so there is no wording that names why.
+   *
+   * The phrase is matched whole, for the reason {@link DRAFT_EVENT} is. A
+   * timeline carries other events opening with the same verb, and a match on
+   * the verb alone would take whichever came first and read the wrong instant.
+   */
+  const CLOSE_EVENT = /\bclosed this\b/;
+
+  /**
    * The timings this reader computes, and what each is measured between.
    *
    * @type {readonly { key: string, name: string }[]}
@@ -90,30 +103,19 @@ if (typeof require === 'function') {
   const TIMINGS = [
     { key: 'firstResponse', name: 'Report to first response' },
     { key: 'reportToDraft', name: 'Report to draft' },
+    { key: 'reportToClose', name: 'Report to close' },
   ];
 
   /**
-   * The section 10 timing this reader does not compute, and why.
+   * The section 10 timings this reader does not compute, each naming why.
    *
-   * Time from report to close needs the moment an advisory was closed. Nothing
-   * this extension reads carries it. The timeline records the events that
-   * happen on the way, an acceptance and a publication among them, and the page
-   * header names who last moved the advisory, but on a draft advisory that
-   * header still reads as the report. No advisory this extension has parsed was
-   * closed, so nothing establishes what a closed one shows.
-   *
-   * Section 10 omits a metric whose event is not observable and does not
-   * estimate it, so this one is named here and left uncomputed. Substituting
-   * the last event on the page, or the moment the crawl first saw the advisory
-   * in the closed state, would be an estimate wearing a measurement's name.
+   * All three of section 10's timings are read from the page, so this is empty.
+   * A timing whose event stops being observable is named here with its reason,
+   * and section 10 leaves it out of the statistics rather than estimating it.
    *
    * @type {Readonly<Record<string, string>>}
    */
-  const UNCOMPUTED = {
-    reportToClose:
-      'The advisory page carries no event this extension reads as the close, so the time from ' +
-      'report to close is not measured.',
-  };
+  const UNCOMPUTED = {};
 
   /** The fingerprints a track read needs, where no value is being judged. */
   const NO_FINGERPRINTS = { title: null, description: null, scoring: null };
@@ -196,6 +198,30 @@ if (typeof require === 'function') {
     let earliest = null;
     for (const event of advisory.timeline) {
       if (!DRAFT_EVENT.test(event.text)) continue;
+      const at = instantOf(event.at);
+      if (at === null) continue;
+      if (earliest === null || at < earliest) earliest = at;
+    }
+    return earliest;
+  }
+
+  /**
+   * When the advisory was closed.
+   *
+   * The earliest close is the one taken, the same as the earliest acceptance
+   * is: an advisory closed, reopened, and closed again is measured to the close
+   * that first resolved it.
+   *
+   * @param {import('../common/parse-detail.js').ParsedDetail} advisory
+   * @returns {number | null} the instant, and null where the timeline records
+   *   no close. An advisory nothing closed contributes to no timing, and not a
+   *   duration of zero.
+   */
+  function closeAt(advisory) {
+    /** @type {number | null} */
+    let earliest = null;
+    for (const event of advisory.timeline) {
+      if (!CLOSE_EVENT.test(event.text)) continue;
       const at = instantOf(event.at);
       if (at === null) continue;
       if (earliest === null || at < earliest) earliest = at;
@@ -311,6 +337,8 @@ if (typeof require === 'function') {
     const firstResponses = [];
     /** @type {(number | null)[]} */
     const drafts = [];
+    /** @type {(number | null)[]} */
+    const closes = [];
 
     for (const member of held.members) {
       const advisory = member.advisory;
@@ -321,6 +349,7 @@ if (typeof require === 'function') {
       months.push(monthOf(advisory?.reportedAt ?? member.row.openedAt));
       firstResponses.push(durationOf(advisory, firstResponseAt));
       drafts.push(durationOf(advisory, draftAt));
+      closes.push(durationOf(advisory, closeAt));
     }
 
     return {
@@ -337,6 +366,7 @@ if (typeof require === 'function') {
       timings: {
         firstResponse: timing(firstResponses, over),
         reportToDraft: timing(drafts, over),
+        reportToClose: timing(closes, over),
       },
       uncomputed: { ...UNCOMPUTED },
     };
@@ -344,12 +374,14 @@ if (typeof require === 'function') {
 
   const exported = {
     DRAFT_EVENT,
+    CLOSE_EVENT,
     TIMINGS,
     UNCOMPUTED,
     monthOf,
     closureReasonOf,
     firstResponseAt,
     draftAt,
+    closeAt,
     durationOf,
     tally,
     timing,

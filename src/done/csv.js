@@ -49,6 +49,7 @@ if (typeof require === 'function') {
     'month',
     'first_response_ms',
     'report_to_draft_ms',
+    'report_to_close_ms',
     'read',
     'observed_at',
   ];
@@ -119,6 +120,7 @@ if (typeof require === 'function') {
       month: stats.monthOf(advisory?.reportedAt ?? member.row.openedAt),
       first_response_ms: stats.durationOf(advisory, stats.firstResponseAt),
       report_to_draft_ms: stats.durationOf(advisory, stats.draftAt),
+      report_to_close_ms: stats.durationOf(advisory, stats.closeAt),
       read: advisory === null ? 'no' : 'yes',
       observed_at: stampOf(member.observedAt),
     };

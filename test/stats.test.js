@@ -25,6 +25,19 @@ function fixture(name) {
 }
 
 /**
+ * @param {string} name
+ * @returns {import('../src/common/parse-detail.js').TimelineEvent[]} the
+ *   timeline that fixture's region holds. A fixture is kept to the one region a
+ *   test reads, and a timeline region carries no page header for `parseDetail`
+ *   to recognize.
+ */
+function timelineFixture(name) {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'testdata', name), 'utf8');
+  const doc = /** @type {Document} */ (/** @type {unknown} */ (parseHTML(html).document));
+  return parseDetail.parseTimeline(doc);
+}
+
+/**
  * An advisory in the shape the parser produces, carrying only what a statistic
  * reads. Everything else is what an advisory with nothing on it holds.
  *
@@ -258,23 +271,110 @@ test('an advisory whose report time went unread yields no duration', () => {
   assert.strictEqual(stats.durationOf(held, stats.draftAt), null);
 });
 
-test('time from report to close is named uncomputed and is no timing', () => {
+test('the close is the close event the timeline records', () => {
+  const timeline = timelineFixture('invented-close-timeline.html');
+  const held = advisory({ reportedAt: '2026-08-24T16:19:16Z', timeline });
+  assert.strictEqual(stats.closeAt(held), Date.parse('2026-08-24T19:21:00Z'));
+  // 16:19:16 to 19:21:00 is three hours, one minute, and forty-four seconds.
+  assert.strictEqual(stats.durationOf(held, stats.closeAt), 10904 * 1000);
+});
+
+test('an advisory whose timeline records no close has no close time', () => {
+  const held = advisory({
+    reportedAt: '2026-08-24T16:19:16Z',
+    timeline: timelineFixture('invented-close-timeline.html').filter(
+      (entry) => !/closed this/.test(entry.text)
+    ),
+  });
+  assert.strictEqual(held.timeline.length, 4, 'the other four events are still there');
+  assert.strictEqual(stats.closeAt(held), null);
+  assert.strictEqual(stats.durationOf(held, stats.closeAt), null);
+});
+
+test('an advisory closed twice is measured to the close that first resolved it', () => {
+  const held = advisory({
+    reportedAt: '2026-08-24T16:19:16Z',
+    timeline: [
+      event({ at: '2026-08-26T19:21:00Z', text: 'brackenhollow closed this Aug 26, 2026' }),
+      event({ at: '2026-08-24T19:21:00Z', text: 'brackenhollow closed this Aug 24, 2026' }),
+    ],
+  });
+  assert.strictEqual(stats.closeAt(held), Date.parse('2026-08-24T19:21:00Z'));
+  assert.strictEqual(stats.durationOf(held, stats.closeAt), 10904 * 1000);
+});
+
+/**
+ * A capture of a real closed advisory, read from the path in
+ * `BGHSA_CLOSED_ADVISORY_CAPTURE`. A closed advisory is not published: its
+ * title, its participants, and its timeline are all private, so no such capture
+ * is committed here and the variable points at a file outside the repository.
+ * With the variable unset the check skips, which is what a clone of this
+ * repository sees. With it set, a path that does not exist or does not read as
+ * an advisory fails the check, so a mistyped path cannot pass for a check that
+ * ran. The assertions are instants only, so nothing the capture holds is
+ * written down here or printed by a failure.
+ *
+ * `docs/testing.md` describes the variable.
+ */
+const CAPTURE_VAR = 'BGHSA_CLOSED_ADVISORY_CAPTURE';
+const CAPTURE_SET = Object.prototype.hasOwnProperty.call(process.env, CAPTURE_VAR);
+const CAPTURE = process.env[CAPTURE_VAR] ?? '';
+
+test(
+  'the close reads the same on a real closed advisory',
+  {
+    skip: CAPTURE_SET
+      ? false
+      : `set ${CAPTURE_VAR} to a capture of a closed advisory to run this`,
+  },
+  () => {
+    assert.ok(
+      fs.existsSync(CAPTURE),
+      `${CAPTURE_VAR} names no file: ${JSON.stringify(CAPTURE)}`
+    );
+    const html = fs.readFileSync(CAPTURE, 'utf8');
+    const doc = /** @type {Document} */ (/** @type {unknown} */ (parseHTML(html).document));
+    const held = parseDetail.parseDetail(doc);
+    assert.ok(held !== null, `${CAPTURE_VAR} names a file that does not read as an advisory`);
+    assert.strictEqual(
+      held.timeline.filter((entry) => stats.CLOSE_EVENT.test(entry.text)).length,
+      1,
+      'one event on the real timeline reads as the close, and no other'
+    );
+    assert.strictEqual(held.reportedAt, '2026-08-24T16:19:16Z');
+    assert.strictEqual(stats.closeAt(held), Date.parse('2026-08-24T19:21:00Z'));
+    assert.strictEqual(stats.durationOf(held, stats.closeAt), 10904 * 1000);
+  }
+);
+
+test('time from report to close is a timing, and nothing is left uncomputed', () => {
+  const timeline = timelineFixture('invented-close-timeline.html');
   const summary = stats.summarize(
     corpusOf([
       member({
         ghsaId: 'GHSA-aaaa-aaaa-aaaa',
         state: 'closed',
-        advisory: advisory({ state: 'Closed', reportedAt: '2026-04-01T00:00:00Z' }),
+        advisory: advisory({ state: 'Closed', reportedAt: '2026-08-24T16:19:16Z', timeline }),
+      }),
+      member({
+        ghsaId: 'GHSA-bbbb-bbbb-bbbb',
+        state: 'closed',
+        advisory: advisory({ state: 'Closed', reportedAt: '2026-08-24T16:19:16Z' }),
       }),
     ])
   );
-  assert.deepStrictEqual(Object.keys(summary.timings).sort(), ['firstResponse', 'reportToDraft']);
-  assert.ok(
-    !Object.hasOwn(summary.timings, 'reportToClose'),
-    'a metric with no observable event is not a timing of zero'
+  assert.deepStrictEqual(Object.keys(summary.timings).sort(), [
+    'firstResponse',
+    'reportToClose',
+    'reportToDraft',
+  ]);
+  assert.deepStrictEqual(summary.timings.reportToClose?.values, [10904 * 1000]);
+  assert.strictEqual(
+    summary.timings.reportToClose?.omitted,
+    1,
+    'the advisory with no close event contributes nothing, and not a zero'
   );
-  assert.ok(Object.hasOwn(summary.uncomputed, 'reportToClose'), 'and it is named, with a reason');
-  assert.match(summary.uncomputed.reportToClose ?? '', /report to close is not measured/);
+  assert.deepStrictEqual(summary.uncomputed, {});
   assert.deepStrictEqual(
     stats.TIMINGS.map((entry) => entry.key),
     Object.keys(summary.timings)

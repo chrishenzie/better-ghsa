@@ -654,18 +654,36 @@ test('a statistic over a partly-read corpus says what it is over', async () => {
   );
 });
 
-test('the timing this extension cannot observe is named, not shown as zero', async () => {
-  const doc = await page(corpusOf([member({ ghsaId: ghsa('hhhh'), state: 'closed' })]));
-  const line = one(doc, '[data-bghsa-uncomputed="reportToClose"]');
-  assert.strictEqual(textOf(line, 'span.text-bold'), 'Report to close:');
-  assert.ok(
-    (line.textContent ?? '').includes('is not measured'),
-    `the reason the view gives: ${line.textContent}`
+test('the time from report to close is drawn with the other timings', async () => {
+  const closed = advisory({
+    ghsaId: ghsa('hhhh'),
+    state: 'Closed',
+    reportedAt: '2026-03-02T00:00:00Z',
+    timeline: [
+      {
+        id: 'event-1',
+        actor: 'brackenhollow',
+        at: '2026-03-04T00:00:00Z',
+        text: 'brackenhollow closed this Mar 4, 2026',
+      },
+    ],
+  });
+  const doc = await page(
+    corpusOf([member({ ghsaId: ghsa('hhhh'), state: 'closed', advisory: closed })])
   );
+  const close = one(doc, '[data-bghsa-timing="reportToClose"]');
+  assert.strictEqual(textOf(close, '.text-bold'), 'Report to close');
+  assert.strictEqual(textOf(close, '.bghsa-done-meta'), '1 of 1, 0 omitted');
+  assert.deepStrictEqual(textsOf(close, '.bghsa-done-spread span.bghsa-done-value'), [
+    '2d 0h',
+    '2d 0h',
+    '2d 0h',
+    '2d 0h',
+  ]);
   assert.strictEqual(
-    doc.querySelector('[data-bghsa-timing="reportToClose"]'),
+    doc.querySelector('.bghsa-done-uncomputed'),
     null,
-    'and it is not among the timings, so no number stands for it'
+    'and nothing is named as unavailable, because nothing is'
   );
 });
 
@@ -909,7 +927,7 @@ test('the export is the corpus, written here in the page', async () => {
   assert.strictEqual(lines[0], csv.COLUMNS.join(','));
   assert.strictEqual(
     lines[1],
-    `${ghsa('jjjj')},A published advisory,published,high,,2026-03-02T00:00:00Z,2026-03,,,no,`
+    `${ghsa('jjjj')},A published advisory,published,high,,2026-03-02T00:00:00Z,2026-03,,,,no,`
   );
 });
 
