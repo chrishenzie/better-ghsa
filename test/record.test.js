@@ -51,3 +51,31 @@ test('a cache record carries the advisory the parser read', () => {
   assert.strictEqual(advisory.fork?.pullRequests[0]?.baseRef, 'main');
   assert.deepStrictEqual(advisory.collaborators, ['prakleumas']);
 });
+
+test('a cache record names the advisory a write from it goes to', () => {
+  const advisory = record.advisoryFrom({
+    ref: { owner: 'git-utensils', repo: 'Spoon-Knife', ghsaId: 'GHSA-jmvx-2wfw-xfgj' },
+    ghsaId: 'GHSA-jmvx-2wfw-xfgj',
+    comments: [],
+    timeline: [],
+  });
+  if (advisory === null) throw new Error('the record did not read as an advisory');
+  assert.strictEqual(advisory.ref?.owner, 'git-utensils');
+  assert.strictEqual(advisory.ref?.repo, 'Spoon-Knife');
+  assert.strictEqual(advisory.ref?.ghsaId, 'GHSA-jmvx-2wfw-xfgj');
+});
+
+test('a cache record naming half an advisory names none', () => {
+  const half = { comments: [], timeline: [] };
+  assert.strictEqual(
+    record.advisoryFrom({ ...half, ref: { owner: 'git-utensils', repo: 'Spoon-Knife' } })?.ref,
+    null,
+    'a reference with no identifier is one no write can be aimed at'
+  );
+  assert.strictEqual(
+    record.advisoryFrom({ ...half, ref: { owner: '', repo: 'Spoon-Knife', ghsaId: 'GHSA-x' } })?.ref,
+    null,
+    'and neither is one with no owner'
+  );
+  assert.strictEqual(record.advisoryFrom({ ...half, ref: 'git-utensils' })?.ref, null);
+});

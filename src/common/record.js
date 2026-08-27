@@ -72,6 +72,24 @@ if (typeof require === 'function') {
   }
 
   /**
+   * The advisory a record names: which repository it is on and which advisory
+   * it is. A write from a cached read has no page to take that from, so what
+   * the entry holds is what says where the write goes, and a record naming no
+   * owner, no repository, or no identifier is one no write can be aimed at.
+   *
+   * @param {unknown} value
+   * @returns {import('./parse-detail.js').AdvisoryRef | null}
+   */
+  function refFrom(value) {
+    if (!globalThis.bghsa.schema.isPlainObject(value)) return null;
+    const owner = text(value.owner);
+    const repo = text(value.repo);
+    const ghsaId = text(value.ghsaId);
+    if (owner === null || repo === null || ghsaId === null) return null;
+    return { owner, repo, ghsaId };
+  }
+
+  /**
    * @param {unknown} value
    * @returns {import('./parse-detail.js').TimelineEvent | null}
    */
@@ -154,7 +172,7 @@ if (typeof require === 'function') {
     }
 
     return {
-      ref: null,
+      ref: refFrom(record.ref),
       viewer: null,
       ghsaId: text(record.ghsaId),
       state: text(record.state),
@@ -180,7 +198,10 @@ if (typeof require === 'function') {
     };
   }
 
-  const exported = { text, strings, commentFrom, eventFrom, pullFrom, forkFrom, advisoryFrom };
+  const exported = {
+    text,
+    advisoryFrom,
+  };
 
   globalThis.bghsa.record = exported;
 

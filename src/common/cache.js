@@ -75,16 +75,37 @@ if (typeof require === 'function') {
   const DAY_MS = 24 * 60 * MINUTE_MS;
 
   /**
-   * How long an entry may go unrefreshed before a pass fetches it again.
-   * REQUIREMENTS.md section 2: an entry observed within the last five minutes
-   * is not re-fetched.
+   * How long an entry may go unrefreshed before a pass fetches it again, where
+   * nothing named a state.
    *
-   * This is not entry life. Life is when an entry is discarded, and it is days;
-   * staleness is when an entry is refreshed, and it is minutes. A six-day-old
-   * triage entry is stale and still held: the table paints from it while the
-   * queue refetches it.
+   * This is not entry life. Life is when an entry is discarded; staleness is
+   * when it is refreshed. A six-day-old triage entry is stale and still held:
+   * the table paints from it while the queue refetches it.
    */
   const STALE_MS = 5 * MINUTE_MS;
+
+  /**
+   * How long an entry may go unrefreshed, by the state of the advisory it
+   * holds.
+   *
+   * A triage or draft advisory is what a maintainer is working, so it refreshes
+   * on the timescale of a page visit. A closed or published one does not change
+   * often, and the REQUIREMENTS.md section 10 corpus is roughly 110 of them: on
+   * one five-minute threshold, opening the done view twice in an afternoon
+   * re-reads the whole corpus twice at a request a second.
+   *
+   * Every threshold here is shorter than that state's life below, so an entry
+   * is refreshed before it is ever discarded.
+   *
+   * @type {Readonly<Record<string, number>>}
+   */
+  const STALE_MS_BY_STATE = {
+    triage: 5 * MINUTE_MS,
+    draft: 5 * MINUTE_MS,
+    closed: 7 * DAY_MS,
+    published: 30 * DAY_MS,
+    withdrawn: 30 * DAY_MS,
+  };
 
   /**
    * How long an entry lives, by the state of the advisory it holds. A
@@ -317,6 +338,18 @@ if (typeof require === 'function') {
 
   /**
    * @param {string | null | undefined} state
+   * @returns {number} how long an entry in this state may go unrefreshed. An
+   *   entry whose state this extension could not read takes the shortest
+   *   threshold in the table, as it takes the shortest life.
+   */
+  function staleAfter(state) {
+    const key = normalizeState(state);
+    const held = key === null ? undefined : STALE_MS_BY_STATE[key];
+    return held === undefined ? STALE_MS : held;
+  }
+
+  /**
+   * @param {string | null | undefined} state
    * @param {number} [jitterMs] The draw the entry carries, and absent on an
    *   entry written before entries carried one.
    * @returns {number} how long an entry in this state lives.
@@ -352,10 +385,10 @@ if (typeof require === 'function') {
    * @param {CacheEntry} entry
    * @param {number} [at]
    * @returns {boolean} whether the entry is old enough to be refreshed. An entry
-   *   observed within the last five minutes is not.
+   *   observed within its state's threshold is not.
    */
   function isStale(entry, at = now()) {
-    return ageOf(entry, at) >= STALE_MS;
+    return ageOf(entry, at) >= staleAfter(entry.state);
   }
 
   /**
@@ -626,6 +659,7 @@ if (typeof require === 'function') {
     CACHE_PREFIXES,
     DAY_MS,
     STALE_MS,
+    STALE_MS_BY_STATE,
     LIFE_MS,
     DEFAULT_LIFE_MS,
     JITTER_MS,
@@ -640,6 +674,7 @@ if (typeof require === 'function') {
     progressKey,
     isCacheKey,
     stateOf,
+    staleAfter,
     lifeOf,
     ageOf,
     isExpired,

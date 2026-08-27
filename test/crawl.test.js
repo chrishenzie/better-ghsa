@@ -17,6 +17,7 @@ const { fakeStorage } = require('../test-support/storage.js');
 const REF = { owner: 'git-utensils', repo: 'Spoon-Knife' };
 
 const MINUTE = 60 * 1000;
+const DAY = 24 * 60 * MINUTE;
 
 /**
  * A clock a test moves by hand, and the wait a queue uses with it. Waiting moves
@@ -534,5 +535,36 @@ test('a crawl record of another shape crawls from the start', async () => {
   assert.deepStrictEqual(result.ids, [ghsa('aaaa')]);
   assert.deepStrictEqual(crawls.listFrom(null), { walks: {}, rows: {} });
   assert.deepStrictEqual(crawls.listFrom(12), { walks: {}, rows: {} });
+});
+
+test("a walk of a done state waits out that state's threshold", () => {
+  /**
+   * @param {string} state
+   * @param {number} completedAt
+   * @returns {import('../src/common/crawl.js').CrawledList}
+   */
+  const walked = (state, completedAt) => ({
+    rows: {},
+    walks: {
+      [state]: {
+        next: null,
+        started: true,
+        complete: true,
+        startedAt: 0,
+        completedAt,
+        pages: 1,
+        failures: 0,
+        stalled: false,
+        abandonedAt: 0,
+      },
+    },
+  });
+
+  assert.ok(!crawls.isDue(walked('published', 0), 'published', 60 * MINUTE), 'an hour on');
+  assert.ok(!crawls.isDue(walked('published', 0), 'published', 30 * DAY - 1), 'a millisecond short');
+  assert.ok(crawls.isDue(walked('published', 0), 'published', 30 * DAY), 'at thirty days');
+  assert.ok(!crawls.isDue(walked('closed', 0), 'closed', 60 * MINUTE), 'closed an hour on');
+  assert.ok(crawls.isDue(walked('closed', 0), 'closed', 7 * DAY), 'closed at seven days');
+  assert.ok(crawls.isDue(walked('triage', 0), 'triage', 5 * MINUTE), 'triage at five minutes');
 });
 

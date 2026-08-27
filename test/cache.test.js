@@ -118,7 +118,7 @@ test('a done entry expires at ninety days plus its own draw', () => {
   }
 });
 
-test('staleness is five minutes and is not entry life', () => {
+test('staleness is five minutes on an open advisory and is not entry life', () => {
   const held = entry(0, 'triage');
   assert.ok(!cache.isStale(held, 5 * MINUTE - 1), 'an entry went stale one millisecond early');
   assert.ok(cache.isStale(held, 5 * MINUTE), 'an entry five minutes old was not stale');
@@ -126,6 +126,40 @@ test('staleness is five minutes and is not entry life', () => {
   // discarded, and it is read from all the while.
   assert.ok(cache.isStale(held, 6 * DAY), 'a six-day-old triage entry was not stale');
   assert.ok(!cache.isExpired(held, 6 * DAY), 'a six-day-old triage entry was discarded');
+});
+
+test('a done advisory refreshes on its own state, not on five minutes', () => {
+  /** @type {[string, number][]} */
+  const thresholds = [
+    ['triage', 5 * MINUTE],
+    ['draft', 5 * MINUTE],
+    ['closed', 7 * DAY],
+    ['published', 30 * DAY],
+    ['withdrawn', 30 * DAY],
+  ];
+  for (const [state, threshold] of thresholds) {
+    const held = entry(0, state);
+    assert.strictEqual(cache.staleAfter(state), threshold, `the threshold for ${state}`);
+    assert.ok(!cache.isStale(held, threshold - 1), `${state} went stale one millisecond early`);
+    assert.ok(cache.isStale(held, threshold), `${state} was fresh at its own threshold`);
+    // What D2 costs: the done view is opened again an hour later, and a corpus
+    // of roughly 110 advisories is re-read at a request a second.
+    assert.strictEqual(
+      cache.isStale(held, 60 * MINUTE),
+      state === 'triage' || state === 'draft',
+      `${state} an hour on`
+    );
+    assert.ok(
+      threshold < cache.lifeOf(state),
+      `${state} would be discarded before it was ever refreshed`
+    );
+  }
+});
+
+test('an entry naming no state this reader knows refreshes on five minutes', () => {
+  assert.strictEqual(cache.staleAfter(null), cache.STALE_MS, 'no state');
+  assert.strictEqual(cache.staleAfter('archived'), cache.STALE_MS, 'a state from a later GitHub');
+  assert.ok(cache.isStale(entry(0, null), 5 * MINUTE), 'a stateless entry was fresh');
 });
 
 test('an entry within its life is read back with what was written', async () => {

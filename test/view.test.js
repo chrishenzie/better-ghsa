@@ -14,6 +14,7 @@ const write = require('../src/common/write.js');
 const edit = require('../src/detail/edit.js');
 const table = require('../src/list/table.js');
 const csv = require('../src/done/csv.js');
+const corpus = require('../src/done/corpus.js');
 const view = require('../src/done/view.js');
 
 const { fakeStorage } = require('../test-support/storage.js');
@@ -41,6 +42,8 @@ test('the storage stand-in holds a copy of what it was seeded with', async () =>
   assert.deepStrictEqual(held, { advisory: { read: 1 } }, 'a write reached the seed');
   assert.deepStrictEqual((await store.get('advisory'))['advisory'], { read: 2 });
 });
+
+const MINUTE = 60 * 1000;
 
 /** A clock the queue moves rather than waiting on, so a crawl costs no time. */
 let clockAt = Date.parse('2026-08-27T12:00:00Z');
@@ -339,6 +342,39 @@ function corpusOf(members, over = {}) {
     complete: over.complete ?? true,
     expected: over.expected ?? { published: null, closed: null },
   };
+}
+
+/**
+ * The corpus as production builds it: `membersOf` over the crawl's rows and
+ * the cache's entries. Nothing here hands a member an advisory object. A
+ * member's advisory is what `record.advisoryFrom` reads back out of storage,
+ * which is the only advisory the done view ever holds, so a control this
+ * exercises is the control a maintainer gets.
+ *
+ * @param {readonly { ghsaId: string, state: string, record?: unknown }[]} entries
+ * @returns {Promise<import('../src/done/corpus.js').Corpus>}
+ */
+async function cachedCorpus(entries) {
+  /** @type {Record<string, unknown>} */
+  const stored = {};
+  /** @type {import('../src/common/crawl.js').CrawledList} */
+  const list = { walks: {}, rows: {} };
+  for (const entry of entries) {
+    list.rows[entry.ghsaId] = {
+      row: member({ ghsaId: entry.ghsaId, state: entry.state }).row,
+      state: entry.state,
+      seenAt: clockAt,
+    };
+    if (entry.record === undefined) continue;
+    const key = /** @type {string} */ (cache.advisoryKey({ ...REF, ghsaId: entry.ghsaId }));
+    stored[key] = { record: entry.record, observedAt: clockAt, state: entry.state };
+  }
+  return corpus.membersOf(REF, list, {
+    storage: fakeStorage(stored),
+    at: clockAt,
+    complete: true,
+    expected: { published: null, closed: null },
+  });
 }
 
 /**
@@ -673,12 +709,21 @@ test('the reason an advisory carries is the reason its row shows', async () => {
 test('a closure reason set here goes out through the stored write path', async () => {
   const read = parseDetail.parseDetail(document(fixture('triage-thread.html')));
   assert.ok(read !== null && read.ref !== null, 'the fixture reads as an advisory');
-  const doc = await page(
-    corpusOf([member({ ghsaId: TRIAGE_ID, state: 'closed', advisory: read })])
-  );
+  const held = await cachedCorpus([{ ghsaId: TRIAGE_ID, state: 'closed', record: read }]);
+  const built = view.memberOf(held, TRIAGE_ID)?.advisory ?? null;
+  assert.ok(built !== null, 'the cached entry read back as an advisory');
+  assert.notStrictEqual(built, read, 'the member carries the read back, not the parse');
+  assert.strictEqual(built.ref?.owner, REF.owner, 'which names the repository it is on');
+  assert.strictEqual(built.ref?.ghsaId, TRIAGE_ID, 'and the advisory it is of');
+  const doc = await page(held);
 
   const row = doneRow(doc, TRIAGE_ID);
   const control = one(row, 'select.bghsa-done-reason');
+  const save = one(row, 'button.bghsa-done-save');
+  assert.ok(
+    !save.hasAttribute('disabled'),
+    'a member the cache backs can be written from here'
+  );
   assert.deepStrictEqual(
     Array.from(control.querySelectorAll('option')).map((node) => node.getAttribute('value')),
     ['', ...schema.CLOSURE_REASONS],
@@ -701,7 +746,7 @@ test('a closure reason set here goes out through the stored write path', async (
     return { ok: true, reason: null, status: 200, message: 'saved', snapshot: null, merged: null };
   };
   try {
-    /** @type {HTMLElement} */ (/** @type {unknown} */ (one(row, 'button.bghsa-done-save'))).click();
+    /** @type {HTMLElement} */ (/** @type {unknown} */ (save)).click();
     await Promise.race([
       settled,
       new Promise((_, reject) => setTimeout(() => reject(new Error('no save was asked for')), 2000)),
@@ -712,8 +757,13 @@ test('a closure reason set here goes out through the stored write path', async (
 
   assert.strictEqual(saved.length, 1, 'the press went to the editing store, not to a writer here');
   const context = /** @type {import('../src/detail/edit.js').EditorContext} */ (saved[0]);
-  assert.strictEqual(context.advisory, read, 'the save is against the advisory the view holds');
-  const key = edit.keyOf(read);
+  assert.strictEqual(context.advisory, built, 'the save is against the advisory the view holds');
+  const key = edit.keyOf(built);
+  assert.strictEqual(
+    key,
+    `${REF.owner}/${REF.repo}/${TRIAGE_ID}`.toLowerCase(),
+    'staged under the key the detail panel uses, so one advisory has one entry'
+  );
   assert.strictEqual(edit.editsFor(key).closureReason, 'not a vulnerability');
   // The snapshot that write would carry, built by the writer's own builder.
   assert.deepStrictEqual(
@@ -730,9 +780,10 @@ test('a reason a maintainer sets reaches GitHub as a state comment', async () =>
   const page_html = fixture('triage-thread.html');
   const read = parseDetail.parseDetail(document(page_html));
   assert.ok(read !== null, 'the fixture reads as an advisory');
-  const doc = await page(
-    corpusOf([member({ ghsaId: TRIAGE_ID, state: 'closed', advisory: read })])
-  );
+  const held = await cachedCorpus([{ ghsaId: TRIAGE_ID, state: 'closed', record: read }]);
+  const built = view.memberOf(held, TRIAGE_ID)?.advisory ?? null;
+  assert.ok(built !== null, 'the cached entry read back as an advisory');
+  const doc = await page(held);
 
   /** @type {URLSearchParams[]} */
   const posted = [];
@@ -769,13 +820,13 @@ test('a reason a maintainer sets reaches GitHub as a state comment', async () =>
     { reason: 'out of scope' },
     `the snapshot GitHub was sent: ${markdown}`
   );
-  edit.edits.delete(edit.keyOf(/** @type {NonNullable<typeof read>} */ (read)));
-  edit.written.delete(edit.keyOf(/** @type {NonNullable<typeof read>} */ (read)));
-  edit.results.delete(edit.keyOf(/** @type {NonNullable<typeof read>} */ (read)));
+  edit.edits.delete(edit.keyOf(built));
+  edit.written.delete(edit.keyOf(built));
+  edit.results.delete(edit.keyOf(built));
 });
 
 test('an advisory nothing has read takes no reason and says why', async () => {
-  const doc = await page(corpusOf([member({ ghsaId: ghsa('iiii'), state: 'closed' })]));
+  const doc = await page(await cachedCorpus([{ ghsaId: ghsa('iiii'), state: 'closed' }]));
   const row = doneRow(doc, ghsa('iiii'));
   assert.ok(
     one(row, 'button.bghsa-done-save').hasAttribute('disabled'),
@@ -836,4 +887,59 @@ test('the export is the corpus, written here in the page', async () => {
     lines[1],
     `${ghsa('jjjj')},A published advisory,published,high,,2026-03-02T00:00:00Z,2026-03,,,no,`
   );
+});
+
+test('a second visit to the done view spends no request on the corpus', async () => {
+  const published = [ghsa('kkkk'), ghsa('llll')];
+  const closed = [ghsa('mmmm')];
+  const base = `/${REF.owner}/${REF.repo}/security/advisories`;
+  pages[`${base}?state=published`] = listHtml({
+    state: 'published',
+    ids: published,
+    counts: { published: 2, closed: 1 },
+  });
+  pages[`${base}?state=closed`] = listHtml({
+    state: 'closed',
+    ids: closed,
+    counts: { published: 2, closed: 1 },
+  });
+  for (const id of published) {
+    pages[detailUrl(id)] = detailHtml({
+      ghsaId: id,
+      state: 'Published',
+      reportedAt: '2026-03-02T00:00:00Z',
+    });
+  }
+  for (const id of closed) {
+    pages[detailUrl(id)] = detailHtml({
+      ghsaId: id,
+      state: 'Closed',
+      reportedAt: '2026-04-05T00:00:00Z',
+    });
+  }
+
+  // An earlier test in this file walked these states through the same storage,
+  // and a walk inside its threshold is not walked again. This is the first
+  // visit a maintainer with an empty cache makes.
+  await cache.clear();
+
+  const first = await page();
+  const before = asked.length;
+  await view.collect(first);
+  assert.strictEqual(
+    asked.length - before,
+    published.length + closed.length + 2,
+    'the first visit reads both list pages and every advisory they name'
+  );
+
+  // The maintainer comes back an hour later: another page load, another
+  // document, and the cache the first visit filled. On one five-minute
+  // threshold this is the whole corpus again, at a request a second.
+  clockAt += 60 * MINUTE;
+  const second = await page();
+  const at = asked.length;
+  const held = await view.collect(second);
+  assert.strictEqual(asked.length - at, 0, `the second visit asked for ${asked.slice(at)}`);
+  assert.strictEqual(held?.members.length, 3, 'and it still drew the whole corpus');
+  assert.deepStrictEqual(held?.unread, [], 'every row backed by a read, from the cache alone');
 });

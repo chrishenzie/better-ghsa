@@ -352,22 +352,34 @@ if (typeof require === 'function') {
   }
 
   /**
+   * A walk of one state waits out the threshold the entries in that state wait
+   * out. A state's list changes on the timescale its advisories do:
+   * `?state=published` gains a row when an advisory is published, and walking
+   * it every five minutes reads pages nothing has changed.
+   *
+   * The record this reads has a life of its own in the cache, and a walk whose
+   * record was discarded starts over whatever this says. That bounds how long a
+   * state goes unwalked from above, and it costs list pages and no advisory
+   * read: an advisory the walk names again is still within its own threshold.
+   *
    * @param {CrawledList} list
    * @param {string} state
    * @param {number} at
    * @returns {boolean} whether that state is worth walking now: it has never
    *   been walked, a walk of it stopped part way, the last walk finished longer
-   *   ago than the staleness threshold, or a walk gave up that long ago.
+   *   ago than that state's threshold, or a walk gave up that long ago.
    */
   function isDue(list, state, at) {
+    const threshold = globalThis.bghsa.cache.staleAfter(state);
+    // A walk that gave up waits out the same threshold before it starts over,
+    // so a state whose pages GitHub refuses costs one attempt a threshold and
+    // not one a page load. It reached no last page, so the corpus it feeds
+    // reports itself partial until a walk does.
     const walk = walkOf(list, state);
-    // A walk that gave up waits out the staleness threshold before it starts
-    // over, so a state whose pages GitHub refuses costs one attempt a threshold
-    // and not one a page load.
-    if (walk.stalled) return at - walk.abandonedAt >= globalThis.bghsa.cache.STALE_MS;
+    if (walk.stalled) return at - walk.abandonedAt >= threshold;
     if (!walk.started) return true;
     if (!walk.complete) return true;
-    return at - walk.completedAt >= globalThis.bghsa.cache.STALE_MS;
+    return at - walk.completedAt >= threshold;
   }
 
   /**
