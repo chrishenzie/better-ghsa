@@ -284,9 +284,14 @@ derived value.
 
 ## 10. Done page and statistics
 
-A separate view, reached from the advisory list, lists published and closed
-advisories and carries the statistics for the whole corpus. Closure reasons can
-be set here retroactively.
+Two views, each reached from the advisory list.
+
+The done page lists published and closed advisories. Closure reasons can be set
+here retroactively.
+
+The statistics are their own view. They cover the whole corpus, open and done,
+because they describe active work as much as finished work, and they are not a
+property of the done list.
 
 Counts and ratios: advisories by closure reason, by state, by severity, and by
 month.
