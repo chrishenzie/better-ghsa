@@ -165,6 +165,22 @@ function chipClass(root, label) {
 }
 
 /**
+ * @param {Element} root
+ * @param {string} label the panel row's label.
+ * @returns {{ text: string, classes: string }} the one chip that row carries.
+ */
+function rowChip(root, label) {
+  for (const row of root.querySelectorAll('.Box-row')) {
+    if (text(row.querySelector('.bghsa-label')) !== label) continue;
+    const chips = row.querySelectorAll('.Label');
+    if (chips.length !== 1) throw new Error(`the ${label} row carries ${chips.length} chips`);
+    const chip = /** @type {Element} */ (chips[0]);
+    return { text: text(chip), classes: String(chip.getAttribute('class') ?? '') };
+  }
+  throw new Error(`no panel row labelled ${label}`);
+}
+
+/**
  * The panel `advisory` renders to with `payload` holding its tracking state,
  * judged against the values `advisory` itself carries.
  *
@@ -247,14 +263,30 @@ test('an embargo still in force carries no chip', async () => {
   assert.deepStrictEqual(texts(built, '.Box-header .Label'), []);
 });
 
+test('an embargo past its lift date does not look like one in force', async () => {
+  const built = await buildWith(triage, { embargo: { lift: '2000-01-01' } });
+  assert.deepStrictEqual(rowChip(built, 'Embargo'), {
+    text: 'Lifts 2000-01-01',
+    classes: 'Label Label--secondary bghsa-tone-danger',
+  });
+});
+
+test('an embargo with no lift date is a chip saying so', async () => {
+  const built = await buildWith(triage, { embargo: {} });
+  assert.deepStrictEqual(rowChip(built, 'Embargo'), {
+    text: 'In force, no lift date',
+    classes: 'Label Label--secondary bghsa-tone-attention',
+  });
+});
+
 test('an advisory with no embargo carries no overdue chip', async () => {
   const built = await buildWith(triage, { triage: 'evaluating' });
   assert.deepStrictEqual(texts(built, '.Box-header .Label'), []);
 });
 
 test('the panel reports whether the description is the original text', () => {
-  assert.strictEqual(rowText(build(triage), 'Description'), "The reporter's original text.");
-  assert.strictEqual(rowText(build(draft), 'Description'), 'Edited since it was reported.');
+  assert.strictEqual(rowText(build(triage), 'Description'), 'Not updated');
+  assert.strictEqual(rowText(build(draft), 'Description'), 'Updated');
 });
 
 test('the panel leads with the three confirmations', () => {
@@ -284,13 +316,10 @@ test('a confirmed value names who confirmed it and when', async () => {
     title.note === 'samuelkarp confirmed this value on 2026-08-25 18:04 UTC.',
     `the note reads ${title.note}`
   );
-  assert.deepStrictEqual(
-    texts(built, '.bghsa-warning').filter((line) => line.includes('changed after')),
-    []
-  );
+  assert.deepStrictEqual(texts(built, '.bghsa-warning'), []);
 });
 
-test('a value changed after it was confirmed reverts to unconfirmed and warns', async () => {
+test('a value changed after it was confirmed reverts to unconfirmed', async () => {
   const fingerprint = await schema.fingerprint(triage.title);
   const confirmed = {
     confirmed: { title: { by: 'samuelkarp', at: '2026-08-25T18:04:11Z', fp: fingerprint } },
@@ -300,42 +329,11 @@ test('a value changed after it was confirmed reverts to unconfirmed and warns', 
   const title = confirmation(built, 'Advisory title');
   assert.ok(title.chip === 'Not confirmed', `the title chip reads ${title.chip}`);
   assert.ok(
-    title.classes === 'Label Label--secondary bghsa-tone-danger',
-    `the drifted chip reads ${title.classes}`
+    title.classes === 'Label Label--secondary',
+    `the drifted chip is toned: ${title.classes}`
   );
-  assert.ok(
-    title.note === 'samuelkarp confirmed a different value on 2026-08-25 18:04 UTC.',
-    `the note reads ${title.note}`
-  );
-  assert.deepStrictEqual(texts(built, '.bghsa-warning'), [
-    'The advisory title changed after a maintainer confirmed it.',
-    'No maintainer has confirmed the severity and CVSS vector.',
-  ]);
-});
-
-test('each drifted track is named in its own warning', async () => {
-  const built = await buildWith(triage, {
-    confirmed: {
-      title: { by: 'samuelkarp', at: '2026-08-25T18:04:11Z', fp: '000000000000' },
-      scoring: { by: 'samuelkarp', at: '2026-08-25T18:04:11Z', fp: '000000000000' },
-    },
-  });
-  assert.deepStrictEqual(texts(built, '.bghsa-warning'), [
-    'The advisory title changed after a maintainer confirmed it.',
-    'The severity and CVSS vector changed after a maintainer confirmed it.',
-  ]);
-});
-
-test('an unconfirmed score warns and takes a state color', () => {
-  const built = build(published);
-  const scoring = confirmation(built, 'Severity and CVSS vector');
-  assert.ok(
-    scoring.classes === 'Label Label--secondary bghsa-tone-attention',
-    `the unconfirmed scoring chip reads ${scoring.classes}`
-  );
-  assert.deepStrictEqual(texts(built, '.bghsa-warning'), [
-    'No maintainer has confirmed the severity and CVSS vector.',
-  ]);
+  assert.ok(title.note === '', `the drifted track carries a note: ${title.note}`);
+  assert.deepStrictEqual(texts(built, '.bghsa-warning'), []);
 });
 
 test('a confirmation whose current value went unread is not checked', async () => {
@@ -346,8 +344,8 @@ test('a confirmation whose current value went unread is not checked', async () =
   const title = confirmation(built, 'Advisory title');
   assert.ok(title.chip === 'Not checked', `the title chip reads ${title.chip}`);
   assert.ok(
-    title.classes === 'Label Label--secondary bghsa-tone-attention',
-    `the unchecked chip reads ${title.classes}`
+    title.classes === 'Label Label--secondary',
+    `the unchecked chip is toned: ${title.classes}`
   );
   assert.ok(
     title.note ===
@@ -374,8 +372,8 @@ test('a scoring source the form does not carry reads as unread, not as drift', a
   const scoring = confirmation(built, 'Severity and CVSS vector');
   assert.ok(scoring.chip === 'Not checked', `the scoring chip reads ${scoring.chip}`);
   assert.ok(
-    scoring.classes === 'Label Label--secondary bghsa-tone-attention',
-    `the scoring chip reads ${scoring.classes}`
+    scoring.classes === 'Label Label--secondary',
+    `the scoring chip is toned: ${scoring.classes}`
   );
   assert.ok(
     scoring.note ===
@@ -414,12 +412,13 @@ test('the stored tracks the triage advisory carries are shown', async () => {
     'Original report',
   ]);
   assert.deepStrictEqual(texts(built, '.Box-row:not(.bghsa-confirmed) .bghsa-chips .Label'), [
-    'awaiting reporter',
+    'Awaiting reporter',
     'samuelkarp',
     'release/1.0',
+    'Lifts 2026-09-30',
   ]);
   assert.deepStrictEqual(texts(built, '.bghsa-since'), ['since 2026-08-25 18:04 UTC']);
-  assert.strictEqual(rowText(built, 'Embargo'), 'Lifts 2026-09-30.');
+  assert.strictEqual(rowText(built, 'Embargo'), 'Lifts 2026-09-30');
 });
 
 test('a track the snapshot says nothing about carries no row', () => {
@@ -431,7 +430,26 @@ test('a closed advisory shows the reason and what it duplicates', async () => {
     triage: 'evaluating',
     closure: { reason: 'duplicate', duplicateOf: 'GHSA-cm76-qm8v-3j95' },
   });
-  assert.strictEqual(rowText(built, 'Closed as'), 'duplicateof GHSA-cm76-qm8v-3j95');
+  assert.strictEqual(rowText(built, 'Closed as'), 'Duplicateof GHSA-cm76-qm8v-3j95');
+});
+
+test('a chip carrying a stored value is sentence-cased, and a login is not', async () => {
+  assert.strictEqual(panel.sentenceCase('awaiting reporter'), 'Awaiting reporter');
+  assert.strictEqual(panel.sentenceCase('not a vulnerability'), 'Not a vulnerability');
+  assert.strictEqual(panel.sentenceCase('Already capital'), 'Already capital');
+  assert.strictEqual(panel.sentenceCase(''), '');
+  const built = await buildWith(triage, {
+    triage: 'awaiting reporter',
+    owners: ['samuelkarp'],
+    backports: ['release/1.0'],
+    closure: { reason: 'no reporter response' },
+  });
+  assert.deepStrictEqual(texts(built, '.Box-row:not(.bghsa-confirmed) .bghsa-chips .Label'), [
+    'Awaiting reporter',
+    'samuelkarp',
+    'release/1.0',
+    'No reporter response',
+  ]);
 });
 
 test('the panel does not list the snapshots it read', async () => {
@@ -510,7 +528,6 @@ test('a pull request state that went unread raises the banner and a warning', ()
   ]);
   assert.deepStrictEqual(texts(built, '.bghsa-warning:not(.bghsa-banner)'), [
     'A pull request named a state this extension does not read.',
-    'No maintainer has confirmed the severity and CVSS vector.',
   ]);
 });
 
@@ -518,9 +535,7 @@ test('a published advisory reads every value it displays', () => {
   const built = build(published);
   assert.deepStrictEqual(texts(built, '.Box-header .Label'), []);
   assert.deepStrictEqual(texts(built, '.bghsa-banner'), []);
-  assert.deepStrictEqual(texts(built, '.bghsa-warning'), [
-    'No maintainer has confirmed the severity and CVSS vector.',
-  ]);
+  assert.deepStrictEqual(texts(built, '.bghsa-warning'), []);
 });
 
 test('a document that is not an advisory detail page gets no panel', async () => {
@@ -576,10 +591,7 @@ test('advisory content swapped in after load gets a panel with no reload', async
   const injected = await panel.render(triageDoc);
   assert.ok(injected !== null, 'swapped-in content got no panel');
   assert.strictEqual(triageDoc.querySelectorAll('#bghsa-detail-panel').length, 1);
-  assert.strictEqual(
-    rowText(/** @type {Element} */ (injected), 'Description'),
-    "The reporter's original text."
-  );
+  assert.strictEqual(rowText(/** @type {Element} */ (injected), 'Description'), 'Not updated');
   assert.strictEqual(panel.outOfPlace(triageDoc), false);
 });
 

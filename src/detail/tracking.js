@@ -73,27 +73,16 @@ if (typeof require === 'function') {
 
 (() => {
   /**
-   * The confirmation tracks, in the order the panel shows them. `short` names the
-   * track in a sentence, and `warn` names the track REQUIREMENTS.md section 8
-   * warns on while it stands unconfirmed.
+   * The confirmation tracks, in the order the panel shows them. `name` is what
+   * the panel calls the track beside its chip, and `short` names the track
+   * inside a sentence the editor writes.
    *
-   * @type {readonly { key: ConfirmationTrack, name: string, short: string,
-   *   warn: boolean }[]}
+   * @type {readonly { key: ConfirmationTrack, name: string, short: string }[]}
    */
   const CONFIRMATION_TRACKS = [
-    { key: 'title', name: 'Advisory title', short: 'advisory title', warn: false },
-    {
-      key: 'description',
-      name: 'Advisory description',
-      short: 'advisory description',
-      warn: false,
-    },
-    {
-      key: 'scoring',
-      name: 'Severity and CVSS vector',
-      short: 'severity and CVSS vector',
-      warn: true,
-    },
+    { key: 'title', name: 'Advisory title', short: 'advisory title' },
+    { key: 'description', name: 'Advisory description', short: 'advisory description' },
+    { key: 'scoring', name: 'Severity and CVSS vector', short: 'severity and CVSS vector' },
   ];
 
   /**

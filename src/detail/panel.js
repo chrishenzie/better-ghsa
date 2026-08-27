@@ -95,6 +95,19 @@ if (typeof require === 'function') {
   }
 
   /**
+   * A stored value as a chip reads it. GitHub sentence-cases its own chips, and
+   * a track is stored in the vocabulary REQUIREMENTS.md section 6 sets, which is
+   * lower case. Only the first letter is touched, so a value this extension does
+   * not interpret still reaches the reader as it stands.
+   *
+   * @param {string} value
+   * @returns {string}
+   */
+  function sentenceCase(value) {
+    return value === '' ? value : `${value[0]?.toUpperCase() ?? ''}${value.slice(1)}`;
+  }
+
+  /**
    * @param {Document} doc
    * @param {string} label
    * @returns {{ row: Element, body: Element }} a Box row and the element its
@@ -141,13 +154,11 @@ if (typeof require === 'function') {
     return header;
   }
 
-  /** The confirmation tracks, in the order the panel shows them. */
-  const CONFIRMATION_TRACKS = globalThis.bghsa.tracking.CONFIRMATION_TRACKS;
-
   /**
-   * What the confirmation chip reads. A drifted track reverted to unconfirmed,
-   * and reads as unconfirmed; who confirmed a different value is the note beside
-   * it.
+   * What the confirmation chip reads. A drifted track reverted to unconfirmed
+   * and reads as unconfirmed, and looks like every other unconfirmed track:
+   * one state, one appearance. Every confirmation chip is dimmed, as the chips
+   * GitHub's own sidebar carries are.
    *
    * @param {import('./tracking.js').Confirmation} state
    * @returns {string}
@@ -156,18 +167,6 @@ if (typeof require === 'function') {
     if (state.status === 'confirmed') return 'Confirmed';
     if (state.status === 'unreadable') return 'Not checked';
     return 'Not confirmed';
-  }
-
-  /**
-   * @param {import('./tracking.js').Confirmation} state
-   * @param {boolean} warn Whether an unconfirmed track on this row is a warning.
-   * @returns {'attention' | 'danger' | undefined}
-   */
-  function confirmationTone(state, warn) {
-    if (state.status === 'drifted') return 'danger';
-    if (state.status === 'unreadable') return 'attention';
-    if (state.status === 'unconfirmed' && warn) return 'attention';
-    return undefined;
   }
 
   /**
@@ -187,11 +186,12 @@ if (typeof require === 'function') {
 
   /**
    * @param {import('./tracking.js').Confirmation} state
-   * @returns {string | null} what the panel says beside the chip.
+   * @returns {string | null} what the panel says beside the chip. A drifted
+   *   track says nothing: it is unconfirmed, and who confirmed some earlier
+   *   value does not change that.
    */
   function confirmationNote(state) {
     if (state.status === 'confirmed') return attribution(state, 'confirmed this value');
-    if (state.status === 'drifted') return attribution(state, 'confirmed a different value');
     if (state.status === 'unreadable') {
       return `${attribution(state, 'confirmed a value')} The value on the page could not be read.`;
     }
@@ -209,42 +209,18 @@ if (typeof require === 'function') {
   function buildConfirmations(doc, tracking) {
     const container = element(doc, 'div', 'Box-row bghsa-confirmed');
     container.append(element(doc, 'div', 'text-bold', 'Confirmed by a maintainer'));
-    for (const track of CONFIRMATION_TRACKS) {
+    // The tracks in the order tracking names them, which is the order the
+    // panel shows them in.
+    for (const track of globalThis.bghsa.tracking.CONFIRMATION_TRACKS) {
       const state = tracking[track.key];
       const line = element(doc, 'div', 'bghsa-chips bghsa-confirmation');
       line.append(element(doc, 'span', 'bghsa-confirmation-name', track.name));
-      line.append(chip(doc, confirmationText(state), confirmationTone(state, track.warn)));
+      line.append(chip(doc, confirmationText(state)));
       const note = confirmationNote(state);
       if (note !== null) line.append(element(doc, 'span', 'bghsa-confirmation-note', note));
       container.append(line);
     }
     return container;
-  }
-
-  /**
-   * The warnings REQUIREMENTS.md section 8 requires: an unconfirmed score, and a
-   * value that moved away from what was confirmed. Each drifted track is named
-   * on its own line, so the reader is told which value moved.
-   *
-   * A drifted score raises the drift warning alone. That warning says the
-   * confirmation no longer holds, which is what the unconfirmed warning would
-   * say a second time.
-   *
-   * @param {Document} doc
-   * @param {import('./tracking.js').TrackingView} tracking
-   * @returns {Element[]}
-   */
-  function confirmationWarnings(doc, tracking) {
-    /** @type {Element[]} */
-    const warnings = [];
-    for (const track of CONFIRMATION_TRACKS) {
-      if (tracking[track.key].status !== 'drifted') continue;
-      warnings.push(warning(doc, `The ${track.short} changed after a maintainer confirmed it.`));
-    }
-    if (tracking.scoring.status === 'unconfirmed' || tracking.scoring.status === 'unreadable') {
-      warnings.push(warning(doc, 'No maintainer has confirmed the severity and CVSS vector.'));
-    }
-    return warnings;
   }
 
   /**
@@ -268,16 +244,18 @@ if (typeof require === 'function') {
    *
    * @param {Document} doc
    * @param {import('./tracking.js').TrackingView} tracking
+   * @param {boolean} embargoOverdue Whether the embargo's lift date has gone by
+   *   on an advisory that is not published.
    * @returns {Element[]}
    */
-  function buildTracks(doc, tracking) {
+  function buildTracks(doc, tracking, embargoOverdue) {
     /** @type {Element[]} */
     const rows = [];
 
     if (tracking.triage !== null) {
       const built = row(doc, 'Triage');
       built.body.className = 'flex-auto bghsa-chips';
-      built.body.append(chip(doc, tracking.triage));
+      built.body.append(chip(doc, sentenceCase(tracking.triage)));
       const since = globalThis.bghsa.text.formatTime(tracking.triageSince);
       if (since !== null) built.body.append(element(doc, 'span', 'bghsa-since', `since ${since}`));
       rows.push(built.row);
@@ -288,16 +266,23 @@ if (typeof require === 'function') {
     }
     if (tracking.embargo) {
       const built = row(doc, 'Embargo');
-      built.body.textContent =
-        tracking.embargoLift === null
-          ? 'In force, with no lift date recorded.'
-          : `Lifts ${tracking.embargoLift}.`;
+      built.body.className = 'flex-auto bghsa-chips';
+      // An embargo in force and an embargo whose date has gone by are two
+      // states, and the chip does not paint them alike. The chip row carries the
+      // overdue one as well; this one carries the date.
+      built.body.append(
+        chip(
+          doc,
+          tracking.embargoLift === null ? 'In force, no lift date' : `Lifts ${tracking.embargoLift}`,
+          embargoOverdue ? 'danger' : 'attention'
+        )
+      );
       rows.push(built.row);
     }
     if (tracking.closureReason !== null) {
       const built = row(doc, 'Closed as');
       built.body.className = 'flex-auto bghsa-chips';
-      built.body.append(chip(doc, tracking.closureReason));
+      built.body.append(chip(doc, sentenceCase(tracking.closureReason)));
       if (tracking.closureDuplicateOf !== null) {
         built.body.append(
           element(doc, 'span', 'bghsa-since', `of ${tracking.closureDuplicateOf}`)
@@ -420,16 +405,11 @@ if (typeof require === 'function') {
     const panel = element(doc, 'div', 'Box mb-3 bghsa-panel');
     panel.id = PANEL_ID;
     panel.setAttribute('data-bghsa-panel', '1');
-    panel.append(
-      buildChips(
-        doc,
-        derived,
-        globalThis.bghsa.derive.embargoOverdue(
-          advisory,
-          tracking.embargo ? tracking.embargoLift : null
-        )
-      )
+    const embargoOverdue = globalThis.bghsa.derive.embargoOverdue(
+      advisory,
+      tracking.embargo ? tracking.embargoLift : null
     );
+    panel.append(buildChips(doc, derived, embargoOverdue));
 
     const missing = missingValues(advisory, derived);
     if (missing.length > 0) {
@@ -447,8 +427,7 @@ if (typeof require === 'function') {
     }
 
     panel.append(buildConfirmations(doc, tracking));
-    for (const banner of confirmationWarnings(doc, tracking)) panel.append(banner);
-    for (const track of buildTracks(doc, tracking)) panel.append(track);
+    for (const track of buildTracks(doc, tracking, embargoOverdue)) panel.append(track);
     if (context !== undefined) panel.append(globalThis.bghsa.edit.buildEditor(doc, context));
 
     const descriptionRow = row(doc, 'Description');
@@ -457,9 +436,7 @@ if (typeof require === 'function') {
       descriptionRow.body.append(element(doc, 'span', 'bghsa-missing', MISSING));
       descriptionRow.body.append(doc.createTextNode('.'));
     } else {
-      descriptionRow.body.textContent = advisory.descriptionOriginal
-        ? "The reporter's original text."
-        : 'Edited since it was reported.';
+      descriptionRow.body.textContent = advisory.descriptionOriginal ? 'Not updated' : 'Updated';
     }
     panel.append(descriptionRow.row);
     panel.append(buildPreserve(doc, advisory));
@@ -674,11 +651,10 @@ if (typeof require === 'function') {
     PANEL_ID,
     STYLE_ID,
     MISSING,
-    CONFIRMATION_TRACKS,
     missingValues,
     when,
+    sentenceCase,
     buildConfirmations,
-    confirmationWarnings,
     buildTracks,
     buildPreserve,
     press,

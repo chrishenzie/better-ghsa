@@ -226,8 +226,12 @@ Advisories a maintainer files are treated the same as any other.
 ## 8. Advisory detail page
 
 The extension adds a panel that displays derived state, displays and edits
-stored state, and warns on unconfirmed scoring and on confirmation drift. It
-offers the button that preserves the original report.
+stored state, and shows whether each confirmation stands. It offers the button
+that preserves the original report.
+
+A confirmation is confirmed or it is not. A value that has changed since it was
+confirmed reads as unconfirmed, the same as one nobody has confirmed, because
+the maintainer's next act is the same either way.
 
 The panel shows what a maintainer has to act on. It does not restate what the
 advisory page already carries, and it does not list the snapshots it read. A
