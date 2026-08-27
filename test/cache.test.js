@@ -23,10 +23,11 @@ const DAY = 24 * 60 * MINUTE;
 /**
  * @param {number} observedAt
  * @param {string | null} state
+ * @param {number} [jitterMs] What the entry drew when it was written.
  * @returns {import('../src/common/cache.js').CacheEntry}
  */
-function entry(observedAt, state) {
-  return { record: { state }, observedAt, state };
+function entry(observedAt, state, jitterMs = 0) {
+  return { record: { state }, observedAt, state, jitterMs };
 }
 
 test('an advisory key names the owner, the repository, and the advisory', () => {
@@ -60,10 +61,34 @@ test('entry life follows the advisory state', () => {
   assert.ok(cache.lifeOf('triage') === 7 * DAY, `triage life was ${cache.lifeOf('triage')}`);
   assert.ok(cache.lifeOf('draft') === 7 * DAY, `draft life was ${cache.lifeOf('draft')}`);
   assert.ok(cache.lifeOf('closed') === 30 * DAY, `closed life was ${cache.lifeOf('closed')}`);
-  assert.ok(cache.lifeOf('published') === null, 'a published entry lives indefinitely');
-  assert.ok(cache.lifeOf('withdrawn') === null, 'a withdrawn entry lives indefinitely');
+  assert.ok(cache.lifeOf('published') === 90 * DAY, `published life was ${cache.lifeOf('published')}`);
+  assert.ok(cache.lifeOf('withdrawn') === 90 * DAY, `withdrawn life was ${cache.lifeOf('withdrawn')}`);
   assert.ok(cache.lifeOf('Triage') === 7 * DAY, 'the state is read case-insensitively');
   assert.ok(cache.lifeOf(null) === 7 * DAY, 'an entry naming no state takes the shortest life');
+});
+
+test('a draw lengthens the two long lives and no others', () => {
+  assert.ok(
+    cache.lifeOf('published', 3 * DAY) === 93 * DAY,
+    `a published entry that drew three days lived ${cache.lifeOf('published', 3 * DAY)}`
+  );
+  assert.ok(cache.lifeOf('withdrawn', DAY) === 91 * DAY, 'a withdrawn entry ignored its draw');
+  for (const state of ['triage', 'draft', 'closed', null]) {
+    assert.ok(
+      cache.lifeOf(state, 3 * DAY) === cache.lifeOf(state),
+      `${state} took a draw it is not meant to carry`
+    );
+  }
+  assert.ok(
+    cache.lifeOf('published', 400 * DAY) === 104 * DAY,
+    'a draw beyond a fortnight was not held to one'
+  );
+  for (const drawn of [Number.NaN, Number.POSITIVE_INFINITY, -5 * DAY]) {
+    assert.ok(
+      cache.lifeOf('published', drawn) === 90 * DAY,
+      `a draw of ${drawn} was taken as a duration`
+    );
+  }
 });
 
 test('an open entry expires at seven days and not before', () => {
@@ -81,9 +106,15 @@ test('a closed entry expires at thirty days and not before', () => {
   assert.ok(cache.isExpired(held, 30 * DAY), 'a closed entry outlived thirty days');
 });
 
-test('a published or withdrawn entry never expires', () => {
+test('a done entry expires at ninety days plus its own draw', () => {
   for (const state of ['published', 'withdrawn']) {
-    assert.ok(!cache.isExpired(entry(0, state), 365 * DAY), `${state} expired after a year`);
+    const plain = entry(0, state);
+    assert.ok(!cache.isExpired(plain, 30 * DAY), `${state} expired on the closed schedule`);
+    assert.ok(!cache.isExpired(plain, 90 * DAY - 1), `${state} expired one millisecond early`);
+    assert.ok(cache.isExpired(plain, 90 * DAY), `${state} outlived ninety days`);
+    const drawn = entry(0, state, 5 * DAY);
+    assert.ok(!cache.isExpired(drawn, 95 * DAY - 1), `${state} expired one millisecond into a draw`);
+    assert.ok(cache.isExpired(drawn, 95 * DAY), `${state} outlived its ninety days and its draw`);
   }
 });
 
@@ -180,6 +211,26 @@ test('an entry of another shape reads as absent', async () => {
   assert.ok(cache.entryFrom({ record: {}, observedAt: 12 }) !== null, 'a good entry read as absent');
 });
 
+test('an entry stamped with no real moment reads as absent', async () => {
+  const storage = fakeStorage({ [KEY]: { record: { state: 'triage' }, observedAt: Number.NaN } });
+  assert.ok(
+    (await cache.getEntry(KEY, { storage, at: 40 * DAY })) === null,
+    'an entry stamped NaN was handed back'
+  );
+  assert.ok(cache.entryFrom({ record: {}, observedAt: Number.NaN }) === null, 'NaN read as a time');
+  assert.ok(
+    cache.entryFrom({ record: {}, observedAt: Number.POSITIVE_INFINITY }) === null,
+    'an endless time read as a time'
+  );
+
+  // Why the stamp is checked: every comparison against a stamp that is not a
+  // real moment answers false, so an entry carrying one would be fresh for
+  // ever and would never reach the end of its life.
+  const unreal = { record: {}, observedAt: Number.NaN, state: 'triage' };
+  assert.ok(!cache.isStale(unreal, 40 * DAY), 'a NaN stamp read as stale');
+  assert.ok(!cache.isExpired(unreal, 40 * DAY), 'a NaN stamp read as expired');
+});
+
 test('storage failing is an absent entry and an unwritten one', async () => {
   /** @type {import('../src/common/cache.js').CacheStorage} */
   const storage = {
@@ -215,4 +266,76 @@ test('the clock is injectable and the entry stamps read from it', async () => {
   } finally {
     cache.setClock(null);
   }
+});
+
+test('the jitter is drawn once, at write time, and held on the entry', async () => {
+  const storage = fakeStorage();
+  /** @type {number[]} */
+  const draws = [0.25, 0.75];
+  cache.setClock(() => 0);
+  cache.setRandom(() => draws.shift() ?? 0);
+  try {
+    const other = { ...REF, ghsaId: 'GHSA-dead-beef-cafe' };
+    const first = await cache.putAdvisory(REF, { state: 'published' }, { storage });
+    const second = await cache.putAdvisory(other, { state: 'published' }, { storage });
+    assert.ok(first !== null && first.jitterMs === 3.5 * DAY, `the first drew ${first?.jitterMs}`);
+    assert.ok(second !== null && second.jitterMs === 10.5 * DAY, `the second drew ${second?.jitterMs}`);
+
+    // The draw is on the stored entry, so the moment it falls due is fixed
+    // when it is written and does not move when someone reads it.
+    const stored = storage.entries[KEY];
+    const jitterMs = cache.entryFrom(stored)?.jitterMs;
+    assert.ok(jitterMs === first.jitterMs, `storage held a draw of ${jitterMs}`);
+    cache.setRandom(() => 0.99);
+    const reread = await cache.getAdvisory(REF, { storage });
+    assert.ok(reread !== null && reread.jitterMs === first.jitterMs, 'the draw moved between reads');
+
+    const open = await cache.putAdvisory(other, { state: 'triage' }, { storage });
+    assert.ok(open !== null && open.jitterMs === 0, `a triage entry drew ${open?.jitterMs}`);
+  } finally {
+    cache.setClock(null);
+    cache.setRandom(null);
+  }
+});
+
+test('a drawn entry is held to the end of its life and then discarded', async () => {
+  const storage = fakeStorage();
+  let clock = 0;
+  cache.setClock(() => clock);
+  cache.setRandom(() => 0.5);
+  try {
+    const written = await cache.putAdvisory(REF, { state: 'published' }, { storage });
+    assert.ok(written !== null && written.jitterMs === 7 * DAY, `the entry drew ${written?.jitterMs}`);
+    clock = 97 * DAY - 1;
+    assert.ok((await cache.getAdvisory(REF, { storage })) !== null, 'discarded one millisecond early');
+    assert.ok(Object.hasOwn(storage.entries, KEY), 'a live entry was taken out of storage');
+    clock = 97 * DAY;
+    assert.ok((await cache.getAdvisory(REF, { storage })) === null, 'held past ninety-seven days');
+    assert.ok(!Object.hasOwn(storage.entries, KEY), 'the expired entry stayed in storage');
+  } finally {
+    cache.setClock(null);
+    cache.setRandom(null);
+  }
+});
+
+test('an entry written before the draw lives the plain ninety days', async () => {
+  const held = { record: { state: 'published' }, observedAt: 0, state: 'published' };
+  const early = fakeStorage({ [KEY]: { ...held } });
+  const inside = await cache.getEntry(KEY, { storage: early, at: 90 * DAY - 1 });
+  assert.ok(inside !== null, 'an entry carrying no draw was discarded before ninety days');
+  assert.ok(inside.jitterMs === 0, `a missing draw read as ${inside?.jitterMs}`);
+  assert.ok(
+    (await cache.getEntry(KEY, { storage: early, at: 90 * DAY })) === null,
+    'an entry carrying no draw outlived ninety days'
+  );
+  assert.ok(!Object.hasOwn(early.entries, KEY), 'the expired entry stayed in storage');
+
+  // A stored draw that is not a real duration is no draw. Every comparison
+  // against one answers false, so an entry carrying one would never reach the
+  // end of its life.
+  const unreal = fakeStorage({ [KEY]: { ...held, jitterMs: Number.NaN } });
+  assert.ok(
+    (await cache.getEntry(KEY, { storage: unreal, at: 90 * DAY })) === null,
+    'an entry carrying a NaN draw was handed back'
+  );
 });

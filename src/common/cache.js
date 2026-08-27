@@ -35,6 +35,10 @@ if (typeof require === 'function') {
  * @property {string | null} state The advisory's state, lowercased, which is
  *   what the entry's life follows. Null on an entry that is not an advisory and
  *   on one whose record named no state.
+ * @property {number} [jitterMs] How much longer than the table's life this
+ *   entry lives, milliseconds, drawn once when the entry was written. Absent on
+ *   an entry written before entries carried a draw, which lives the plain life
+ *   the table names.
  */
 
 /**
@@ -83,20 +87,40 @@ if (typeof require === 'function') {
   const STALE_MS = 5 * MINUTE_MS;
 
   /**
-   * How long an entry lives, by the state of the advisory it holds. Null is
-   * indefinite: a published or withdrawn advisory does not change again, so its
-   * entry is re-read when the advisory is opened and never discarded on a
-   * schedule.
+   * How long an entry lives, by the state of the advisory it holds. A
+   * published or withdrawn advisory does not change again, so its entry lives
+   * months and not days; it is bounded all the same, so storage does not keep
+   * every advisory this extension ever read.
    *
-   * @type {Readonly<Record<string, number | null>>}
+   * @type {Readonly<Record<string, number>>}
    */
   const LIFE_MS = {
     triage: 7 * DAY_MS,
     draft: 7 * DAY_MS,
     closed: 30 * DAY_MS,
-    published: null,
-    withdrawn: null,
+    published: 90 * DAY_MS,
+    withdrawn: 90 * DAY_MS,
   };
+
+  /**
+   * The most a draw lengthens an entry's life.
+   *
+   * REQUIREMENTS.md section 10 reads a corpus at one request per second, so the
+   * entries a pass writes are stamped within minutes of each other. On one
+   * shared life they fall due together and the corpus re-crawls in one wave.
+   * Spread over a fortnight it is a few advisories a day, which is what
+   * background refreshing already costs.
+   */
+  const JITTER_MS = 14 * DAY_MS;
+
+  /**
+   * The states whose entries carry a draw: the long-lived two, which are the
+   * ones a pass writes in bulk. A triage, draft, or closed entry is re-read
+   * constantly and has no herd to spread.
+   *
+   * @type {ReadonlySet<string>}
+   */
+  const JITTERED_STATES = new Set(['published', 'withdrawn']);
 
   /**
    * How long an entry lives when nothing named a state: the shortest life in
@@ -120,6 +144,14 @@ if (typeof require === 'function') {
    * @type {(() => number) | null}
    */
   let injectedClock = null;
+
+  /**
+   * The randomness a caller put in place of `Math.random`, and null while
+   * `Math.random` is what to draw from.
+   *
+   * @type {(() => number) | null}
+   */
+  let injectedRandom = null;
 
   /**
    * @returns {CacheStorage | null} `storage.local` under whichever name this
@@ -160,6 +192,21 @@ if (typeof require === 'function') {
   /** @returns {number} the current moment, epoch milliseconds. */
   function now() {
     return injectedClock === null ? Date.now() : injectedClock();
+  }
+
+  /**
+   * @param {(() => number) | null} source Draws a fraction in [0, 1), and null
+   *   to go back to `Math.random`. The jitter is the only draw this file makes,
+   *   so a test that pins this pins an entry's expiry to the millisecond.
+   * @returns {void}
+   */
+  function setRandom(source) {
+    injectedRandom = source;
+  }
+
+  /** @returns {number} a fraction in [0, 1). */
+  function random() {
+    return injectedRandom === null ? Math.random() : injectedRandom();
   }
 
   /**
@@ -243,15 +290,41 @@ if (typeof require === 'function') {
   }
 
   /**
-   * @param {string | null | undefined} state
-   * @returns {number | null} how long an entry in this state lives, and null
-   *   where it lives indefinitely.
+   * @param {string | null} state The entry's state, already normalized.
+   * @param {unknown} value The draw the entry carries.
+   * @returns {number} how much that draw lengthens the entry's life,
+   *   milliseconds. It is none where the state takes no draw, and it is held
+   *   inside the range the table allows: an entry carrying a duration that is
+   *   not a real one takes none, because every comparison against one answers
+   *   false and the entry would never reach the end of its life.
    */
-  function lifeOf(state) {
+  function jitterOf(state, value) {
+    if (state === null || !JITTERED_STATES.has(state)) return 0;
+    if (typeof value !== 'number' || !Number.isFinite(value)) return 0;
+    return Math.min(Math.max(0, value), JITTER_MS);
+  }
+
+  /**
+   * @param {string | null} state The entry's state, already normalized.
+   * @returns {number} the draw to store on an entry being written now, drawn
+   *   here and never again. Drawn at read time the same entry would expire at a
+   *   different moment on every read, and would be discarded early or late
+   *   depending on when someone looked.
+   */
+  function drawJitter(state) {
+    return Math.floor(jitterOf(state, random() * JITTER_MS));
+  }
+
+  /**
+   * @param {string | null | undefined} state
+   * @param {number} [jitterMs] The draw the entry carries, and absent on an
+   *   entry written before entries carried one.
+   * @returns {number} how long an entry in this state lives.
+   */
+  function lifeOf(state, jitterMs) {
     const key = normalizeState(state);
-    if (key === null) return DEFAULT_LIFE_MS;
-    const life = LIFE_MS[key];
-    return life === undefined ? DEFAULT_LIFE_MS : life;
+    const life = key === null ? undefined : LIFE_MS[key];
+    return (life === undefined ? DEFAULT_LIFE_MS : life) + jitterOf(key, jitterMs);
   }
 
   /**
@@ -268,12 +341,11 @@ if (typeof require === 'function') {
   /**
    * @param {CacheEntry} entry
    * @param {number} [at]
-   * @returns {boolean} whether the entry has outlived its state's life and is to
-   *   be discarded.
+   * @returns {boolean} whether the entry has outlived its state's life, its own
+   *   draw included, and is to be discarded.
    */
   function isExpired(entry, at = now()) {
-    const life = lifeOf(entry.state);
-    return life === null ? false : ageOf(entry, at) >= life;
+    return ageOf(entry, at) >= lifeOf(entry.state, entry.jitterMs);
   }
 
   /**
@@ -295,7 +367,8 @@ if (typeof require === 'function') {
     if (!globalThis.bghsa.schema.isPlainObject(value)) return null;
     const observedAt = value.observedAt;
     if (typeof observedAt !== 'number' || !Number.isFinite(observedAt)) return null;
-    return { record: value.record, observedAt, state: normalizeState(value.state) };
+    const state = normalizeState(value.state);
+    return { record: value.record, observedAt, state, jitterMs: jitterOf(state, value.jitterMs) };
   }
 
   /**
@@ -396,11 +469,13 @@ if (typeof require === 'function') {
   async function putEntry(key, record, options = {}) {
     const storage = options.storage ?? storageOf();
     if (storage === null || key === null) return null;
+    const state = options.state === undefined ? stateOf(record) : normalizeState(options.state);
     /** @type {CacheEntry} */
     const entry = {
       record,
       observedAt: options.at ?? now(),
-      state: options.state === undefined ? stateOf(record) : normalizeState(options.state),
+      state,
+      jitterMs: drawJitter(state),
     };
     try {
       await storage.set({ [key]: entry });
@@ -553,10 +628,13 @@ if (typeof require === 'function') {
     STALE_MS,
     LIFE_MS,
     DEFAULT_LIFE_MS,
+    JITTER_MS,
+    JITTERED_STATES,
     setStorage,
     storageOf,
     setClock,
     now,
+    setRandom,
     advisoryKey,
     listKey,
     progressKey,
