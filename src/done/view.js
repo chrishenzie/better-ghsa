@@ -17,7 +17,6 @@ if (typeof require === 'function') {
   require('../list/table.js');
   require('./corpus.js');
   require('./stats.js');
-  require('./csv.js');
 }
 
 /**
@@ -89,9 +88,6 @@ if (typeof require === 'function') {
   /** What it reads while this one is. */
   const SHOW_OPEN = 'Show open advisories';
 
-  /** What the control that writes the file reads. */
-  const EXPORT_LABEL = 'Export CSV';
-
   /** What the control that writes one closure reason reads. */
   const SAVE_LABEL = 'Save';
 
@@ -126,41 +122,9 @@ if (typeof require === 'function') {
     '.bghsa-done-meta { color: var(--fgColor-muted); }',
     '.bghsa-done-observed { color: var(--fgColor-muted); white-space: nowrap; }',
     '.bghsa-done-empty { color: var(--fgColor-muted); }',
-    '.bghsa-done-over { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; }',
-    '.bghsa-done-groups { display: flex; flex-wrap: wrap; gap: 16px; }',
-    '.bghsa-done-group { min-width: 180px; }',
-    '.bghsa-done-tally { display: grid; grid-template-columns: auto auto auto; gap: 0 12px; }',
-    '.bghsa-done-tally > span { white-space: nowrap; }',
-    '.bghsa-done-count, .bghsa-done-ratio { color: var(--fgColor-muted); text-align: right; }',
-    '.bghsa-done-spread { display: flex; flex-wrap: wrap; gap: 4px 12px; }',
-    '.bghsa-done-uncomputed { color: var(--fgColor-muted); }',
+    '.bghsa-done-count { color: var(--fgColor-muted); }',
+    '.bghsa-done-header { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; }',
   ].join('\n');
-
-  /**
-   * The counts the view draws, in the order it draws them, and how each is
-   * ordered inside itself. A month reads in time order; everything else reads
-   * commonest first, which is what a ratio is looked at for.
-   *
-   * @type {readonly { key: string, name: string, by: 'count' | 'value' }[]}
-   */
-  const COUNT_GROUPS = [
-    { key: 'reason', name: 'Closure reason', by: 'count' },
-    { key: 'state', name: 'State', by: 'count' },
-    { key: 'severity', name: 'Severity', by: 'count' },
-    { key: 'month', name: 'Month', by: 'value' },
-  ];
-
-  /**
-   * What one timing's spread is drawn as, in the order it is drawn.
-   *
-   * @type {readonly { key: 'min' | 'median' | 'mean' | 'max', name: string }[]}
-   */
-  const SPREAD = [
-    { key: 'min', name: 'Min' },
-    { key: 'median', name: 'Median' },
-    { key: 'mean', name: 'Mean' },
-    { key: 'max', name: 'Max' },
-  ];
 
   /** What the view holds for each document. @type {WeakMap<Document, Held>} */
   const held = new WeakMap();
@@ -225,9 +189,8 @@ if (typeof require === 'function') {
    * GitHub replaces the turbo frame on a soft navigation and keeps the
    * document, so one document covers one repository's advisory list and then
    * another's. A corpus is a hundred-odd advisories of one repository, and the
-   * rows, the statistics and the export built from it say nothing about the
-   * next one. What the view holds is therefore keyed to the repository, as the
-   * list surface's refresh is.
+   * rows built from it say nothing about the next one. What the view holds is
+   * therefore keyed to the repository, as the list surface's refresh is.
    *
    * @param {Document} doc
    * @returns {Held}
@@ -256,47 +219,6 @@ if (typeof require === 'function') {
   function chip(doc, text, severityClass) {
     const modifiers = severityClass ?? 'Label--secondary';
     return element(doc, 'span', `Label ${modifiers}`, text);
-  }
-
-  /**
-   * @param {string} key
-   * @returns {string} a camel-cased key as a label. A timing this reader does
-   *   not compute is named from its key, so one arriving later is drawn without
-   *   anything here being told about it.
-   */
-  function nameOf(key) {
-    const words = key.replace(/([A-Z])/g, ' $1').toLowerCase().trim();
-    return globalThis.bghsa.table.sentenceCase(words);
-  }
-
-  /** How many milliseconds are in each unit a duration is read in. */
-  const DAY_MS = 24 * 60 * 60 * 1000;
-  const HOUR_MS = 60 * 60 * 1000;
-  const MINUTE_MS = 60 * 1000;
-
-  /**
-   * @param {number | null} ms
-   * @returns {string} a duration in the two largest units it reaches, and a dash
-   *   where there is none. A timing with nothing behind it is not a zero.
-   */
-  function formatDuration(ms) {
-    if (ms === null || !Number.isFinite(ms)) return '—';
-    if (ms >= DAY_MS) {
-      return `${Math.floor(ms / DAY_MS)}d ${Math.floor((ms % DAY_MS) / HOUR_MS)}h`;
-    }
-    if (ms >= HOUR_MS) {
-      return `${Math.floor(ms / HOUR_MS)}h ${Math.floor((ms % HOUR_MS) / MINUTE_MS)}m`;
-    }
-    if (ms >= MINUTE_MS) return `${Math.floor(ms / MINUTE_MS)}m`;
-    return `${Math.round(ms / 1000)}s`;
-  }
-
-  /**
-   * @param {number} ratio
-   * @returns {string}
-   */
-  function formatRatio(ratio) {
-    return `${Math.round(ratio * 100)}%`;
   }
 
   /**
@@ -547,156 +469,6 @@ if (typeof require === 'function') {
   }
 
   /**
-   * How many advisories GitHub's own state tabs counted, and null where either
-   * tab went unread. It is the corpus size before any crawl, so it is what says
-   * whether the members drawn here are all of them.
-   *
-   * @param {Record<string, number | null>} expected
-   * @returns {number | null}
-   */
-  function expectedTotal(expected) {
-    let total = 0;
-    for (const state of globalThis.bghsa.corpus.DONE_STATES) {
-      const count = expected[state];
-      if (count === null || count === undefined) return null;
-      total += count;
-    }
-    return total;
-  }
-
-  /**
-   * What every statistic below is over. A partial count read as a whole one is
-   * the thing this stops, so the corpus size, how much of it no read backs, and
-   * whether the crawl finished are all beside the numbers.
-   *
-   * @param {Document} doc
-   * @param {import('./stats.js').Summary} summary
-   * @param {boolean} reading
-   * @returns {Element}
-   */
-  function buildOver(doc, summary, reading) {
-    const box = element(doc, 'div', 'mt-1 bghsa-done-over');
-    box.append(chip(doc, `Over ${countTextOf(summary.corpus)}`));
-    if (summary.unread > 0) box.append(chip(doc, `${summary.unread} unread`));
-    const total = expectedTotal(summary.expected);
-    if (total !== null && total !== summary.corpus) box.append(chip(doc, `${total} on GitHub`));
-    if (!summary.complete) box.append(chip(doc, PARTIAL_TEXT));
-    if (reading) box.append(chip(doc, READING_TEXT));
-    return box;
-  }
-
-  /**
-   * One count, with what it is over beside it.
-   *
-   * @param {Document} doc
-   * @param {{ key: string, name: string, by: 'count' | 'value' }} group
-   * @param {import('./stats.js').Tally} tally
-   * @returns {Element}
-   */
-  function buildTally(doc, group, tally) {
-    const box = element(doc, 'div', 'bghsa-done-group');
-    box.setAttribute('data-bghsa-count', group.key);
-    box.append(element(doc, 'div', 'text-bold', group.name));
-    box.append(
-      element(doc, 'div', 'text-small bghsa-done-meta', `${tally.counted} of ${tally.corpus}`)
-    );
-    const grid = element(doc, 'div', 'mt-1 text-small bghsa-done-tally');
-    const entries = Object.entries(tally.counts).sort((left, right) =>
-      group.by === 'value'
-        ? left[0].localeCompare(right[0])
-        : right[1] - left[1] || left[0].localeCompare(right[0])
-    );
-    for (const [value, count] of entries) {
-      grid.append(element(doc, 'span', '', globalThis.bghsa.table.sentenceCase(value)));
-      grid.append(element(doc, 'span', 'bghsa-done-count', String(count)));
-      grid.append(
-        element(doc, 'span', 'bghsa-done-ratio', formatRatio(tally.ratios[value] ?? 0))
-      );
-    }
-    if (tally.missing > 0) {
-      // The members carrying no value are counted where the reader can see
-      // them, so a ratio over the rest is not read as a ratio over the corpus.
-      grid.append(element(doc, 'span', 'bghsa-done-meta bghsa-done-missing', 'None'));
-      grid.append(element(doc, 'span', 'bghsa-done-count', String(tally.missing)));
-      grid.append(element(doc, 'span', 'bghsa-done-ratio', '—'));
-    }
-    box.append(grid);
-    return box;
-  }
-
-  /**
-   * One timing, with what it is over and what it left out beside it.
-   *
-   * @param {Document} doc
-   * @param {{ key: string, name: string }} timing
-   * @param {import('./stats.js').Timing} held
-   * @returns {Element}
-   */
-  function buildTiming(doc, timing, held) {
-    const box = element(doc, 'div', 'bghsa-done-group');
-    box.setAttribute('data-bghsa-timing', timing.key);
-    box.append(element(doc, 'div', 'text-bold', timing.name));
-    box.append(
-      element(
-        doc,
-        'div',
-        'text-small bghsa-done-meta',
-        `${held.counted} of ${held.corpus}, ${held.omitted} omitted`
-      )
-    );
-    const spread = element(doc, 'div', 'mt-1 text-small bghsa-done-spread');
-    for (const each of SPREAD) {
-      const cell = element(doc, 'span', '');
-      cell.append(element(doc, 'span', 'bghsa-done-meta', `${each.name} `));
-      cell.append(element(doc, 'span', 'bghsa-done-value', formatDuration(held[each.key])));
-      spread.append(cell);
-    }
-    box.append(spread);
-    return box;
-  }
-
-  /**
-   * The statistics of REQUIREMENTS.md section 10, over the corpus the view
-   * holds. A timing whose event this extension cannot observe is named and left
-   * uncomputed, because a reader owed a metric is owed the reason it is absent.
-   *
-   * @param {Document} doc
-   * @param {import('./stats.js').Summary} summary
-   * @param {boolean} reading
-   * @returns {Element}
-   */
-  function buildStats(doc, summary, reading) {
-    const box = element(doc, 'div', 'Box-body bghsa-done-stats');
-    box.append(element(doc, 'div', 'text-bold', 'Statistics'));
-    box.append(buildOver(doc, summary, reading));
-
-    const counts = element(doc, 'div', 'mt-2 bghsa-done-groups bghsa-done-counts');
-    for (const group of COUNT_GROUPS) {
-      const tally = summary.counts[group.key];
-      if (tally === undefined) continue;
-      counts.append(buildTally(doc, group, tally));
-    }
-    box.append(counts);
-
-    const timings = element(doc, 'div', 'mt-2 bghsa-done-groups bghsa-done-timings');
-    for (const timing of globalThis.bghsa.stats.TIMINGS) {
-      const found = summary.timings[timing.key];
-      if (found === undefined) continue;
-      timings.append(buildTiming(doc, timing, found));
-    }
-    box.append(timings);
-
-    for (const [key, why] of Object.entries(summary.uncomputed)) {
-      const line = element(doc, 'div', 'mt-2 text-small bghsa-done-uncomputed');
-      line.setAttribute('data-bghsa-uncomputed', key);
-      line.append(element(doc, 'span', 'text-bold', `${nameOf(key)}: `));
-      line.append(element(doc, 'span', '', why));
-      box.append(line);
-    }
-    return box;
-  }
-
-  /**
    * @param {unknown} reason
    * @returns {string} what a failure says for itself.
    */
@@ -752,8 +524,11 @@ if (typeof require === 'function') {
   }
 
   /**
-   * The done view: a Box carrying the count, the export, the statistics, and the
-   * advisories.
+   * The done view: a Box carrying the count and the advisories.
+   *
+   * It carries no statistics. REQUIREMENTS.md section 10 gives them a view of
+   * their own: they are not a property of the done list, and they are over the
+   * open half of the corpus as well.
    *
    * @param {Document} doc
    * @returns {Element}
@@ -764,57 +539,23 @@ if (typeof require === 'function') {
     root.id = ROOT_ID;
     root.setAttribute('data-bghsa-done', '1');
 
-    const header = element(
-      doc,
-      'div',
-      'Box-header d-flex flex-items-center flex-justify-between bghsa-done-header'
-    );
-    const named = element(doc, 'div', 'd-flex flex-items-center');
-    named.append(element(doc, 'strong', '', 'Done'));
+    const header = element(doc, 'div', 'Box-header bghsa-done-header');
+    header.append(element(doc, 'strong', '', 'Done'));
     const rows = rowsOf(state.corpus);
-    named.append(element(doc, 'span', 'ml-2 text-normal bghsa-done-count', countTextOf(rows.length)));
-    header.append(named);
-
-    const exportControl = element(doc, 'button', 'btn btn-sm bghsa-done-export', EXPORT_LABEL);
-    exportControl.setAttribute('type', 'button');
-    if (state.corpus === null || rows.length === 0) exportControl.setAttribute('disabled', '');
-    exportControl.addEventListener('click', () => {
-      exportCsv(doc);
-    });
-    header.append(exportControl);
+    const countText = globalThis.bghsa.table.countTextOf(rows.length);
+    header.append(element(doc, 'span', 'ml-2 text-normal bghsa-done-count', countText));
+    // What the list is of, which is not a statistic: a walk short of its last
+    // page holds part of the two states, and a maintainer reading a row has to
+    // be able to tell that more are on their way.
+    if (state.corpus !== null && !state.corpus.complete) header.append(chip(doc, PARTIAL_TEXT));
+    if (state.reading) header.append(chip(doc, READING_TEXT));
     root.append(header);
 
     const banner = buildBanner(doc, state.failures);
     if (banner !== null) root.append(banner);
 
-    if (state.corpus !== null) {
-      root.append(buildStats(doc, globalThis.bghsa.stats.summarize(state.corpus), state.reading));
-    }
     root.append(buildBody(doc, rows, state.corpus, state.reading));
     return root;
-  }
-
-  /**
-   * Writes the corpus out as a file the browser takes. It is built here in the
-   * page from what the view already holds: nothing is fetched and nothing is
-   * sent anywhere.
-   *
-   * @param {Document} doc
-   * @param {import('./csv.js').DownloadOptions} [options]
-   * @returns {string | null} the blob URL the press went to, and null where
-   *   there is nothing to write or no way to hand it over.
-   */
-  function exportCsv(doc, options) {
-    const state = current(doc);
-    if (state.corpus === null || state.ref === null) return null;
-    const csv = globalThis.bghsa.csv;
-    const at = globalThis.bghsa.cache.now();
-    return csv.download(
-      doc,
-      csv.filenameFor(state.ref, at),
-      csv.toCsv(state.corpus),
-      options
-    );
   }
 
   /** How the list surface holds a node out of view. */
@@ -1062,7 +803,6 @@ if (typeof require === 'function') {
     MODE,
     SHOW_DONE,
     SHOW_OPEN,
-    EXPORT_LABEL,
     SAVE_LABEL,
     NO_REASON,
     EMPTY_TEXT,
@@ -1072,30 +812,20 @@ if (typeof require === 'function') {
     FAILURE_MESSAGE,
     UNREADABLE_MESSAGE,
     STYLE_TEXT,
-    COUNT_GROUPS,
-    SPREAD,
     notes,
     stateOf,
     setState,
     current,
-    nameOf,
-    formatDuration,
-    formatRatio,
     rowsOf,
     memberOf,
     metaTextOf,
     reasonTextOf,
     buildBanner,
-    expectedTotal,
     contextFor,
     buildClosure,
     buildRow,
-    buildTally,
-    buildTiming,
-    buildStats,
     buildBody,
     buildView,
-    exportCsv,
     ensureStyle,
     draw,
     buildToggle,
@@ -1108,7 +838,7 @@ if (typeof require === 'function') {
 
   globalThis.bghsa.view = exported;
 
-  // The list surface holds the choice of view and the bar both toggles sit on,
+  // The list surface holds the choice of view and the bar the toggles sit on,
   // so this one takes its place there as soon as it loads.
   globalThis.bghsa.table.addSurface({ control: buildToggle, show, left });
 

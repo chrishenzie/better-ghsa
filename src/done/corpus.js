@@ -30,15 +30,16 @@ if (typeof require === 'function') {
  */
 
 /**
- * The published and closed advisories of one repository, and what is known
- * about how much of the corpus this is.
+ * The advisories of one repository in a set of states, and what is known about
+ * how much of that set this is. The done view holds the published and closed
+ * pair; the statistics hold that pair and the open one.
  *
  * @typedef {object} Corpus
- * @property {CorpusMember[]} members Every advisory the crawl holds in the done
+ * @property {CorpusMember[]} members Every advisory the crawl holds in those
  *   states, ordered by identifier so two collections of one corpus are ordered
  *   the same way.
  * @property {string[]} unread The members no advisory read backs.
- * @property {boolean} complete Whether both walks reached their last page. A
+ * @property {boolean} complete Whether every walk reached its last page. A
  *   corpus that is not complete holds part of the states, and how much is not
  *   known from the crawl alone.
  * @property {Record<string, number | null>} expected What GitHub's own state
@@ -82,15 +83,17 @@ if (typeof require === 'function') {
 
   /**
    * @param {import('../common/parse-list.js').ParsedList | null | undefined} parsed
+   * @param {readonly string[]} [states] The states to count, and the done pair
+   *   where none is named.
    * @returns {Record<string, number | null>} what the state tabs counted, by
    *   `?state=`. A page nobody is looking at counts nothing, and a tab this
    *   reader did not find counts null: neither is a zero, because a corpus of
    *   no advisories and a corpus of unknown size are not the same thing.
    */
-  function expectedOf(parsed) {
+  function expectedOf(parsed, states = DONE_STATES) {
     /** @type {Record<string, number | null>} */
     const counts = {};
-    for (const state of DONE_STATES) {
+    for (const state of states) {
       const tab = parsed?.tabs?.find((entry) => entry.state === state);
       counts[state] = tab === undefined ? null : tab.count;
     }
@@ -107,16 +110,20 @@ if (typeof require === 'function') {
    *   at?: number,
    *   expected?: Record<string, number | null>,
    *   complete?: boolean,
-   * }} [options]
+   *   states?: readonly string[],
+   * }} [options] `states` names the `?state=` values the corpus is over, and is
+   *   the done pair where it is absent. The statistics are over the whole
+   *   corpus, so they assemble the open pair through here as well.
    * @returns {Promise<Corpus>}
    */
   async function membersOf(ref, list, options = {}) {
     const at = options.at ?? globalThis.bghsa.cache.now();
+    const states = options.states ?? DONE_STATES;
 
     /** @type {{ ghsaId: string, state: string, row: import('../common/parse-list.js').ListRow, seenAt: number }[]} */
     const held = [];
     for (const entry of Object.values(list.rows)) {
-      if (!DONE_STATES.includes(entry.state)) continue;
+      if (!states.includes(entry.state)) continue;
       if (entry.row.ghsaId === null) continue;
       held.push({ ghsaId: entry.row.ghsaId, state: entry.state, row: entry.row, seenAt: entry.seenAt });
     }
@@ -150,7 +157,7 @@ if (typeof require === 'function') {
       members,
       unread,
       complete: options.complete === true,
-      expected: options.expected ?? expectedOf(null),
+      expected: options.expected ?? expectedOf(null, states),
     };
   }
 

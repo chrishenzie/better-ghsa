@@ -13,9 +13,9 @@ const schema = require('../src/common/schema.js');
 const write = require('../src/common/write.js');
 const edit = require('../src/detail/edit.js');
 const table = require('../src/list/table.js');
-const csv = require('../src/done/csv.js');
 const corpus = require('../src/done/corpus.js');
 const view = require('../src/done/view.js');
+const statistics = require('../src/stats/statistics.js');
 
 const { fakeStorage } = require('../test-support/storage.js');
 
@@ -219,6 +219,16 @@ function doneRow(doc, ghsaId) {
 function doneToggle(doc) {
   return /** @type {HTMLElement} */ (
     /** @type {unknown} */ (one(doc, `#${table.ROOT_ID} .bghsa-done-toggle`))
+  );
+}
+
+/**
+ * @param {Document} doc
+ * @returns {HTMLElement} the toggle that opens the statistics.
+ */
+function statsToggle(doc) {
+  return /** @type {HTMLElement} */ (
+    /** @type {unknown} */ (one(doc, `#${table.ROOT_ID} .bghsa-stats-toggle`))
   );
 }
 
@@ -523,7 +533,7 @@ test('the done view is reached from a toggle beside the one for GitHub', async (
   assert.strictEqual(reread?.rows.length, 1, "a re-read still finds GitHub's one row");
 });
 
-test("the three views converge, and GitHub's own view comes back whole", async () => {
+test("the four views converge, and GitHub's own view comes back whole", async () => {
   const doc = await page(
     corpusOf([member({ ghsaId: ghsa('dddd'), state: 'published', title: 'A published advisory' })])
   );
@@ -532,7 +542,7 @@ test("the three views converge, and GitHub's own view comes back whole", async (
   const listBox = one(doc, `#${table.ROOT_ID} .bghsa-list-box`);
 
   /**
-   * @returns {string} which of the three is in view, named once. Two of them
+   * @returns {string} which of the four is in view, named once. Two of them
    *   showing at once, or none, is what this catches.
    */
   const showing = () => {
@@ -540,6 +550,9 @@ test("the three views converge, and GitHub's own view comes back whole", async (
     if (native.some((node) => !node.classList.contains(table.HIDDEN_CLASS))) shown.push('native');
     if (!listBox.classList.contains(table.HIDDEN_CLASS)) shown.push('table');
     if (!one(doc, `#${view.ROOT_ID}`).classList.contains(table.HIDDEN_CLASS)) shown.push('done');
+    if (!one(doc, `#${statistics.ROOT_ID}`).classList.contains(table.HIDDEN_CLASS)) {
+      shown.push('statistics');
+    }
     return shown.join('+');
   };
 
@@ -561,47 +574,73 @@ test("the three views converge, and GitHub's own view comes back whole", async (
 
   press(doneToggle(doc));
   assert.strictEqual(showing(), 'done');
+  press(statsToggle(doc));
+  assert.strictEqual(showing(), 'statistics', 'the statistics open from the done view');
+  press(doneToggle(doc));
+  assert.strictEqual(showing(), 'done', 'and the done view from the statistics');
   press(githubToggle(doc));
   assert.strictEqual(showing(), 'native', "the done view gives way to GitHub's");
 
   // GitHub's own view carries one control of the extension's, the way back, so
-  // the done view cannot be opened from here.
+  // neither of the other two views can be opened from here.
   assert.ok(
     doneToggle(doc).classList.contains(table.HIDDEN_CLASS),
     "the done toggle is out of reach while GitHub's view is showing"
   );
+  assert.ok(
+    statsToggle(doc).classList.contains(table.HIDDEN_CLASS),
+    "the statistics toggle is out of reach while GitHub's view is showing"
+  );
 
   press(githubToggle(doc));
   assert.strictEqual(showing(), 'table', 'the way back lands on the table');
-  press(doneToggle(doc));
-  assert.strictEqual(showing(), 'done', 'and the done view opens again from there');
-  press(doneToggle(doc));
+  press(statsToggle(doc));
+  assert.strictEqual(showing(), 'statistics', 'the statistics open from the table');
+  press(githubToggle(doc));
+  assert.strictEqual(showing(), 'native', "the statistics give way to GitHub's");
+  press(githubToggle(doc));
+  assert.strictEqual(showing(), 'table', 'and the way back lands on the table again');
+  press(statsToggle(doc));
+  assert.strictEqual(showing(), 'statistics');
+  press(statsToggle(doc));
   assert.strictEqual(showing(), 'table', 'pressing it again gives the table back');
-  press(githubToggle(doc));
-  assert.strictEqual(showing(), 'native');
-  press(githubToggle(doc));
-  assert.strictEqual(showing(), 'table');
+  press(doneToggle(doc));
+  assert.strictEqual(showing(), 'done');
+  press(doneToggle(doc));
+  assert.strictEqual(showing(), 'table', 'and so does pressing the done toggle again');
 
-  // Hiding is not destroying: what came back is GitHub's own view, whole.
-  press(githubToggle(doc));
-  assert.strictEqual(
-    doc.querySelectorAll('#advisories div.Box-row--drag-hide').length,
-    1,
-    "GitHub's own rows"
-  );
-  assert.strictEqual(
-    doc.querySelectorAll('#advisories segmented-control a[href]').length,
-    4,
-    'the state tabs'
-  );
-  assert.strictEqual(
-    doc.querySelectorAll('#advisories repository-advisories-filter form').length,
-    1,
-    'the query form'
-  );
+  // Hiding is not destroying: what came back is GitHub's own view, whole. It is
+  // reached from each of the extension's three views in turn.
+  for (const open of [() => {}, () => press(doneToggle(doc)), () => press(statsToggle(doc))]) {
+    open();
+    press(githubToggle(doc));
+    assert.strictEqual(showing(), 'native');
+    assert.strictEqual(
+      doc.querySelectorAll('#advisories div.Box-row--drag-hide').length,
+      1,
+      "GitHub's own rows"
+    );
+    assert.strictEqual(
+      doc.querySelectorAll('#advisories segmented-control a[href]').length,
+      4,
+      'the state tabs'
+    );
+    assert.strictEqual(
+      doc.querySelectorAll('#advisories repository-advisories-filter form').length,
+      1,
+      'the query form'
+    );
+    press(githubToggle(doc));
+    assert.strictEqual(showing(), 'table');
+  }
+
   assert.ok(
     doc.getElementById(view.ROOT_ID) !== null,
     'the done view is held out of view, not taken away'
+  );
+  assert.ok(
+    doc.getElementById(statistics.ROOT_ID) !== null,
+    'and so are the statistics'
   );
 });
 
@@ -657,129 +696,6 @@ test("the severity chip takes GitHub's own color and no other chip does", async 
     chipColors(doneRow(doc, bare)),
     ['Label--secondary', 'Label--secondary', 'Label--secondary'],
     'a severity GitHub carried no modifier on'
-  );
-});
-
-test('a statistic over a partly-read corpus says what it is over', async () => {
-  const read = advisory({
-    ref: { ...REF, ghsaId: ghsa('eeee') },
-    ghsaId: ghsa('eeee'),
-    state: 'Closed',
-    severity: 'high',
-    reportedAt: '2026-03-02T00:00:00Z',
-    comments: [
-      comment({ author: 'samuelkarp', role: 'Member', at: '2026-03-02T02:00:00Z' }),
-      comment({
-        author: 'samuelkarp',
-        role: 'Member',
-        at: '2026-03-03T00:00:00Z',
-        state: {
-          betterGhsa: '1.0',
-          seq: 1,
-          by: 'samuelkarp',
-          at: '2026-03-03T00:00:00Z',
-          closure: { reason: 'not a vulnerability' },
-        },
-      }),
-    ],
-  });
-  const doc = await page(
-    corpusOf(
-      [
-        member({ ghsaId: ghsa('eeee'), state: 'closed', advisory: read }),
-        member({ ghsaId: ghsa('ffff'), state: 'closed', severity: 'low' }),
-        member({ ghsaId: ghsa('gggg'), state: 'published', severity: 'low' }),
-      ],
-      { complete: false, expected: { published: 4, closed: 1 } }
-    )
-  );
-
-  assert.deepStrictEqual(
-    textsOf(doc, `#${view.ROOT_ID} .bghsa-done-over span.Label`),
-    ['Over 3 advisories', '2 unread', '5 on GitHub', view.PARTIAL_TEXT],
-    'the corpus, what no read backs, what GitHub counted, and that the walk is unfinished'
-  );
-
-  // The closure reason is a stored value, so only the member a read backs can
-  // carry one. The count says so rather than reading as one in three.
-  const reason = one(doc, '[data-bghsa-count="reason"]');
-  assert.strictEqual(textOf(reason, '.bghsa-done-meta'), '1 of 3');
-  assert.deepStrictEqual(textsOf(reason, '.bghsa-done-tally > span'), [
-    'Not a vulnerability',
-    '1',
-    '100%',
-    'None',
-    '2',
-    '—',
-  ]);
-
-  // The severity comes off the list row where no read backs it, so every member
-  // carries one and nothing is missing from that count.
-  const severity = one(doc, '[data-bghsa-count="severity"]');
-  assert.strictEqual(textOf(severity, '.bghsa-done-meta'), '3 of 3');
-  assert.deepStrictEqual(textsOf(severity, '.bghsa-done-tally > span'), [
-    'Low',
-    '2',
-    '67%',
-    'High',
-    '1',
-    '33%',
-  ]);
-
-  const first = one(doc, '[data-bghsa-timing="firstResponse"]');
-  assert.strictEqual(textOf(first, '.bghsa-done-meta'), '1 of 3, 2 omitted');
-  assert.deepStrictEqual(textsOf(first, '.bghsa-done-spread span.bghsa-done-value'), [
-    '2h 0m',
-    '2h 0m',
-    '2h 0m',
-    '2h 0m',
-  ]);
-
-  const draft = one(doc, '[data-bghsa-timing="reportToDraft"]');
-  assert.strictEqual(textOf(draft, '.bghsa-done-meta'), '0 of 3, 3 omitted');
-  assert.deepStrictEqual(
-    textsOf(draft, '.bghsa-done-spread span.bghsa-done-value'),
-    ['—', '—', '—', '—'],
-    'a timing nothing contributed to is a dash, and not a zero'
-  );
-
-  // Two of the three rows say nothing has read them.
-  assert.deepStrictEqual(
-    Array.from(doc.querySelectorAll(`#${view.ROOT_ID} li.bghsa-done-row`)).map(chipLine),
-    ['Closed High', 'Closed Low Unread', 'Published Low Unread']
-  );
-});
-
-test('the time from report to close is drawn with the other timings', async () => {
-  const closed = advisory({
-    ghsaId: ghsa('hhhh'),
-    state: 'Closed',
-    reportedAt: '2026-03-02T00:00:00Z',
-    timeline: [
-      {
-        id: 'event-1',
-        actor: 'brackenhollow',
-        at: '2026-03-04T00:00:00Z',
-        text: 'brackenhollow closed this Mar 4, 2026',
-      },
-    ],
-  });
-  const doc = await page(
-    corpusOf([member({ ghsaId: ghsa('hhhh'), state: 'closed', advisory: closed })])
-  );
-  const close = one(doc, '[data-bghsa-timing="reportToClose"]');
-  assert.strictEqual(textOf(close, '.text-bold'), 'Report to close');
-  assert.strictEqual(textOf(close, '.bghsa-done-meta'), '1 of 1, 0 omitted');
-  assert.deepStrictEqual(textsOf(close, '.bghsa-done-spread span.bghsa-done-value'), [
-    '2d 0h',
-    '2d 0h',
-    '2d 0h',
-    '2d 0h',
-  ]);
-  assert.strictEqual(
-    doc.querySelector('.bghsa-done-uncomputed'),
-    null,
-    'and nothing is named as unavailable, because nothing is'
   );
 });
 
@@ -980,53 +896,6 @@ test('an advisory nothing has read takes no reason and says why', async () => {
   view.notes.clear();
 });
 
-test('the export is the corpus, written here in the page', async () => {
-  const empty = await page();
-  assert.ok(
-    one(empty, `#${view.ROOT_ID} button.bghsa-done-export`).hasAttribute('disabled'),
-    'there is nothing to export before a corpus is held'
-  );
-
-  const doc = await page(
-    corpusOf([
-      member({
-        ghsaId: ghsa('jjjj'),
-        state: 'published',
-        title: 'A published advisory',
-        severity: 'high',
-        openedAt: '2026-03-02T00:00:00Z',
-      }),
-    ])
-  );
-  assert.ok(
-    !one(doc, `#${view.ROOT_ID} button.bghsa-done-export`).hasAttribute('disabled'),
-    'and there is once one is'
-  );
-
-  /** @type {unknown[]} */
-  const parts = [];
-  class FakeBlob {
-    /** @param {unknown[]} pieces */
-    constructor(pieces) {
-      parts.push(...pieces);
-    }
-  }
-  const url = view.exportCsv(doc, {
-    Blob: /** @type {typeof globalThis.Blob} */ (/** @type {unknown} */ (FakeBlob)),
-    createObjectURL: () => 'blob:https://github.com/done',
-    revokeObjectURL: () => {},
-  });
-
-  assert.strictEqual(url, 'blob:https://github.com/done');
-  const text = /** @type {string} */ (parts[0]);
-  const lines = text.split('\r\n');
-  assert.strictEqual(lines[0], csv.COLUMNS.join(','));
-  assert.strictEqual(
-    lines[1],
-    `${ghsa('jjjj')},A published advisory,published,high,,2026-03-02T00:00:00Z,2026-03,,,,no,`
-  );
-});
-
 test('a second visit to the done view spends no request on the corpus', async () => {
   const published = [ghsa('kkkk'), ghsa('llll')];
   const closed = [ghsa('mmmm')];
@@ -1112,11 +981,6 @@ test("a corpus is not drawn under the repository the maintainer moved to", async
     '0 advisories',
     'and its count with them'
   );
-  assert.ok(
-    one(doc, `#${view.ROOT_ID} button.bghsa-done-export`).hasAttribute('disabled'),
-    'and the export offers a file of them'
-  );
-  assert.strictEqual(view.exportCsv(doc), null, 'a file of them can still be asked for');
   assert.strictEqual(view.stateOf(doc).corpus, null, 'the view is still holding them');
 });
 

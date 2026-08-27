@@ -38,6 +38,7 @@
         "src/done/stats.js",
         "src/done/csv.js",
         "src/done/view.js",
+        "src/stats/statistics.js",
         "src/content.js"
       ],
       "run_at": "document_idle"
