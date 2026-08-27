@@ -74,7 +74,51 @@ function fakeFetch(clock, answer = () => ({ status: 200 })) {
 }
 
 /**
- * @param {ReturnType<typeof fakeClock>} clock
+ * A clock two queues share, whose waits resolve in time order. Time moves when
+ * the pump moves it to the next wait that is due, so two passes running at once
+ * interleave the way they do on a page and cost no real time.
+ *
+ * @param {number} [start]
+ */
+function sharedClock(start = 0) {
+  let at = start;
+  /** @type {{ due: number, resolve: () => void }[]} */
+  const timers = [];
+
+  /**
+   * @param {number} ms
+   * @returns {Promise<void>}
+   */
+  const wait = (ms) =>
+    new Promise((resolve) => {
+      timers.push({ due: at + ms, resolve: () => resolve() });
+    });
+
+  /** @returns {Promise<void>} lets every chain that can run without the clock run. */
+  const settle = async () => {
+    for (let round = 0; round < 40; round += 1) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+  };
+
+  /** @returns {Promise<void>} runs time forward until nothing is waiting on it. */
+  const pump = async () => {
+    await settle();
+    while (timers.length > 0) {
+      timers.sort((left, right) => left.due - right.due);
+      const next = timers.shift();
+      if (next === undefined) return;
+      at = Math.max(at, next.due);
+      next.resolve();
+      await settle();
+    }
+  };
+
+  return { now: () => at, wait, settle, pump };
+}
+
+/**
+ * @param {{ now: () => number, wait: (ms: number) => Promise<void> }} clock
  * @param {Fake} storage
  * @param {Partial<import('../src/common/fetch.js').QueueOptions>} [extra]
  * @returns {import('../src/common/fetch.js').QueueOptions}
@@ -105,6 +149,24 @@ test('a plan reads never-seen advisories first, then stalest first', () => {
   );
   assert.deepStrictEqual(order, [ghsa('cccc'), ghsa('bbbb'), ghsa('aaaa')]);
   assert.deepStrictEqual(fresh, [ghsa('dddd')]);
+});
+
+test('a plan orders advisories observed together by identifier', () => {
+  const at = 100 * MINUTE;
+  /** @type {Map<string, import('../src/common/cache.js').CacheEntry>} */
+  const entries = new Map([
+    [ghsa('dddd'), { record: {}, observedAt: at - 40 * MINUTE, state: 'triage' }],
+    [ghsa('cccc'), { record: {}, observedAt: at - 40 * MINUTE, state: 'triage' }],
+  ]);
+  // Both pairs are given in the reverse of the order expected back: the two
+  // never seen, and the two observed at the same moment. A comparator that
+  // answers zero for a tie hands them back in the order they came in.
+  const { order } = queues.plan(
+    [ghsa('bbbb'), ghsa('aaaa'), ghsa('dddd'), ghsa('cccc')],
+    entries,
+    at
+  );
+  assert.deepStrictEqual(order, [ghsa('aaaa'), ghsa('bbbb'), ghsa('cccc'), ghsa('dddd')]);
 });
 
 test('an advisory observed four minutes ago is not fetched and five is', async () => {
@@ -149,6 +211,92 @@ test('requests go out one second apart on the injected clock', async () => {
   assert.ok(fetch.at.length === 3, `${fetch.at.length} requests went out`);
   assert.deepStrictEqual(fetch.at, [0, 1000, 2000]);
   assert.deepStrictEqual(clock.waits, [1000, 1000]);
+});
+
+test('a queue that never saw another one waits out its request', async () => {
+  const clock = fakeClock(0);
+  const storage = fakeStorage();
+  const first = fakeFetch(clock);
+  const one = queues.createQueue(options(clock, storage, { fetch: first.send }));
+  await one.add([ghsa('aaaa')]);
+  await one.run();
+  assert.deepStrictEqual(first.at, [0]);
+
+  // A second queue on the same repository: another tab, or what a turbo
+  // re-injection left on this page. It resumes nothing, so the request the
+  // first one sent is known to it only through the progress entry.
+  clock.advance(200);
+  const second = fakeFetch(clock);
+  const two = queues.createQueue(options(clock, storage, { fetch: second.send }));
+  await two.add([ghsa('bbbb')]);
+  const summary = await two.run();
+
+  assert.deepStrictEqual(second.at, [1000], 'a second queue spent a request inside the second');
+  assert.ok(summary.fetched === 1, `${summary.fetched} advisories were fetched`);
+});
+
+test('two queues running at once share one second between them', async () => {
+  const clock = sharedClock(0);
+  const storage = fakeStorage();
+  const ids = [ghsa('aaaa'), ghsa('bbbb'), ghsa('cccc')];
+
+  /** @type {number[]} */
+  const at = [];
+  /** @type {string[]} */
+  const asked = [];
+  /** @type {import('../src/common/write.js').WriteFetch} */
+  const send = async (url) => {
+    at.push(clock.now());
+    asked.push(String(url.split('/').pop()));
+    return { status: 200, text: async () => '<html></html>' };
+  };
+
+  const one = queues.createQueue(options(clock, storage, { fetch: send }));
+  await one.add(ids);
+  const running = one.run();
+  // The first request goes out, and the second queue starts after it, which is
+  // the second tab opening.
+  await clock.settle();
+  const two = queues.createQueue(options(clock, storage, { fetch: send }));
+  await two.add(ids);
+  const both = Promise.all([running, two.run()]);
+  await clock.pump();
+  const [oneSummary, twoSummary] = await both;
+
+  const intervals = at.slice(1).map((moment, index) => moment - Number(at[index]));
+  assert.ok(
+    intervals.every((interval) => interval >= 1000),
+    `requests went out ${intervals.join(', ')} milliseconds apart`
+  );
+  assert.deepStrictEqual(asked.slice().sort(), ids, 'an advisory was read more than once');
+  assert.ok(oneSummary.complete && twoSummary.complete, 'a pass did not finish');
+});
+
+test('a request time in the future costs one wait and not the difference', async () => {
+  const clock = fakeClock(0);
+  const storage = fakeStorage();
+  // What a clock moved back a day leaves behind: a request stamped a day
+  // ahead of what the clock now reads.
+  await cache.putProgress(
+    REF,
+    {
+      pending: [ghsa('aaaa')],
+      inFlight: null,
+      done: [],
+      failed: [],
+      lastRequestAt: 24 * 60 * MINUTE,
+      startedAt: 0,
+      updatedAt: 0,
+    },
+    { storage, at: clock.now() }
+  );
+  const fetch = fakeFetch(clock);
+  const queue = queues.createQueue(options(clock, storage, { fetch: fetch.send }));
+  await queue.load();
+  await queue.run();
+
+  assert.deepStrictEqual(clock.waits, [1000], 'the queue waited out the clock difference');
+  assert.deepStrictEqual(fetch.at, [1000], 'the request went out at the wrong moment');
 });
 
 test('a pass interrupted in flight resumes without losing or repeating work', async () => {
@@ -280,6 +428,36 @@ test('a stopped pass holds what is left for the next page', async () => {
   assert.deepStrictEqual(held?.pending, [ghsa('bbbb'), ghsa('cccc')]);
 });
 
+test('a stop during the wait spends no further request', async () => {
+  const clock = fakeClock(0);
+  const storage = fakeStorage();
+  const fetch = fakeFetch(clock);
+  const queue = queues.createQueue(
+    options(clock, storage, {
+      fetch: fetch.send,
+      // The page goes away, or the list is torn down, while the queue is
+      // waiting out the second. No request is in flight to finish.
+      wait: async (ms) => {
+        queue.stop();
+        await clock.wait(ms);
+      },
+    })
+  );
+  await queue.add([ghsa('aaaa'), ghsa('bbbb'), ghsa('cccc')]);
+  const summary = await queue.run();
+
+  assert.ok(fetch.urls.length === 1, `${fetch.urls.length} requests went out`);
+  assert.ok(!summary.complete, 'a stopped pass reported itself finished');
+  assert.deepStrictEqual(
+    summary.remaining,
+    [ghsa('bbbb'), ghsa('cccc')],
+    'the advisory that was waiting was dropped'
+  );
+  const held = queues.progressFrom(await cache.getProgress(REF, { storage, at: clock.now() }));
+  assert.deepStrictEqual(held?.pending, [ghsa('bbbb'), ghsa('cccc')]);
+  assert.ok(held?.inFlight === null, 'a stopped pass left a request in flight');
+});
+
 test('a failed read caches nothing and the pass carries on', async () => {
   const clock = fakeClock(0);
   const storage = fakeStorage();
@@ -307,6 +485,116 @@ test('a failed read caches nothing and the pass carries on', async () => {
   );
   // A request went out for the failed read, so the next one still waits.
   assert.deepStrictEqual(fetch.at, [0, 1000]);
+});
+
+test('a cache write that fails still delivers what was fetched', async () => {
+  const clock = fakeClock(0);
+  const storage = fakeStorage();
+  // Every write is refused, which is what a quota does.
+  storage.set = async () => {
+    throw new Error('QuotaExceededError');
+  };
+  const fetch = fakeFetch(clock);
+  /** @type {string[]} */
+  const reported = [];
+  /** @type {string[]} */
+  const failures = [];
+  const queue = queues.createQueue(
+    options(clock, storage, {
+      fetch: fetch.send,
+      onEntry: (ghsaId, entry) => reported.push(`${ghsaId}:${String(entry.state)}`),
+      onFailure: (ghsaId) => failures.push(ghsaId),
+    })
+  );
+  await queue.add([ghsa('aaaa'), ghsa('bbbb')]);
+  const summary = await queue.run();
+
+  assert.ok(summary.fetched === 2, `${summary.fetched} advisories were fetched`);
+  assert.ok(summary.failed === 0, `${summary.failed} reads were reported failed`);
+  assert.deepStrictEqual(failures, [], 'a fetch that answered 200 was reported a failure');
+  assert.deepStrictEqual(reported, [`${ghsa('aaaa')}:triage`, `${ghsa('bbbb')}:triage`]);
+});
+
+// The bound under test is the only thing that ends this pass, so the test
+// carries a bound of its own: without one, a queue that never gives up on a
+// request hangs the run in place of failing it.
+test('a request that never answers fails and the pass carries on', { timeout: 5000 }, async (t) => {
+  const clock = fakeClock(0);
+  const storage = fakeStorage();
+  /** @type {number[]} */
+  const at = [];
+  /** @type {AbortSignal | null} */
+  let stalled = null;
+  /** @type {import('../src/common/write.js').WriteFetch} */
+  const send = async (url, init) => {
+    at.push(clock.now());
+    if (!url.endsWith(ghsa('aaaa'))) return { status: 200, text: async () => '<html></html>' };
+    // Nobody answers this one: no status, no error, no close.
+    stalled = init.signal ?? null;
+    return new Promise(() => {});
+  };
+  /** @type {string[]} */
+  const failures = [];
+  const queue = queues.createQueue(
+    options(clock, storage, {
+      fetch: send,
+      timeoutMs: 25,
+      onFailure: (ghsaId, reason) => failures.push(`${ghsaId}: ${String(reason)}`),
+    })
+  );
+  await queue.add([ghsa('aaaa'), ghsa('bbbb')]);
+  // A page always has work of its own pending. This run has none, and the
+  // queue's countdown does not by itself keep a Node loop turning, so the test
+  // supplies the turning.
+  const turning = setInterval(() => {}, 5);
+  t.after(() => clearInterval(turning));
+  const summary = await queue.run();
+
+  assert.ok(summary.complete, 'the pass did not finish');
+  assert.ok(!queue.isRunning(), 'the queue reported itself still running');
+  assert.ok(summary.failed === 1, `${summary.failed} reads failed`);
+  assert.ok(summary.fetched === 1, `${summary.fetched} advisories were fetched`);
+  assert.ok(
+    failures.length === 1 && String(failures[0]).includes('did not answer within 25 ms'),
+    `the failures were ${failures.join('; ')}`
+  );
+  assert.ok(
+    /** @type {AbortSignal | null} */ (stalled)?.aborted === true,
+    'the request that timed out was left running'
+  );
+  // The request that timed out spent its slot, so the next one waits it out.
+  assert.deepStrictEqual(at, [0, 1000]);
+});
+
+test('a failure listener that throws does not end the pass', async () => {
+  const clock = fakeClock(0);
+  const storage = fakeStorage();
+  const fetch = fakeFetch(clock, (url) =>
+    url.endsWith(ghsa('cccc')) ? { status: 200 } : { status: 500 }
+  );
+  /** @type {string[]} */
+  const heard = [];
+  const queue = queues.createQueue(
+    options(clock, storage, {
+      fetch: fetch.send,
+      // A panel that throws on the way to painting a row, which the pass hears
+      // through the failure listener that then throws in its turn.
+      onEntry: (ghsaId) => {
+        throw new Error(`the row for ${ghsaId} blew up`);
+      },
+      onFailure: (ghsaId) => {
+        heard.push(ghsaId);
+        throw new Error('the banner blew up');
+      },
+    })
+  );
+  await queue.add([ghsa('aaaa'), ghsa('bbbb'), ghsa('cccc')]);
+  const summary = await queue.run();
+
+  assert.ok(summary.complete, 'the pass did not finish');
+  assert.ok(summary.failed === 2, `${summary.failed} reads failed`);
+  assert.ok(summary.fetched === 1, `${summary.fetched} advisories were fetched`);
+  assert.deepStrictEqual(heard, [ghsa('aaaa'), ghsa('bbbb'), ghsa('cccc')]);
 });
 
 test('an advisory refreshed mid-pass is dropped from the queue', async () => {

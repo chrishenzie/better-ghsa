@@ -56,6 +56,8 @@ if (typeof require === 'function') {
  *   test moves time without spending it.
  * @property {(ms: number) => Promise<void>} [wait] What the queue waits with
  *   between requests. Injected for the same reason.
+ * @property {number} [timeoutMs] How long one request may go unanswered before
+ *   it counts as a failed read. Injected so a test does not spend the bound.
  * @property {import('./write.js').WriteFetch} [fetch]
  * @property {(html: string, ref: import('./parse-detail.js').AdvisoryRef) => unknown} [parse]
  *   What turns a fetched page into the record the cache holds.
@@ -72,6 +74,30 @@ if (typeof require === 'function') {
    * rate for one caller.
    */
   const RATE_MS = 1000;
+
+  /**
+   * How long one request may go unanswered before the pass gives up on it.
+   *
+   * An advisory detail page is one HTML document from a logged-in session, and
+   * it answers in well under a second; fifteen seconds is fifteen of this
+   * queue's own intervals and covers a slow network several times over. It is
+   * also short against what it prevents: without a bound, one request that
+   * never settles leaves the pass unfinished, `stop` unable to reach it, and
+   * the table unrefreshed for as long as the page is open.
+   */
+  const REQUEST_TIMEOUT_MS = 15 * 1000;
+
+  /**
+   * @param {unknown} countdown A timer that has not fired.
+   * @returns {void} takes it out of the work the platform waits on before it
+   *   exits, where the platform counts it that way. Node does; a page counts
+   *   nothing that way, and a countdown on one request is no reason to hold
+   *   either open.
+   */
+  function release(countdown) {
+    const handle = /** @type {{ unref?: () => void }} */ (countdown);
+    if (typeof handle?.unref === 'function') handle.unref();
+  }
 
   /**
    * @param {unknown} value
@@ -193,6 +219,7 @@ if (typeof require === 'function') {
     const storage = options.storage;
     const clock = options.now ?? (() => globalThis.bghsa.cache.now());
     const wait = options.wait ?? sleep;
+    const timeout = options.timeoutMs ?? REQUEST_TIMEOUT_MS;
     const send =
       options.fetch ??
       /** @type {import('./write.js').WriteFetch} */ (globalThis.fetch.bind(globalThis));
@@ -235,9 +262,57 @@ if (typeof require === 'function') {
       };
     }
 
-    /** @returns {Promise<void>} holds the progress where the next page reads it. */
+    /**
+     * @returns {Promise<number | null>} the last request time the progress
+     *   entry names, and null where it names none or holds something else. Any
+     *   queue on this repository writes that entry, so it is where a queue
+     *   reads a request it did not send itself.
+     */
+    async function claimedAt() {
+      const held = progressFrom(
+        await globalThis.bghsa.cache.getProgress(ref, { storage, at: clock() })
+      );
+      return held === null ? null : held.lastRequestAt;
+    }
+
+    /**
+     * @returns {Promise<void>} takes on a request time later than the one this
+     *   queue holds, which is a request another queue sent.
+     */
+    async function adopt() {
+      const claimed = await claimedAt();
+      if (claimed !== null && (lastRequestAt === null || claimed > lastRequestAt)) {
+        lastRequestAt = claimed;
+      }
+    }
+
+    /**
+     * @returns {Promise<void>} holds the progress where the next page reads it.
+     *   A request time later than this queue's is taken on before the write, so
+     *   the write never lowers what another queue claimed: that entry is the
+     *   only thing bounding two queues that know nothing about each other.
+     */
     async function persist() {
+      await adopt();
       await globalThis.bghsa.cache.putProgress(ref, progress(), { storage, at: clock() });
+    }
+
+    /**
+     * @param {string} ghsaId
+     * @param {unknown} reason
+     * @returns {void} tells the caller one read failed. A listener that throws
+     *   is a defect on the page's side of the boundary and takes the advisory
+     *   it was called for with it, and nothing else: the rest of the pass is
+     *   other advisories' data, and the caller is told about those.
+     */
+    function fail(ghsaId, reason) {
+      if (options.onFailure === undefined) return;
+      try {
+        options.onFailure(ghsaId, reason);
+      } catch {
+        // Nothing is left to tell: the listener that would hear it is the one
+        // that threw.
+      }
     }
 
     /**
@@ -250,7 +325,7 @@ if (typeof require === 'function') {
       try {
         options.onEntry(ghsaId, entry);
       } catch (error) {
-        options.onFailure?.(ghsaId, error);
+        fail(ghsaId, error);
       }
     }
 
@@ -307,50 +382,134 @@ if (typeof require === 'function') {
     }
 
     /**
+     * Bounds one request in time. A request that has not answered by the
+     * deadline is aborted, which lets the browser drop the connection, and the
+     * read fails: it has spent its slot in the queue and the pass carries on to
+     * the next advisory.
+     *
+     * The race is what bounds the wait, and the abort is what ends the work. A
+     * request that answers nothing and honors no signal is still given up on.
+     *
+     * @template T
+     * @param {(signal: AbortSignal) => Promise<T>} attempt
+     * @returns {Promise<T>}
+     */
+    function within(attempt) {
+      const controller = new AbortController();
+      /** @type {(reason: Error) => void} */
+      let expired = () => {};
+      /** @type {Promise<never>} */
+      const expiry = new Promise((_resolve, reject) => {
+        expired = reject;
+      });
+      const countdown = setTimeout(() => {
+        controller.abort();
+        expired(new Error(`GitHub did not answer within ${timeout} ms.`));
+      }, timeout);
+      release(countdown);
+      return Promise.race([attempt(controller.signal), expiry]).finally(() => {
+        clearTimeout(countdown);
+      });
+    }
+
+    /**
      * Fetches one advisory's detail page and holds what it says. Every derived
      * value comes from that one page, so one advisory costs one request.
      *
      * @param {string} ghsaId
-     * @returns {Promise<import('./cache.js').CacheEntry | null>} the entry that
-     *   was written, and null where the read failed.
+     * @returns {Promise<import('./cache.js').CacheEntry | null>} what the page
+     *   said, and null where the read failed. The entry comes back whether or
+     *   not the cache took it.
      */
     async function read(ghsaId) {
       const advisory = { owner: ref.owner, repo: ref.repo, ghsaId };
       try {
-        const response = await send(
-          globalThis.bghsa.write.detailUrl(advisory),
-          globalThis.bghsa.write.DETAIL_INIT
-        );
-        if (!(response.status >= 200 && response.status < 300)) {
-          options.onFailure?.(ghsaId, `GitHub answered ${response.status}.`);
-          return null;
-        }
-        const record = parse(await response.text(), advisory);
-        if (record === null || record === undefined) {
-          options.onFailure?.(ghsaId, 'The page did not read as an advisory.');
-          return null;
-        }
-        return await globalThis.bghsa.cache.putAdvisory(advisory, record, {
-          storage,
-          at: clock(),
+        const page = await within(async (signal) => {
+          const response = await send(globalThis.bghsa.write.detailUrl(advisory), {
+            ...globalThis.bghsa.write.DETAIL_INIT,
+            signal,
+          });
+          if (!(response.status >= 200 && response.status < 300)) {
+            return { status: response.status, body: '' };
+          }
+          // The body is read inside the bound as well: a page that starts
+          // arriving and stops is as unanswered as one that never came.
+          return { status: response.status, body: await response.text() };
         });
+        if (!(page.status >= 200 && page.status < 300)) {
+          fail(ghsaId, `GitHub answered ${page.status}.`);
+          return null;
+        }
+        const record = parse(page.body, advisory);
+        if (record === null || record === undefined) {
+          fail(ghsaId, 'The page did not read as an advisory.');
+          return null;
+        }
+        const at = clock();
+        const held = await globalThis.bghsa.cache.putAdvisory(advisory, record, { storage, at });
+        // The page that answered is authoritative and the cache is a
+        // convenience: REQUIREMENTS.md section 2 has it never authoritative and
+        // always rederivable. A quota or a storage failure therefore costs the
+        // caching and nothing else, and the read is the success it was.
+        return held ?? { record, observedAt: at, state: globalThis.bghsa.cache.stateOf(record) };
       } catch (error) {
-        options.onFailure?.(ghsaId, error);
+        fail(ghsaId, error);
         return null;
       }
     }
 
     /**
-     * @returns {Promise<void>} waits out whatever is left of the second since
-     *   the last request. The last request time is held in the progress entry,
-     *   so a page that loads a moment after one went out waits out the
-     *   remainder and does not spend a second request inside the same second.
+     * Waits out whatever is left of the second since the last request on this
+     * repository, whichever queue sent it.
+     *
+     * The time is read back from the progress entry every time round, so a
+     * queue is bounded by requests it never saw: the one in another tab, and
+     * the one a turbo re-injection left behind on this page. The rate of one
+     * request per second belongs to the repository and not to a queue, so the
+     * bound holds wherever a queue runs.
+     *
+     * The wait repeats only while the entry names a request later than the one
+     * already waited out. A queue therefore yields to a request that lands
+     * during its wait, and a time that does not move costs one wait.
+     *
+     * @returns {Promise<void>}
      */
     async function throttle() {
-      if (lastRequestAt === null) return;
-      const since = Math.max(0, clock() - lastRequestAt);
-      if (since >= RATE_MS) return;
-      await wait(RATE_MS - since);
+      let waited = false;
+      while (!stopped) {
+        const claimed = await claimedAt();
+        if (claimed !== null && (lastRequestAt === null || claimed > lastRequestAt)) {
+          lastRequestAt = claimed;
+        } else if (waited) {
+          return;
+        }
+        if (lastRequestAt === null) return;
+        // A time later than the clock reads, which a clock moved backwards
+        // leaves behind, is one interval of wait and not the difference.
+        const since = Math.max(0, clock() - lastRequestAt);
+        if (since >= RATE_MS) return;
+        await wait(RATE_MS - since);
+        waited = true;
+      }
+    }
+
+    /**
+     * @param {string} ghsaId
+     * @returns {Promise<boolean>} whether the cache holds this advisory within
+     *   the staleness threshold, in which case the pass reports it from there
+     *   and spends no request. Opening a detail page refreshes an entry from
+     *   the live DOM, and another queue's pass refreshes it from a fetch;
+     *   either costs this pass nothing.
+     */
+    async function fresh(ghsaId) {
+      const at = clock();
+      const held = await globalThis.bghsa.cache.getAdvisory({ ...ref, ghsaId }, { storage, at });
+      if (held === null || globalThis.bghsa.cache.isStale(held, at)) return false;
+      if (!done.includes(ghsaId)) done.push(ghsaId);
+      skipped += 1;
+      report(ghsaId, held);
+      await persist();
+      return true;
     }
 
     /** @returns {Promise<QueueSummary>} */
@@ -362,20 +521,20 @@ if (typeof require === 'function') {
         // The cache is read again here and not only when the advisory was
         // queued: opening its detail page refreshes the entry from the live DOM,
         // and that costs no request while this one would.
-        const at = clock();
-        const held = await globalThis.bghsa.cache.getAdvisory(
-          { ...ref, ghsaId },
-          { storage, at }
-        );
-        if (held !== null && !globalThis.bghsa.cache.isStale(held, at)) {
-          if (!done.includes(ghsaId)) done.push(ghsaId);
-          skipped += 1;
-          report(ghsaId, held);
-          await persist();
-          continue;
-        }
+        if (await fresh(ghsaId)) continue;
 
         await throttle();
+        // A stop that lands during the wait is a stop with nothing in flight,
+        // so nothing is left to finish and the advisory goes back at the head
+        // of the queue for the next page load.
+        if (stopped) {
+          pending.unshift(ghsaId);
+          await persist();
+          break;
+        }
+        // The wait lasts a second, and an advisory can reach the cache during
+        // it: another queue fetches it, or a maintainer opens its page.
+        if (await fresh(ghsaId)) continue;
         // The advisory is in flight before the request goes out, so a page that
         // goes away mid-flight leaves a record naming what was asked for.
         inFlight = ghsaId;
@@ -430,7 +589,9 @@ if (typeof require === 'function') {
     }
 
     /**
-     * @returns {void} stops the pass after the request in flight. What is left
+     * @returns {void} stops the pass after the request in flight, and at once
+     *   where none is: a stop during the wait between requests sends no
+     *   further request. What is left, the advisory that was waiting included,
      *   stays in the progress entry for the next page load.
      */
     function stop() {
@@ -452,6 +613,7 @@ if (typeof require === 'function') {
 
   const exported = {
     RATE_MS,
+    REQUEST_TIMEOUT_MS,
     idsOf,
     progressFrom,
     plan,
