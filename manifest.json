@@ -16,6 +16,7 @@
         "src/common/schema.js",
         "src/common/merge.js",
         "src/common/parse-detail.js",
+        "src/common/parse-list.js",
         "src/common/derive.js",
         "src/common/members.js",
         "src/common/branches.js",

@@ -11,6 +11,7 @@ interface BghsaNamespace {
   schema: typeof import('../src/common/schema.js');
   merge: typeof import('../src/common/merge.js');
   parseDetail: typeof import('../src/common/parse-detail.js');
+  parseList: typeof import('../src/common/parse-list.js');
   derive: typeof import('../src/common/derive.js');
   members: typeof import('../src/common/members.js');
   branches: typeof import('../src/common/branches.js');
