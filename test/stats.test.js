@@ -1,0 +1,501 @@
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert');
+const fs = require('node:fs');
+const path = require('node:path');
+const { parseHTML } = require('linkedom');
+
+const parseDetail = require('../src/common/parse-detail.js');
+const schema = require('../src/common/schema.js');
+const preserve = require('../src/detail/preserve.js');
+const stats = require('../src/done/stats.js');
+
+/**
+ * @param {string} name
+ * @returns {import('../src/common/parse-detail.js').ParsedDetail} the advisory
+ *   that fixture holds.
+ */
+function fixture(name) {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'testdata', name), 'utf8');
+  const doc = /** @type {Document} */ (/** @type {unknown} */ (parseHTML(html).document));
+  const advisory = parseDetail.parseDetail(doc);
+  if (advisory === null) throw new Error(`${name} did not read as an advisory`);
+  return advisory;
+}
+
+/**
+ * An advisory in the shape the parser produces, carrying only what a statistic
+ * reads. Everything else is what an advisory with nothing on it holds.
+ *
+ * @param {Partial<import('../src/common/parse-detail.js').ParsedDetail>} fields
+ * @returns {import('../src/common/parse-detail.js').ParsedDetail}
+ */
+function advisory(fields) {
+  return {
+    ref: null,
+    viewer: null,
+    ghsaId: null,
+    state: null,
+    severity: null,
+    severityLabel: null,
+    reportedAt: null,
+    reporter: null,
+    title: null,
+    description: null,
+    severityField: null,
+    severityFieldPresent: false,
+    cvssV3: null,
+    cvssV3Present: false,
+    cveId: null,
+    cveSelection: null,
+    descriptionOriginal: null,
+    descriptionRevision: null,
+    comments: [],
+    timeline: [],
+    fork: null,
+    collaborators: [],
+    ...fields,
+  };
+}
+
+/**
+ * One comment in the shape the parser produces.
+ *
+ * @param {{
+ *   author: string,
+ *   role: string,
+ *   at: string | null,
+ *   text?: string,
+ *   state?: Record<string, unknown>,
+ * }} fields
+ * @returns {import('../src/common/parse-detail.js').ParsedComment}
+ */
+function comment(fields) {
+  const raw = fields.state === undefined ? null : JSON.stringify(fields.state);
+  return {
+    id: '1',
+    elementId: 'advisory-comment-1',
+    author: fields.author,
+    role: fields.role,
+    roles: [fields.role],
+    trusted: fields.role === 'Member' || fields.role === 'Owner',
+    at: fields.at,
+    text: fields.text ?? 'text',
+    stateComment: raw === null ? null : schema.readSnapshot(raw),
+  };
+}
+
+/**
+ * @param {{ at: string | null, text: string }} fields
+ * @returns {import('../src/common/parse-detail.js').TimelineEvent}
+ */
+function event(fields) {
+  return { id: 'event-1', actor: 'samuelkarp', at: fields.at, text: fields.text };
+}
+
+/**
+ * @param {{
+ *   ghsaId: string,
+ *   state: string,
+ *   severity?: string | null,
+ *   openedAt?: string | null,
+ *   advisory?: import('../src/common/parse-detail.js').ParsedDetail | null,
+ * }} fields
+ * @returns {import('../src/done/corpus.js').CorpusMember}
+ */
+function member(fields) {
+  return {
+    ghsaId: fields.ghsaId,
+    state: fields.state,
+    seenAt: 0,
+    advisory: fields.advisory ?? null,
+    observedAt: fields.advisory === undefined || fields.advisory === null ? null : 1,
+    row: {
+      ghsaId: fields.ghsaId,
+      owner: 'containerd',
+      repo: 'containerd',
+      href: null,
+      title: null,
+      state: fields.state,
+      severity: fields.severity ?? null,
+      severityLabel: null,
+      openedAt: fields.openedAt ?? null,
+      reporter: null,
+    },
+  };
+}
+
+/**
+ * @param {readonly import('../src/done/corpus.js').CorpusMember[]} members
+ * @param {{ complete?: boolean, expected?: Record<string, number | null> }} [over]
+ * @returns {import('../src/done/corpus.js').Corpus}
+ */
+function corpusOf(members, over = {}) {
+  return {
+    members: [...members],
+    unread: members.filter((entry) => entry.advisory === null).map((entry) => entry.ghsaId),
+    complete: over.complete ?? true,
+    expected: over.expected ?? { published: null, closed: null },
+  };
+}
+
+/** One snapshot payload a member wrote, carrying a closure reason. */
+const CLOSED_AS = /** @param {string} reason */ (reason) => ({
+  betterGhsa: '1.0',
+  seq: 1,
+  by: 'samuelkarp',
+  at: '2026-04-01T00:00:00Z',
+  closure: { reason },
+});
+
+test('the first response is the first member comment that is not a state comment', () => {
+  const triage = fixture('triage-thread.html');
+  assert.strictEqual(triage.reportedAt, '2026-08-25T22:15:18Z');
+  assert.strictEqual(stats.firstResponseAt(triage), Date.parse('2026-08-25T22:16:30Z'));
+  // 22:15:18 to 22:16:30 is a minute and twelve seconds.
+  assert.strictEqual(stats.durationOf(triage, stats.firstResponseAt), 72 * 1000);
+});
+
+test("a member's state comment is not an answer to the reporter", () => {
+  // The draft fixture carries one comment: a state comment from a member. The
+  // advisory contributes no first response, and not a response of zero.
+  const draft = fixture('draft.html');
+  assert.strictEqual(draft.comments.length, 1);
+  assert.strictEqual(draft.comments[0]?.role, 'Member');
+  assert.notStrictEqual(draft.comments[0]?.stateComment, null);
+  assert.strictEqual(stats.firstResponseAt(draft), null);
+  assert.strictEqual(stats.durationOf(draft, stats.firstResponseAt), null);
+});
+
+test('a preserved original report is not an answer to the reporter', () => {
+  // The preservation comment carries the reporter's own text back onto the
+  // thread under a member's login. Counting it would move the first response
+  // from the answer at 23:00 to the copy at 22:05.
+  const preserved = comment({
+    author: 'samuelkarp',
+    role: 'Member',
+    at: '2026-08-25T22:05:00Z',
+    text: `Original report preserved by better-ghsa ${preserve.MARKER_PREFIX}0011223344556677`,
+  });
+  assert.strictEqual(preserved.stateComment, null, 'the copy is not a state comment');
+
+  const answered = advisory({
+    reportedAt: '2026-08-25T22:00:00Z',
+    comments: [preserved, comment({ author: 'samuelkarp', role: 'Member', at: '2026-08-25T23:00:00Z' })],
+  });
+  assert.strictEqual(stats.durationOf(answered, stats.firstResponseAt), 60 * 60 * 1000);
+
+  const alone = advisory({ reportedAt: '2026-08-25T22:00:00Z', comments: [preserved] });
+  assert.strictEqual(stats.firstResponseAt(alone), null);
+});
+
+test('a comment from someone who is not an org member is not a first response', () => {
+  const held = advisory({
+    reportedAt: '2026-08-25T22:15:18Z',
+    comments: [
+      comment({ author: 'prakleumas', role: 'Author', at: '2026-08-25T22:20:00Z' }),
+      comment({ author: 'passerby', role: 'Contributor', at: '2026-08-25T22:30:00Z' }),
+    ],
+  });
+  assert.strictEqual(stats.firstResponseAt(held), null);
+  assert.strictEqual(stats.durationOf(held, stats.firstResponseAt), null);
+});
+
+test('the first response is the earliest qualifying comment, not the first found', () => {
+  const held = advisory({
+    reportedAt: '2026-08-25T22:00:00Z',
+    comments: [
+      comment({ author: 'samuelkarp', role: 'Member', at: '2026-08-25T23:00:00Z' }),
+      comment({ author: 'HidekiMorita', role: 'Owner', at: '2026-08-25T22:30:00Z' }),
+    ],
+  });
+  assert.strictEqual(stats.durationOf(held, stats.firstResponseAt), 30 * 60 * 1000);
+});
+
+test('entering draft is the acceptance the timeline records', () => {
+  const published = fixture('published-containerd.html');
+  assert.strictEqual(published.reportedAt, '2026-04-07T18:05:12Z');
+  assert.strictEqual(stats.draftAt(published), Date.parse('2026-04-07T19:02:26Z'));
+  // 18:05:12 to 19:02:26 is fifty-seven minutes and fourteen seconds.
+  assert.strictEqual(stats.durationOf(published, stats.draftAt), 3434 * 1000);
+});
+
+test('a reporter accepting credit is not the advisory entering draft', () => {
+  const published = fixture('published-containerd.html');
+  const credit = published.timeline.find((entry) => /accepted credit/.test(entry.text));
+  assert.ok(credit !== undefined, 'the fixture carries a credit acceptance');
+  assert.strictEqual(credit?.at, '2026-04-07T18:06:41Z');
+  assert.ok(
+    Date.parse(/** @type {string} */ (credit?.at)) < Date.parse('2026-04-07T19:02:26Z'),
+    'and it comes first, so a looser match would read it as the draft'
+  );
+  assert.strictEqual(stats.draftAt(advisory({ timeline: [credit] })), null);
+});
+
+test('an advisory whose timeline records no acceptance has no draft time', () => {
+  // The draft fixture is a draft a maintainer opened, so nothing accepted it.
+  const draft = fixture('draft.html');
+  assert.deepStrictEqual(draft.timeline, []);
+  assert.strictEqual(stats.draftAt(draft), null);
+  assert.strictEqual(stats.durationOf(draft, stats.draftAt), null);
+});
+
+test('an event the page stamps before the report yields no duration', () => {
+  const held = advisory({
+    reportedAt: '2026-08-25T22:00:00Z',
+    timeline: [event({ at: '2026-08-25T21:00:00Z', text: 'samuelkarp accepted this report' })],
+  });
+  assert.strictEqual(stats.draftAt(held), Date.parse('2026-08-25T21:00:00Z'));
+  assert.strictEqual(stats.durationOf(held, stats.draftAt), null);
+});
+
+test('an advisory whose report time went unread yields no duration', () => {
+  const held = advisory({
+    reportedAt: null,
+    timeline: [event({ at: '2026-08-25T22:00:00Z', text: 'samuelkarp accepted this report' })],
+  });
+  assert.strictEqual(stats.durationOf(held, stats.draftAt), null);
+});
+
+test('time from report to close is named uncomputed and is no timing', () => {
+  const summary = stats.summarize(
+    corpusOf([
+      member({
+        ghsaId: 'GHSA-aaaa-aaaa-aaaa',
+        state: 'closed',
+        advisory: advisory({ state: 'Closed', reportedAt: '2026-04-01T00:00:00Z' }),
+      }),
+    ])
+  );
+  assert.deepStrictEqual(Object.keys(summary.timings).sort(), ['firstResponse', 'reportToDraft']);
+  assert.ok(
+    !Object.hasOwn(summary.timings, 'reportToClose'),
+    'a metric with no observable event is not a timing of zero'
+  );
+  assert.ok(Object.hasOwn(summary.uncomputed, 'reportToClose'), 'and it is named, with a reason');
+  assert.match(summary.uncomputed.reportToClose ?? '', /report to close is not measured/);
+  assert.deepStrictEqual(
+    stats.TIMINGS.map((entry) => entry.key),
+    Object.keys(summary.timings)
+  );
+});
+
+test('an advisory the event is not observable on contributes to no timing', () => {
+  const answered = advisory({
+    reportedAt: '2026-04-01T00:00:00Z',
+    comments: [comment({ author: 'samuelkarp', role: 'Member', at: '2026-04-01T01:00:00Z' })],
+    timeline: [event({ at: '2026-04-01T02:00:00Z', text: 'samuelkarp accepted this report' })],
+  });
+  const silent = advisory({ reportedAt: '2026-04-02T00:00:00Z' });
+  const summary = stats.summarize(
+    corpusOf([
+      member({ ghsaId: 'GHSA-aaaa-aaaa-aaaa', state: 'published', advisory: answered }),
+      member({ ghsaId: 'GHSA-bbbb-bbbb-bbbb', state: 'closed', advisory: silent }),
+      member({ ghsaId: 'GHSA-cccc-cccc-cccc', state: 'closed' }),
+    ])
+  );
+
+  const first = summary.timings.firstResponse;
+  assert.deepStrictEqual(first?.values, [60 * 60 * 1000]);
+  assert.strictEqual(first?.counted, 1);
+  assert.strictEqual(first?.omitted, 2, 'the silent advisory and the unread one');
+  assert.strictEqual(first?.corpus, 3);
+  assert.strictEqual(first?.unread, 1);
+  assert.strictEqual(first?.mean, 60 * 60 * 1000, 'the mean is over what was measured');
+  assert.ok(!(first?.values ?? []).includes(0), 'nothing landed as a zero');
+
+  const draft = summary.timings.reportToDraft;
+  assert.deepStrictEqual(draft?.values, [2 * 60 * 60 * 1000]);
+  assert.strictEqual(draft?.omitted, 2);
+});
+
+test('a timing reports the spread of what it measured', () => {
+  const over = { corpus: 4, unread: 0 };
+  const held = stats.timing([300, 100, null, 200], over);
+  assert.deepStrictEqual(held.values, [100, 200, 300]);
+  assert.strictEqual(held.counted, 3);
+  assert.strictEqual(held.omitted, 1);
+  assert.strictEqual(held.min, 100);
+  assert.strictEqual(held.median, 200);
+  assert.strictEqual(held.max, 300);
+  assert.strictEqual(held.mean, 200);
+
+  const even = stats.timing([10, 20, 30, 40], over);
+  assert.strictEqual(even.median, 25, 'an even count takes the middle pair');
+
+  const none = stats.timing([null, null, null, null], over);
+  assert.deepStrictEqual(none.values, []);
+  assert.strictEqual(none.counted, 0);
+  assert.strictEqual(none.min, null);
+  assert.strictEqual(none.median, null);
+  assert.strictEqual(none.mean, null);
+  assert.strictEqual(none.max, null);
+});
+
+test('the corpus is counted by closure reason, state, severity, and month', () => {
+  const summary = stats.summarize(
+    corpusOf([
+      member({
+        ghsaId: 'GHSA-aaaa-aaaa-aaaa',
+        state: 'closed',
+        advisory: advisory({
+          state: 'Closed',
+          severity: 'high',
+          reportedAt: '2026-03-02T00:00:00Z',
+          comments: [
+            comment({
+              author: 'samuelkarp',
+              role: 'Member',
+              at: '2026-03-03T00:00:00Z',
+              state: CLOSED_AS('not a vulnerability'),
+            }),
+          ],
+        }),
+      }),
+      member({
+        ghsaId: 'GHSA-bbbb-bbbb-bbbb',
+        state: 'closed',
+        advisory: advisory({
+          state: 'Closed',
+          severity: 'low',
+          reportedAt: '2026-03-20T00:00:00Z',
+          comments: [
+            comment({
+              author: 'samuelkarp',
+              role: 'Member',
+              at: '2026-03-21T00:00:00Z',
+              state: CLOSED_AS('not a vulnerability'),
+            }),
+          ],
+        }),
+      }),
+      member({
+        ghsaId: 'GHSA-cccc-cccc-cccc',
+        state: 'published',
+        advisory: advisory({
+          state: 'Published',
+          severity: 'high',
+          reportedAt: '2026-04-01T00:00:00Z',
+        }),
+      }),
+      member({
+        ghsaId: 'GHSA-dddd-dddd-dddd',
+        state: 'published',
+        severity: 'moderate',
+        openedAt: '2026-04-15T00:00:00Z',
+      }),
+    ])
+  );
+
+  assert.strictEqual(summary.corpus, 4);
+  assert.strictEqual(summary.unread, 1);
+
+  assert.deepStrictEqual({ ...summary.counts.state?.counts }, { closed: 2, published: 2 });
+  assert.strictEqual(summary.counts.state?.counted, 4, 'the list page names every state');
+  assert.strictEqual(summary.counts.state?.missing, 0);
+
+  assert.deepStrictEqual(
+    { ...summary.counts.severity?.counts },
+    { high: 2, low: 1, moderate: 1 }
+  );
+  assert.strictEqual(
+    summary.counts.severity?.counted,
+    4,
+    'the list page names the severity of an advisory no read backs'
+  );
+
+  assert.deepStrictEqual({ ...summary.counts.month?.counts }, { '2026-03': 2, '2026-04': 2 });
+
+  assert.deepStrictEqual({ ...summary.counts.reason?.counts }, { 'not a vulnerability': 2 });
+  assert.strictEqual(summary.counts.reason?.counted, 2);
+  assert.strictEqual(summary.counts.reason?.missing, 2, 'one with no reason, one unread');
+  assert.strictEqual(summary.counts.reason?.unread, 1);
+  assert.strictEqual(summary.counts.reason?.ratios['not a vulnerability'], 1);
+});
+
+test('a closure reason this reader does not interpret is counted as it stands', () => {
+  const summary = stats.summarize(
+    corpusOf([
+      member({
+        ghsaId: 'GHSA-aaaa-aaaa-aaaa',
+        state: 'closed',
+        advisory: advisory({
+          state: 'Closed',
+          comments: [
+            comment({
+              author: 'samuelkarp',
+              role: 'Member',
+              at: '2026-03-03T00:00:00Z',
+              state: CLOSED_AS('rejected by the sun'),
+            }),
+          ],
+        }),
+      }),
+    ])
+  );
+  assert.deepStrictEqual({ ...summary.counts.reason?.counts }, { 'rejected by the sun': 1 });
+});
+
+test('a closure reason from an author who is not a member is counted nowhere', () => {
+  const held = advisory({
+    state: 'Closed',
+    comments: [
+      comment({
+        author: 'prakleumas',
+        role: 'Author',
+        at: '2026-03-03T00:00:00Z',
+        state: CLOSED_AS('not a vulnerability'),
+      }),
+    ],
+  });
+  assert.strictEqual(stats.closureReasonOf(held), null);
+});
+
+test('a stored reason named __proto__ is counted and sets no prototype', () => {
+  const held = stats.tally(['__proto__', '__proto__', 'duplicate'], { corpus: 3, unread: 0 });
+  assert.strictEqual(held.counts['__proto__'], 2);
+  assert.strictEqual(held.counted, 3);
+  assert.strictEqual(Object.getPrototypeOf(held.counts), null);
+});
+
+test('a summary says whether it is over the whole corpus', () => {
+  const partial = stats.summarize(
+    corpusOf([member({ ghsaId: 'GHSA-aaaa-aaaa-aaaa', state: 'published' })], {
+      complete: false,
+      expected: { published: 41, closed: 12 },
+    })
+  );
+  assert.strictEqual(partial.complete, false, 'the walk did not reach the last page');
+  assert.strictEqual(partial.corpus, 1, 'and this is what it found');
+  assert.deepStrictEqual(partial.expected, { published: 41, closed: 12 });
+  assert.strictEqual(partial.unread, 1);
+  assert.strictEqual(partial.counts.state?.corpus, 1);
+});
+
+test('the month a report falls in is read in one zone', () => {
+  assert.strictEqual(stats.monthOf('2026-03-31T23:30:00Z'), '2026-03');
+  assert.strictEqual(stats.monthOf('2026-04-01T00:30:00+02:00'), '2026-03');
+  assert.strictEqual(stats.monthOf(null), null);
+  assert.strictEqual(stats.monthOf('not a time'), null);
+});
+
+test('a corpus of one real advisory measures what its page carries', () => {
+  const published = fixture('published-containerd.html');
+  const summary = stats.summarize(
+    corpusOf([
+      member({ ghsaId: 'GHSA-6r4h-2xvq-wm93', state: 'published', advisory: published }),
+    ])
+  );
+  assert.deepStrictEqual({ ...summary.counts.state?.counts }, { published: 1 });
+  assert.deepStrictEqual({ ...summary.counts.severity?.counts }, { moderate: 1 });
+  assert.deepStrictEqual({ ...summary.counts.month?.counts }, { '2026-04': 1 });
+  assert.deepStrictEqual(summary.timings.reportToDraft?.values, [3434 * 1000]);
+  // Redaction dropped every comment node from this capture before it was saved,
+  // so the file holds none. An advisory with no comment on it answers nobody,
+  // and the summary counts it among the omitted rather than at zero.
+  assert.deepStrictEqual(published.comments, []);
+  assert.deepStrictEqual(summary.timings.firstResponse?.values, []);
+  assert.strictEqual(summary.timings.firstResponse?.omitted, 1);
+  assert.strictEqual(summary.timings.firstResponse?.mean, null);
+});

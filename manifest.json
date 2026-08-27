@@ -34,6 +34,8 @@
         "src/detail/edit.js",
         "src/detail/panel.js",
         "src/list/table.js",
+        "src/done/corpus.js",
+        "src/done/stats.js",
         "src/content.js"
       ],
       "run_at": "document_idle"

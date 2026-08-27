@@ -29,6 +29,8 @@ interface BghsaNamespace {
   edit: typeof import('../src/detail/edit.js');
   panel: typeof import('../src/detail/panel.js');
   table: typeof import('../src/list/table.js');
+  corpus: typeof import('../src/done/corpus.js');
+  stats: typeof import('../src/done/stats.js');
   content: typeof import('../src/content.js');
 }
 

@@ -291,8 +291,9 @@ month.
 Timing, reconstructed from page-observable events:
 
 - Time to first response, measured to the first comment by an org member that
-  is not a state comment. First contact made by email is not visible and is not
-  counted.
+  the extension did not write. Neither the state comment nor the preserved
+  original report is a maintainer answering a reporter, so neither counts.
+  First contact made by email is not visible and is not counted.
 - Time from report to entering Draft.
 - Time from report to close.
 
