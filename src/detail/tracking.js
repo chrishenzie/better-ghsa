@@ -80,9 +80,9 @@ if (typeof require === 'function') {
    * @type {readonly { key: ConfirmationTrack, name: string, short: string }[]}
    */
   const CONFIRMATION_TRACKS = [
-    { key: 'title', name: 'Advisory title', short: 'advisory title' },
-    { key: 'description', name: 'Advisory description', short: 'advisory description' },
-    { key: 'scoring', name: 'Severity and CVSS vector', short: 'severity and CVSS vector' },
+    { key: 'title', name: 'Title', short: 'advisory title' },
+    { key: 'description', name: 'Description', short: 'advisory description' },
+    { key: 'scoring', name: 'Severity', short: 'severity and CVSS vector' },
   ];
 
   /**

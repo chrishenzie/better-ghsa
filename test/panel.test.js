@@ -215,6 +215,19 @@ async function buildWith(advisory, payload) {
 
 /**
  * @param {Element} root
+ * @returns {string} what the description confirmation line says about the
+ *   provenance of the text on the page. It is the second chip on that line.
+ */
+function provenance(root) {
+  for (const line of root.querySelectorAll('.bghsa-confirmation')) {
+    if (text(line.querySelector('.bghsa-confirmation-name')) !== 'Description') continue;
+    return text(line.querySelectorAll('.Label')[1]);
+  }
+  throw new Error('no description confirmation line');
+}
+
+/**
+ * @param {Element} root
  * @param {string} name the track's name in the confirmation block.
  * @returns {{ chip: string, classes: string, note: string }}
  */
@@ -301,17 +314,25 @@ test('an advisory with no embargo carries no chip about one', async () => {
 });
 
 test('the panel reports whether the description is the original text', () => {
-  assert.strictEqual(rowText(build(triage), 'Description'), 'Not updated');
-  assert.strictEqual(rowText(build(draft), 'Description'), 'Updated');
+  // The description is answered in one place: the confirmation line carries
+  // whether a maintainer approved the text and whether it is still the
+  // reporter's own.
+  assert.strictEqual(provenance(build(triage)), 'Not updated');
+  assert.strictEqual(provenance(build(draft)), 'Updated');
+  assert.deepStrictEqual(
+    rowLabels(build(triage)).filter((label) => label === 'Description'),
+    [],
+    'the panel carries a second row called Description'
+  );
 });
 
 test('the panel leads with the three confirmations', () => {
   const built = build(triage);
   assert.strictEqual(text(built.querySelector('.bghsa-confirmed-heading')), 'Confirmations');
   assert.deepStrictEqual(texts(built, '.bghsa-confirmation-name'), [
-    'Advisory title',
-    'Advisory description',
-    'Severity and CVSS vector',
+    'Title',
+    'Description',
+    'Severity',
   ]);
   const first = built.querySelector('.Box-header')?.nextElementSibling;
   assert.ok(
@@ -357,14 +378,14 @@ test('a published advisory keeps every part of the panel but the confirmations',
     'bghsa-confirmed',
     'Triage',
     'Owners',
-    'Description',
     'Original report',
   ]);
+  // The description is answered inside the confirmations, so a published
+  // advisory carries neither.
   assert.deepStrictEqual(panelParts(done), [
     'bghsa-chips',
     'Triage',
     'Owners',
-    'Description',
     'Original report',
   ]);
 });
@@ -375,7 +396,7 @@ test('a confirmed value names who confirmed it and when', async () => {
   const built = await buildWith(triage, {
     confirmed: { title: { by: 'samuelkarp', at: '2026-08-25T18:04:11Z', fp: fingerprint } },
   });
-  const title = confirmation(built, 'Advisory title');
+  const title = confirmation(built, 'Title');
   assert.ok(title.chip === 'Confirmed', `the title chip reads ${title.chip}`);
   assert.ok(title.classes === 'Label Label--secondary', `a confirmed chip is toned: ${title.classes}`);
   assert.ok(
@@ -392,7 +413,7 @@ test('a value changed after it was confirmed reverts to unconfirmed', async () =
   };
   const rewritten = { ...triage, title: `${triage.title} in the drawer handler` };
   const built = await buildWith(rewritten, confirmed);
-  const title = confirmation(built, 'Advisory title');
+  const title = confirmation(built, 'Title');
   assert.ok(title.chip === 'Not confirmed', `the title chip reads ${title.chip}`);
   assert.ok(
     title.classes === 'Label Label--secondary',
@@ -416,7 +437,7 @@ test('a scoring source the form does not carry reads as unread, not as drift', a
       },
     },
   });
-  const scoring = confirmation(built, 'Severity and CVSS vector');
+  const scoring = confirmation(built, 'Severity');
   assert.ok(scoring.chip === 'Unknown', `the scoring chip reads ${scoring.chip}`);
   assert.ok(
     scoring.classes === 'Label Label--secondary',
@@ -453,7 +474,6 @@ test('the stored tracks the triage advisory carries are shown', async () => {
     'Owners',
     'Backport targets',
     'Embargo',
-    'Description',
     'Original report',
   ]);
   assert.deepStrictEqual(texts(built, '.Box-row:not(.bghsa-confirmed) .bghsa-chips .Label'), [
@@ -506,7 +526,7 @@ test('the triage chip says which side the advisory is waiting on', () => {
 });
 
 test('a track the snapshot says nothing about carries no row', () => {
-  assert.deepStrictEqual(rowLabels(build(draft)), ['Description', 'Original report']);
+  assert.deepStrictEqual(rowLabels(build(draft)), ['Original report']);
 });
 
 test('the editing controls start collapsed', async () => {
@@ -601,7 +621,7 @@ test('injecting twice leaves one panel', () => {
 
 test('a description whose provenance cannot be read is shown as unknown', () => {
   const built = build({ ...draft, descriptionOriginal: null });
-  assert.strictEqual(rowText(built, 'Description'), 'Unknown');
+  assert.strictEqual(provenance(built), 'Unknown');
 });
 
 test('a document that is not an advisory detail page gets no panel', async () => {
@@ -648,7 +668,7 @@ test('advisory content swapped in after load gets a panel with no reload', async
   const injected = await panel.render(triageDoc);
   assert.ok(injected !== null, 'swapped-in content got no panel');
   assert.strictEqual(triageDoc.querySelectorAll('#bghsa-detail-panel').length, 1);
-  assert.strictEqual(rowText(/** @type {Element} */ (injected), 'Description'), 'Not updated');
+  assert.strictEqual(provenance(/** @type {Element} */ (injected)), 'Not updated');
   assert.strictEqual(panel.outOfPlace(triageDoc), false);
 });
 

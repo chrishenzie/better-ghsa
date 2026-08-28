@@ -201,14 +201,32 @@ if (typeof require === 'function') {
   }
 
   /**
+   * Whether the description standing on the page is still the reporter's own.
+   * Nothing on the page says, where no preserved comment stands to compare it
+   * against, which is the same answer an unread confirmation gives.
+   *
+   * @param {boolean | null} original
+   * @returns {string}
+   */
+  function provenanceText(original) {
+    if (original === null) return UNKNOWN;
+    return original ? 'Not updated' : 'Updated';
+  }
+
+  /**
    * The confirmations, which are what the panel is for: whether the advisory
    * text was rewritten for publication and whether the score was approved.
    *
+   * The description line carries one fact the other two do not, so the panel
+   * says what the description is in one place: whether a maintainer approved
+   * it, and whether it is still the text the reporter wrote.
+   *
    * @param {Document} doc
    * @param {import('./tracking.js').TrackingView} tracking
+   * @param {import('../common/parse-detail.js').ParsedDetail} advisory
    * @returns {Element}
    */
-  function buildConfirmations(doc, tracking) {
+  function buildConfirmations(doc, tracking, advisory) {
     const container = element(doc, 'div', 'Box-row bghsa-confirmed');
     container.append(element(doc, 'div', 'text-bold bghsa-confirmed-heading', 'Confirmations'));
     // The tracks in the order tracking names them, which is the order the
@@ -218,6 +236,9 @@ if (typeof require === 'function') {
       const line = element(doc, 'div', 'bghsa-chips bghsa-confirmation');
       line.append(element(doc, 'span', 'bghsa-confirmation-name', track.name));
       line.append(chip(doc, confirmationText(state)));
+      if (track.key === 'description') {
+        line.append(chip(doc, provenanceText(advisory.descriptionOriginal)));
+      }
       const note = confirmationNote(state);
       if (note !== null) line.append(element(doc, 'span', 'bghsa-confirmation-note', note));
       container.append(line);
@@ -442,20 +463,8 @@ if (typeof require === 'function') {
     // for it, and a value with no row of its own goes unmentioned: the panel
     // says what the advisory is, and there is nothing to act on in a list of
     // what a parser missed.
-    if (!settled(advisory)) panel.append(buildConfirmations(doc, tracking));
+    if (!settled(advisory)) panel.append(buildConfirmations(doc, tracking, advisory));
     for (const track of buildTracks(doc, tracking, embargoOverdue)) panel.append(track);
-
-    const descriptionRow = row(doc, 'Description');
-    // Nothing on the page says whether this text is the reporter's own where no
-    // preserved comment stands to compare it against, which is the same answer
-    // an unread confirmation gives.
-    descriptionRow.body.textContent =
-      advisory.descriptionOriginal === null
-        ? UNKNOWN
-        : advisory.descriptionOriginal
-          ? 'Not updated'
-          : 'Updated';
-    panel.append(descriptionRow.row);
     panel.append(buildPreserve(doc, advisory));
 
     // Last, under everything it edits, so the panel reads as state first and
@@ -698,15 +707,7 @@ if (typeof require === 'function') {
   const exported = {
     PANEL_ID,
     STYLE_ID,
-    UNKNOWN,
-    SETTLED_STATES,
-    settled,
-    when,
     sentenceCase,
-    embargoText,
-    buildConfirmations,
-    buildTracks,
-    buildPreserve,
     press,
     buildPanel,
     anchor,
@@ -715,8 +716,6 @@ if (typeof require === 'function') {
     injectPanel,
     remember,
     render,
-    ownWrite,
-    needsRender,
     renderLoop,
     passFor,
     observe,
