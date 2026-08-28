@@ -1782,116 +1782,51 @@ const SORT_CASES = [
       sortRow('C', { severity: 'low', severityLabel: 'Low', severityConfirmed: true }),
     ],
   },
-  {
-    sort: 'owner',
-    what: 'by owner, and an unowned advisory last',
-    rows: [
-      sortRow('A', { read: true, owners: ['zoe'] }),
-      sortRow('B', { read: true, owners: [] }),
-      sortRow('C', { read: true, owners: ['ada'] }),
-    ],
-  },
-  {
-    sort: 'reporter',
-    what: 'by reporter, and one nobody read last',
-    rows: [
-      sortRow('A', { reporter: 'zoe' }),
-      sortRow('B', { reporter: null }),
-      sortRow('C', { reporter: 'ada' }),
-    ],
-  },
-  {
-    sort: 'state',
-    what: 'by state, and one GitHub did not name last',
-    rows: [
-      sortRow('A', { state: 'Triage' }),
-      sortRow('B', { state: null }),
-      sortRow('C', { state: 'Draft' }),
-    ],
-  },
-  {
-    sort: 'patch',
-    what: 'by patch state, and an advisory with no patch last',
-    rows: [
-      sortRow('A', { read: true, patch: 'Patch in review' }),
-      sortRow('B', { read: true, patch: null }),
-      sortRow('C', { read: true, patch: 'Patch closed' }),
-    ],
-  },
-  {
-    sort: 'backports',
-    what: 'the most branches still outstanding first',
-    rows: [
-      sortRow('A', { read: true, backportTargets: 2, backportsDone: 1 }),
-      sortRow('B', { read: true, backportTargets: 0, backportsDone: 0 }),
-      sortRow('C', { read: true, backportTargets: 3, backportsDone: 0 }),
-    ],
-  },
-  {
-    sort: 'cve',
-    what: 'the furthest along CVE first',
-    rows: [
-      sortRow('A', { read: true, cveState: 'requested', cve: 'CVE requested' }),
-      sortRow('B', { read: true, cveState: 'none' }),
-      sortRow('C', { read: true, cveState: 'assigned', cve: 'CVE-2026-0001' }),
-    ],
-  },
-  {
-    sort: 'embargo',
-    what: 'an overdue embargo above one still running, above none',
-    rows: [
-      sortRow('A', { read: true, embargo: true, embargoLift: '2026-09-30' }),
-      sortRow('B', { read: true }),
-      sortRow('C', { read: true, embargo: true, embargoLift: '2026-01-01', embargoOverdue: true }),
-    ],
-  },
-  {
-    sort: 'confirmed',
-    what: 'the most tracks a maintainer confirmed first',
-    rows: [
-      sortRow('A', { read: true, severityConfirmed: true }),
-      sortRow('B', { read: true }),
-      sortRow('C', { read: true, textConfirmed: true, severityConfirmed: true }),
-    ],
-  },
-  {
-    sort: 'opened',
-    what: 'the oldest report first',
-    rows: [
-      sortRow('A', { openedAt: '2026-01-01T00:00:00Z' }),
-      sortRow('B', { openedAt: null }),
-      sortRow('C', { openedAt: '2020-01-01T00:00:00Z' }),
-    ],
-  },
-  {
-    sort: 'observed',
-    what: 'the stalest read first',
-    rows: [
-      sortRow('A', { observedAt: AT - 60 * MINUTE }),
-      sortRow('B', { observedAt: AT }),
-      sortRow('C', { observedAt: AT - 180 * MINUTE }),
-    ],
-  },
-  {
-    sort: 'title',
-    what: 'by title, and one GitHub did not name last',
-    rows: [
-      sortRow('A', { title: 'Zoe' }),
-      sortRow('B', { title: null }),
-      sortRow('C', { title: 'Ada' }),
-    ],
-  },
 ];
 
 test('every sort key orders by the value it names', () => {
   const covered = SORT_CASES.map((each) => each.sort).sort();
-  const facets = table.FACETS.map((facet) => facet.key).sort();
-  assert.deepStrictEqual(covered, facets, 'a facet with no case');
+  const keys = table.SORTS.filter((each) => each.compare !== null)
+    .map((each) => each.key)
+    .sort();
+  assert.deepStrictEqual(covered, keys, 'a sort with no case');
 
   for (const each of SORT_CASES) {
     const got = viewOrder(each.rows, each.sort);
     assert.ok(got === 'C A B', `${each.sort}, ${each.what}: ${got}`);
   }
+});
+
+test('a filter and a sort the list no longer carries are gone', () => {
+  const facets = table.FACETS.map((each) => each.key);
+  const sorts = table.SORTS.map((each) => each.key);
+  // REQUIREMENTS.md section 9 names seven filters and three sorts.
+  assert.deepStrictEqual(facets, [
+    'waiting',
+    'severity',
+    'owner',
+    'state',
+    'patch',
+    'backports',
+    'embargo',
+  ]);
+  assert.deepStrictEqual(sorts, [table.DEFAULT_SORT, 'severity', 'waiting']);
+
+  // The facet a cut filter read is gone, so nothing offers its values and
+  // nothing can be held to one of them.
+  assert.strictEqual(table.facetFor('cve'), null, 'the CVE facet is still here');
+  const row = sortRow('A', { read: true, cve: 'CVE-2026-0001' });
+  assert.strictEqual(
+    table.applyView([row], { sort: table.DEFAULT_SORT, filters: { cve: 'Assigned' } }).length,
+    1,
+    'a filter over the cut CVE facet still holds the table'
+  );
+
+  // The comparator a cut sort ran is gone, so the key falls back to the
+  // default order in place of ordering by title.
+  const titled = [sortRow('A', { title: 'Zoe' }), sortRow('B', { title: 'Ada' })];
+  assert.strictEqual(table.sortFor('title'), null, 'the title comparator is still here');
+  assert.strictEqual(viewOrder(titled, 'title'), 'A B', 'a cut sort key still orders the table');
 });
 
 test('returning to the default order undoes a sort and a filter', () => {
@@ -1905,7 +1840,7 @@ test('returning to the default order undoes a sort and a filter', () => {
     }),
     sortRow('C', { read: true, triage: 'evaluating', waitingSince: '2026-08-22T00:00:00Z' }),
   ];
-  const picked = viewOrder(rows, 'title', { waiting: 'Blocked on us' });
+  const picked = viewOrder(rows, 'waiting', { waiting: 'Blocked on us' });
   assert.ok(picked === 'C', `a sort and a filter together: ${picked}`);
   const back = table.applyView(rows, table.defaultViewState()).map((row) => row.ghsaId).join(' ');
   assert.ok(back === 'C B A', `the default order after picking another: ${back}`);
@@ -1917,9 +1852,9 @@ test('a filter on a value some rows do not have keeps only those that do', () =>
     sortRow('B', { read: true }),
     sortRow('C', { read: true, severity: 'low', severityLabel: 'Low' }),
   ];
-  const high = viewOrder(rows, 'title', { severity: 'High' });
+  const high = viewOrder(rows, table.DEFAULT_SORT, { severity: 'High' });
   assert.ok(high === 'A', `the rows carrying a high severity: ${high}`);
-  const none = viewOrder(rows, 'title', { severity: table.NO_VALUE });
+  const none = viewOrder(rows, table.DEFAULT_SORT, { severity: table.NO_VALUE });
   assert.ok(none === 'B', `the rows a read left with no severity: ${none}`);
 });
 
@@ -1974,46 +1909,35 @@ test('a value a filter is holding to stays on offer after the last row carrying 
 });
 
 /**
- * Rows covering every branch of every facet's comparator. The identifier
+ * Rows covering every branch of every comparator the sort control offers: the
+ * severity and the waiting time the two facet sorts read, and the state, group
+ * and tie-break keys the default order reads on top of them. The identifier
  * descends as the grid is built, so the order the rows arrive in and the order
  * of their identifiers contradict each other.
+ *
+ * The lists have lengths 3, 4, 3 and 4, so the values repeat every twelve rows
+ * and a grid of twenty-four holds each combination the walk reaches twice under
+ * two identifiers. That is what makes a tie the identifier has to settle part
+ * of the grid.
  *
  * @returns {import('../src/list/table.js').TableRow[]}
  */
 function viewGrid() {
-  const reads = [false, true];
   const scores = [
     { severity: null, severityLabel: null, severityConfirmed: false },
     { severity: 'critical', severityLabel: 'Critical', severityConfirmed: false },
     { severity: 'low', severityLabel: 'Low', severityConfirmed: true },
   ];
-  const owners = [[], ['ada'], ['zoe', 'ada']];
   const waits = [null, '2026-01-01T00:00:00Z', '2026-08-01T00:00:00Z', '2020-06-01T00:00:00Z'];
   const states = ['Triage', 'Draft', null];
-  const reporters = ['prakleumas', 'zoe', null];
-  const patches = ['Patch in review', 'Patch merged', 'Patch closed', null];
-  const backports = [
-    { backportTargets: 0, backportsDone: 0 },
-    { backportTargets: 2, backportsDone: 0 },
-    { backportTargets: 2, backportsDone: 2 },
-  ];
-  /** @type {(import('../src/list/table.js').TableRow['cveState'])[]} */
-  const cves = ['assigned', 'requested', 'not applicable', 'none', null];
-  const embargoes = [
-    { embargo: false, embargoOverdue: false },
-    { embargo: true, embargoOverdue: false },
-    { embargo: true, embargoOverdue: true },
-  ];
   const tiers = [
-    { neverReviewed: true, newActivity: false, triage: null },
-    { neverReviewed: false, newActivity: true, triage: null },
-    { neverReviewed: false, newActivity: false, triage: 'evaluating' },
-    { neverReviewed: false, newActivity: false, triage: 'awaiting reporter' },
+    { neverReviewed: true, newActivity: false, triage: null, embargoOverdue: false },
+    { neverReviewed: false, newActivity: true, triage: null, embargoOverdue: false },
+    { neverReviewed: false, newActivity: false, triage: 'evaluating', embargoOverdue: false },
+    { neverReviewed: false, newActivity: false, triage: 'awaiting reporter', embargoOverdue: true },
   ];
-  const titles = ['Ada', 'Zoe', null];
-  const opened = ['2020-01-01T00:00:00Z', '2026-01-01T00:00:00Z', null];
 
-  const size = 60;
+  const size = 24;
   /** @type {import('../src/list/table.js').TableRow[]} */
   const rows = [];
   for (let i = 0; i < size; i += 1) {
@@ -2022,20 +1946,10 @@ function viewGrid() {
     );
     rows.push(
       sortRow(`GHSA-${String(size - i).padStart(4, '0')}`, {
-        read: at(reads),
-        owners: at(owners).slice(),
+        read: true,
         waitingSince: at(waits),
         state: at(states),
-        reporter: at(reporters),
-        patch: at(patches),
-        cveState: at(cves),
-        title: at(titles),
-        openedAt: at(opened),
-        observedAt: AT - (i % 7) * MINUTE,
-        textConfirmed: i % 2 === 0,
         ...at(scores),
-        ...at(backports),
-        ...at(embargoes),
         ...at(tiers),
       })
     );
@@ -2074,13 +1988,18 @@ function isTotalOrder(compare, rows, what) {
 
 test('every sort is a total order over a grid of the values it branches on', () => {
   const rows = viewGrid();
-  assert.ok(rows.length === 60, `grid size: ${rows.length}`);
-  for (const each of table.FACETS) {
+  assert.ok(rows.length === 24, `grid size: ${rows.length}`);
+  const held = new Set(rows.map((row) => row.ghsaId));
+  assert.ok(held.size === rows.length, 'the grid holds one identifier twice');
+  for (const each of table.SORTS) {
     const compare = table.sortFor(each.key);
+    if (each.compare === null) {
+      assert.ok(compare === null, 'the default order is a sort key among others');
+      continue;
+    }
     if (compare === null) throw new Error(`${each.key} runs no comparator`);
     isTotalOrder(compare, rows, each.key);
   }
-  assert.ok(table.sortFor(table.DEFAULT_SORT) === null, 'the default order is a sort key among others');
 });
 
 test('a sort does not depend on the order the rows arrived in', () => {
@@ -2099,7 +2018,7 @@ test('a sort does not depend on the order the rows arrived in', () => {
     return shuffled;
   };
 
-  for (const each of [...table.FACETS.map((facet) => facet.key), table.DEFAULT_SORT]) {
+  for (const each of table.SORTS.map((sort) => sort.key)) {
     const wanted = viewOrder(rows, each);
     for (let round = 0; round < 5; round += 1) {
       const got = viewOrder(shuffle(), each);
@@ -2127,8 +2046,11 @@ test('a row whose identifier went unread sorts last under every sort', () => {
 });
 
 test('sorting and filtering leave the rows the table holds alone', () => {
-  const rows = [sortRow('B', { read: true, title: 'Zoe' }), sortRow('A', { read: true, title: 'Ada' })];
-  table.applyView(rows, { sort: 'title', filters: { owner: table.NO_VALUE } });
+  const rows = [
+    sortRow('B', { read: true, waitingSince: '2026-08-01T00:00:00Z' }),
+    sortRow('A', { read: true, waitingSince: '2026-01-01T00:00:00Z' }),
+  ];
+  table.applyView(rows, { sort: 'waiting', filters: { owner: table.NO_VALUE } });
   assert.ok(rows[0]?.ghsaId === 'B', 'the array the table holds was reordered');
   assert.ok(rows.length === 2, 'the array the table holds lost a row');
 });
@@ -2138,9 +2060,7 @@ test('sorting and filtering leave the rows the table holds alone', () => {
  * @returns {string} what each facet reads for one row, as one line.
  */
 function facetLine(row) {
-  return table.FACETS.filter((each) => each.filter === true)
-    .map((each) => `${each.key}=${each.valuesOf(row).join('+')}`)
-    .join(' ');
+  return table.FACETS.map((each) => `${each.key}=${each.valuesOf(row).join('+')}`).join(' ');
 }
 
 test('every filter reads the fixture the cache holds', async () => {
@@ -2152,8 +2072,8 @@ test('every filter reads the fixture the cache holds', async () => {
   const read = await table.viewRow({ row: source, seenAt: AT }, entryOf(TRIAGE_RECORD, 'triage'), AT);
   assert.ok(
     facetLine(read) ===
-      'waiting=Blocked on the reporter severity=High owner=samuelkarp reporter=prakleumas' +
-        ' state=Triage patch=In review backports=Outstanding cve= embargo=Set confirmed=',
+      'waiting=Blocked on the reporter severity=High owner=samuelkarp state=Triage' +
+        ' patch=In review backports=Outstanding embargo=Set',
     `the facets of the cached triage read: ${facetLine(read)}`
   );
 
@@ -2162,12 +2082,10 @@ test('every filter reads the fixture the cache holds', async () => {
   const unread = table.unreadRow(source, AT);
   assert.ok(
     facetLine(unread) ===
-      'waiting= severity=High owner= reporter=prakleumas state=Triage patch= backports=' +
-        ' cve= embargo= confirmed=',
+      'waiting= severity=High owner= state=Triage patch= backports= embargo=',
     `the facets before a read: ${facetLine(unread)}`
   );
   for (const each of table.FACETS) {
-    if (each.filter !== true) continue;
     const held = each.valuesOf(read);
     const wanted = held[0] ?? table.NO_VALUE;
     assert.ok(
@@ -2276,12 +2194,10 @@ test('the controls offer every value the table holds', async () => {
 
   const sort = one(doc, `#${table.ROOT_ID} .bghsa-list-sort`);
   const offered = optionsOf(sort);
-  const wanted = [table.DEFAULT_SORT_LABEL, ...table.FACETS.map(table.sortLabelOf)].join(' | ');
+  const wanted = table.SORTS.map((each) => each.label).join(' | ');
   assert.ok(offered === wanted, `the sort offers: ${offered}`);
   assert.ok(
-    offered ===
-      'Default order | Longest waiting | Highest severity | Owner | Reporter | State |' +
-        ' Patch | Backports | CVE | Embargo | Confirmed | Oldest opened | Stalest observed | Title',
+    offered === 'Default order | Highest severity | Longest waiting',
     `the sort labels: ${offered}`
   );
 
@@ -2289,7 +2205,7 @@ test('the controls offer every value the table holds', async () => {
     .map((control) => control.getAttribute(table.FACET_ATTRIBUTE) ?? '')
     .join(' ');
   assert.ok(
-    filters === 'waiting severity owner reporter state patch backports cve embargo confirmed',
+    filters === 'waiting severity owner state patch backports embargo',
     `the filters offered: ${filters}`
   );
 
@@ -2341,10 +2257,22 @@ test('a table holding no advisory at all says nothing about a filter', () => {
 
 test('the reset goes back to the default order and drops every filter', () => {
   const { doc } = tableOver([
-    sortRow('GHSA-aaaa-aaaa-aaaa', { read: true, owners: ['ada'], title: 'Zoe' }),
-    sortRow('GHSA-bbbb-bbbb-bbbb', { read: true, owners: ['zoe'], title: 'Ada' }),
+    sortRow('GHSA-aaaa-aaaa-aaaa', {
+      read: true,
+      owners: ['ada'],
+      triage: 'evaluating',
+      severity: 'low',
+      severityLabel: 'Low',
+    }),
+    sortRow('GHSA-bbbb-bbbb-bbbb', {
+      read: true,
+      owners: ['zoe'],
+      severity: 'critical',
+      severityLabel: 'Critical',
+    }),
   ]);
-  choose(one(doc, `#${table.ROOT_ID} .bghsa-list-sort`), 'title');
+  choose(one(doc, `#${table.ROOT_ID} .bghsa-list-sort`), 'severity');
+  assert.ok(shownIds(doc) === 'GHSA-bbbb-bbbb-bbbb GHSA-aaaa-aaaa-aaaa', `sorted: ${shownIds(doc)}`);
   choose(filterIn(doc, 'owner'), 'ada');
   assert.ok(shownIds(doc) === 'GHSA-aaaa-aaaa-aaaa', `sorted and filtered: ${shownIds(doc)}`);
 
@@ -2369,14 +2297,25 @@ test('the reset goes back to the default order and drops every filter', () => {
 test('a read landing leaves the sort and the filter a maintainer picked alone', async () => {
   const ghsaId = 'GHSA-bbbb-bbbb-bbbb';
   const { doc } = tableOver([
-    sortRow('GHSA-aaaa-aaaa-aaaa', { read: true, owners: ['ada'], title: 'Zoe' }),
-    sortRow(ghsaId, { title: 'Ada' }),
+    sortRow('GHSA-aaaa-aaaa-aaaa', {
+      read: true,
+      owners: ['ada'],
+      triage: 'evaluating',
+      waitingSince: '2026-08-20T00:00:00Z',
+    }),
+    sortRow(ghsaId, { waitingSince: '2026-01-01T00:00:00Z' }),
   ]);
-  choose(one(doc, `#${table.ROOT_ID} .bghsa-list-sort`), 'title');
+  // The default order leads with the advisory blocked on us; the waiting sort
+  // leads with the one that has waited longest, so the two disagree.
+  assert.ok(shownIds(doc) === `GHSA-aaaa-aaaa-aaaa ${ghsaId}`, `the default order: ${shownIds(doc)}`);
+  choose(one(doc, `#${table.ROOT_ID} .bghsa-list-sort`), 'waiting');
   choose(filterIn(doc, 'owner'), 'ada');
   // A row nobody has read is not hidden by a filter over a value a read
   // supplies, so both are showing.
-  assert.ok(shownIds(doc) === `${ghsaId} GHSA-aaaa-aaaa-aaaa`, `by title under the owner filter: ${shownIds(doc)}`);
+  assert.ok(
+    shownIds(doc) === `${ghsaId} GHSA-aaaa-aaaa-aaaa`,
+    `by waiting under the owner filter: ${shownIds(doc)}`
+  );
 
   const detail = parseDetail.parseDetail(
     /** @type {Document} */ (/** @type {unknown} */ (parseHTML(detailHtml(ghsaId, 'Triage')).document))

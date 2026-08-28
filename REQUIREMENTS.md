@@ -258,8 +258,15 @@ waiting state, the patch state including backport progress, the confirmation
 state of text and scoring, the CVE state, the severity marked as confirmed or
 unconfirmed, and the embargo. Each row shows the time its data was observed.
 
-Rows are sortable and filterable on every value the extension holds, including
-blocked on us, blocked on the reporter, waiting duration, owner, and severity.
+Rows are filterable on waiting, severity, owner, state, patch, backports, and
+embargo, with a control that clears every filter. They are sortable by the
+default order, by severity, and by longest waiting.
+
+Filtering and sorting on every value the extension holds produced eleven
+standing controls and fourteen sort options, which is more than a maintainer
+reads. These are the values worth narrowing a queue by. The default order
+already carries state, group, severity and waiting, so a sort exists for
+looking at the list another way and not for working it.
 
 Default ordering is by state first. A draft advisory has been accepted and
 needs active work, so every draft sorts above every advisory in triage.

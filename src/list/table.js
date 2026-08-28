@@ -74,28 +74,31 @@ if (typeof require === 'function') {
  *   advisory title and the advisory description.
  * @property {string | null} cve What the CVE chip reads, and null where the
  *   advisory has no CVE state to show.
- * @property {import('../common/derive.js').CveState['state'] | null} cveState
- *   Which CVE state the advisory is in, and null while nothing has been read.
- *   The chip carries the identifier once one is assigned, so the state is held
- *   beside it for the control that filters on it.
  */
 
 /**
- * One value the table holds about an advisory, as the controls read it.
+ * One value the table holds about an advisory, as a filter control reads it.
+ * Every facet enumerates, so every one of them backs a filter.
  *
  * @typedef {object} Facet
  * @property {string} key What the control stores.
  * @property {string} label What the filter control reads while it is holding the
  *   table to nothing.
- * @property {string} [sortLabel] What the sort control reads for this facet,
- *   where the label on its own would not say which way the rows go.
- * @property {boolean} [filter] Whether the facet enumerates, so a filter can
- *   offer its values. A facet over a time or a title does not.
  * @property {readonly string[]} [values] The order its values belong in, for the
  *   ones this reader knows. Anything else follows them alphabetically.
  * @property {(row: TableRow) => string[]} valuesOf What this row holds for the
  *   facet. Empty where it holds nothing, which a read can still fill in.
- * @property {(a: TableRow, b: TableRow) => number} compare
+ */
+
+/**
+ * One order the sort control offers.
+ *
+ * @typedef {object} Sort
+ * @property {string} key What the control stores.
+ * @property {string} label What the control reads while the table is in this
+ *   order.
+ * @property {((a: TableRow, b: TableRow) => number) | null} compare How it ranks
+ *   two rows, and null for the default order, which `order.compare` settles.
  */
 
 /**
@@ -407,7 +410,6 @@ if (typeof require === 'function') {
       backportsDone: 0,
       textConfirmed: false,
       cve: null,
-      cveState: null,
     };
   }
 
@@ -468,7 +470,6 @@ if (typeof require === 'function') {
       textConfirmed:
         tracking.title.status === 'confirmed' && tracking.description.status === 'confirmed',
       cve: cveTextOf(derived.cve),
-      cveState: derived.cve.state,
     };
   }
 
@@ -667,38 +668,6 @@ if (typeof require === 'function') {
 
   /**
    * @param {TableRow} row
-   * @returns {number} how far the advisory's CVE has come, highest first.
-   */
-  function cveRank(row) {
-    if (row.cveState === 'assigned') return 3;
-    if (row.cveState === 'requested') return 2;
-    if (row.cveState === 'not applicable') return 1;
-    return 0;
-  }
-
-  /**
-   * @param {TableRow} row
-   * @returns {number} how pressing the embargo is, highest first.
-   */
-  function embargoRank(row) {
-    if (row.embargoOverdue) return 2;
-    return row.embargo ? 1 : 0;
-  }
-
-  /**
-   * @param {TableRow} row
-   * @returns {string[]} which of the two tracks a maintainer confirmed.
-   */
-  function confirmedValuesOf(row) {
-    /** @type {string[]} */
-    const held = [];
-    if (row.textConfirmed) held.push('Text');
-    if (row.severityConfirmed) held.push('Scoring');
-    return held;
-  }
-
-  /**
-   * @param {TableRow} row
    * @returns {string[]} where the branches a maintainer asked for stand, and
    *   nothing for an advisory nobody asked for a backport on.
    */
@@ -728,10 +697,7 @@ if (typeof require === 'function') {
   }
 
   /**
-   * Every value a row holds, as the sort control and the filter controls read
-   * it. A facet's sort puts what a maintainer is looking for at the top: the
-   * longest waiting, the highest severity, the most pressing embargo, the
-   * stalest read.
+   * Every value a row holds, as the filter controls read it.
    *
    * @type {readonly Facet[]}
    */
@@ -739,106 +705,70 @@ if (typeof require === 'function') {
     {
       key: 'waiting',
       label: 'Waiting',
-      sortLabel: 'Longest waiting',
-      filter: true,
       values: globalThis.bghsa.order.WAITING_STATES.map(sentenceCase),
       valuesOf: waitingValuesOf,
-      compare: (a, b) =>
-        globalThis.bghsa.order.compareNumber(instantOf(a.waitingSince), instantOf(b.waitingSince)),
     },
     {
       key: 'severity',
       label: 'Severity',
-      sortLabel: 'Highest severity',
-      filter: true,
       values: ['Critical', 'High', 'Moderate', 'Low'],
       valuesOf: (row) => (row.severityLabel === null ? [] : [sentenceCase(row.severityLabel)]),
+    },
+    {
+      key: 'owner',
+      label: 'Owner',
+      valuesOf: (row) => row.owners.slice(),
+    },
+    {
+      key: 'state',
+      label: 'State',
+      valuesOf: (row) => (row.state === null ? [] : [row.state]),
+    },
+    {
+      key: 'patch',
+      label: 'Patch',
+      values: ['In review', 'Merged', 'Closed'],
+      valuesOf: patchValuesOf,
+    },
+    {
+      key: 'backports',
+      label: 'Backports',
+      values: ['Outstanding', 'Complete'],
+      valuesOf: backportValuesOf,
+    },
+    {
+      key: 'embargo',
+      label: 'Embargo',
+      values: ['Overdue', 'Set'],
+      valuesOf: (row) => (row.embargoOverdue ? ['Set', 'Overdue'] : row.embargo ? ['Set'] : []),
+    },
+  ];
+
+  /**
+   * The orders the sort control offers, in the order it offers them. Each puts
+   * what a maintainer is looking for at the top: the longest waiting, the
+   * highest severity.
+   *
+   * The default order leads, because it is the tiering in REQUIREMENTS.md
+   * section 9 and it is what the table comes up on. A sort exists for looking
+   * at the list another way, and the default order is the way it is worked.
+   *
+   * @type {readonly Sort[]}
+   */
+  const SORTS = [
+    { key: DEFAULT_SORT, label: DEFAULT_SORT_LABEL, compare: null },
+    {
+      key: 'severity',
+      label: 'Highest severity',
       compare: (a, b) =>
         severityScore(b, true) - severityScore(a, true) ||
         severityScore(b, false) - severityScore(a, false),
     },
     {
-      key: 'owner',
-      label: 'Owner',
-      filter: true,
-      valuesOf: (row) => row.owners.slice(),
-      compare: (a, b) => compareText(a.owners[0] ?? null, b.owners[0] ?? null),
-    },
-    {
-      key: 'reporter',
-      label: 'Reporter',
-      filter: true,
-      valuesOf: (row) => (row.reporter === null ? [] : [row.reporter]),
-      compare: (a, b) => compareText(a.reporter, b.reporter),
-    },
-    {
-      key: 'state',
-      label: 'State',
-      filter: true,
-      valuesOf: (row) => (row.state === null ? [] : [row.state]),
-      compare: (a, b) => compareText(a.state, b.state),
-    },
-    {
-      key: 'patch',
-      label: 'Patch',
-      filter: true,
-      values: ['In review', 'Merged', 'Closed'],
-      valuesOf: patchValuesOf,
-      compare: (a, b) => compareText(a.patch, b.patch),
-    },
-    {
-      key: 'backports',
-      label: 'Backports',
-      filter: true,
-      values: ['Outstanding', 'Complete'],
-      valuesOf: backportValuesOf,
+      key: 'waiting',
+      label: 'Longest waiting',
       compare: (a, b) =>
-        b.backportTargets - b.backportsDone - (a.backportTargets - a.backportsDone),
-    },
-    {
-      key: 'cve',
-      label: 'CVE',
-      filter: true,
-      values: ['Assigned', 'Requested', 'Not applicable'],
-      valuesOf: (row) =>
-        row.cveState === null || row.cveState === 'none' ? [] : [sentenceCase(row.cveState)],
-      compare: (a, b) => cveRank(b) - cveRank(a),
-    },
-    {
-      key: 'embargo',
-      label: 'Embargo',
-      filter: true,
-      values: ['Overdue', 'Set'],
-      valuesOf: (row) => (row.embargoOverdue ? ['Set', 'Overdue'] : row.embargo ? ['Set'] : []),
-      compare: (a, b) => embargoRank(b) - embargoRank(a),
-    },
-    {
-      key: 'confirmed',
-      label: 'Confirmed',
-      filter: true,
-      values: ['Text', 'Scoring'],
-      valuesOf: confirmedValuesOf,
-      compare: (a, b) => confirmedValuesOf(b).length - confirmedValuesOf(a).length,
-    },
-    {
-      key: 'opened',
-      label: 'Opened',
-      sortLabel: 'Oldest opened',
-      valuesOf: () => [],
-      compare: (a, b) => compareNumber(instantOf(a.openedAt), instantOf(b.openedAt)),
-    },
-    {
-      key: 'observed',
-      label: 'Observed',
-      sortLabel: 'Stalest observed',
-      valuesOf: () => [],
-      compare: (a, b) => compareNumber(instantOf(a.observedAt), instantOf(b.observedAt)),
-    },
-    {
-      key: 'title',
-      label: 'Title',
-      valuesOf: () => [],
-      compare: (a, b) => compareText(a.title, b.title),
+        globalThis.bghsa.order.compareNumber(instantOf(a.waitingSince), instantOf(b.waitingSince)),
     },
   ];
 
@@ -849,14 +779,6 @@ if (typeof require === 'function') {
    */
   function facetFor(key) {
     return FACETS.find((facet) => facet.key === key) ?? null;
-  }
-
-  /**
-   * @param {Facet} facet
-   * @returns {string} what the sort control reads for it.
-   */
-  function sortLabelOf(facet) {
-    return facet.sortLabel ?? facet.label;
   }
 
   /**
@@ -903,7 +825,7 @@ if (typeof require === 'function') {
   }
 
   /**
-   * The comparator one sort runs: the facet's own, and then the identifier, so
+   * The comparator one sort runs: the sort's own, and then the identifier, so
    * that no sort depends on the order the rows arrived in.
    *
    * @param {string} key
@@ -912,9 +834,9 @@ if (typeof require === 'function') {
    *   `order.compare` settles.
    */
   function sortFor(key) {
-    const facet = key === DEFAULT_SORT ? null : facetFor(key);
-    if (facet === null) return null;
-    return (a, b) => facet.compare(a, b) || byGhsaId(a, b);
+    const held = SORTS.find((sort) => sort.key === key)?.compare ?? null;
+    if (held === null) return null;
+    return (a, b) => held(a, b) || byGhsaId(a, b);
   }
 
   /**
@@ -1213,8 +1135,7 @@ if (typeof require === 'function') {
 
     const sort = element(doc, 'select', 'form-select select-sm mr-2 mb-1 bghsa-list-sort');
     sort.setAttribute('aria-label', 'Sort');
-    sort.append(option(doc, DEFAULT_SORT, DEFAULT_SORT_LABEL, state.sort));
-    for (const facet of FACETS) sort.append(option(doc, facet.key, sortLabelOf(facet), state.sort));
+    for (const each of SORTS) sort.append(option(doc, each.key, each.label, state.sort));
     sort.addEventListener('change', () => {
       setViewState(doc, { ...viewStateOf(doc), sort: controlValue(sort) });
       refreshBody(doc);
@@ -1222,7 +1143,6 @@ if (typeof require === 'function') {
     box.append(sort);
 
     for (const facet of FACETS) {
-      if (facet.filter !== true) continue;
       const selected = state.filters[facet.key] ?? '';
       const control = element(doc, 'select', 'form-select select-sm mr-2 mb-1 bghsa-list-filter');
       control.setAttribute('aria-label', facet.label);
@@ -2190,8 +2110,8 @@ if (typeof require === 'function') {
     NO_VALUE,
     DEFAULT_SORT,
     FACETS,
+    SORTS,
     facetFor,
-    sortLabelOf,
     defaultViewState,
     matchesFilter,
     matchesView,
