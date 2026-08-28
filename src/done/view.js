@@ -7,6 +7,7 @@ if (typeof require === 'function') {
   require('../common/dom.js');
   require('../common/text.js');
   require('../common/schema.js');
+  require('../common/write.js');
   require('../common/merge.js');
   require('../common/parse-list.js');
   require('../common/cache.js');
@@ -100,11 +101,14 @@ if (typeof require === 'function') {
   /** What stands where nothing has read an advisory the list named. */
   const UNREAD_TEXT = 'Unread';
 
-  /** What says the crawl has not reached the last page of both states. */
-  const PARTIAL_TEXT = 'Partial crawl';
+  /** What says a collection is filling the list. */
+  const LOADING_TEXT = 'Loading...';
 
-  /** What says a collection is running. */
-  const READING_TEXT = 'Reading';
+  /**
+   * What says the list is short of the two states and nothing further is
+   * coming: the walk ended on pages GitHub would not serve.
+   */
+  const FAILED_TEXT = 'Failed to load all advisories';
 
   /** What the banner says when something the corpus is built from failed. */
   const FAILURE_MESSAGE =
@@ -332,11 +336,23 @@ if (typeof require === 'function') {
       draw(doc);
       return null;
     }
+    // The controls are disabled for the flight, so a second press is not one a
+    // maintainer can make. A caller that asks anyway is refused here rather
+    // than reaching the write with a sequence number the first save has not
+    // landed on yet.
+    if (saving.has(ghsaId)) return null;
     notes.delete(ghsaId);
     const edit = globalThis.bghsa.edit;
-    const context = await contextFor(doc, advisory, options);
-    edit.stage(keyOf(advisory), { closureReason: reason });
-    return edit.save(context);
+    saving.add(ghsaId);
+    draw(doc);
+    try {
+      const context = await contextFor(doc, advisory, options);
+      edit.stage(keyOf(advisory), { closureReason: reason });
+      return await edit.save(context);
+    } finally {
+      saving.delete(ghsaId);
+      draw(doc);
+    }
   }
 
   /**
@@ -349,12 +365,25 @@ if (typeof require === 'function') {
   const notes = new Map();
 
   /**
+   * The advisories a save started from this view is out for, by GHSA
+   * identifier. REQUIREMENTS.md section 3: the controls that fed a save are
+   * held still until it settles, so the values written are the values on
+   * screen and no second press lands on the write in flight.
+   *
+   * @type {Set<string>}
+   */
+  const saving = new Set();
+
+  /**
    * @param {DoneRow} row
    * @param {import('./corpus.js').Corpus | null} corpus
    * @returns {{ ok: boolean, message: string } | null} what the row says about
    *   the last press on it.
    */
   function noteFor(row, corpus) {
+    if (saving.has(row.ghsaId)) {
+      return { ok: true, message: globalThis.bghsa.write.SAVING_MESSAGE };
+    }
     const own = notes.get(row.ghsaId);
     if (own !== undefined) return own;
     const advisory = corpus === null ? null : (memberOf(corpus, row.ghsaId)?.advisory ?? null);
@@ -396,7 +425,11 @@ if (typeof require === 'function') {
 
     const save = element(doc, 'button', 'btn btn-sm bghsa-done-save', SAVE_LABEL);
     save.setAttribute('type', 'button');
-    if (!row.writable) save.setAttribute('disabled', '');
+    // Both controls fed the save that is out, and both are held still until it
+    // settles: what the write carries is what the row shows.
+    const flight = saving.has(row.ghsaId);
+    if (flight) control.setAttribute('disabled', '');
+    if (flight || !row.writable) save.setAttribute('disabled', '');
 
     control.addEventListener('change', () => {
       if (advisory === null) return;
@@ -505,23 +538,42 @@ if (typeof require === 'function') {
   }
 
   /**
-   * The rows, and what stands where there are none.
+   * How the list is standing: filling, short of the states with nothing further
+   * coming, or whole.
+   *
+   * A collection running says so from the view, which knows one is out, and
+   * from the corpus, which is assembled inside the walk that fills it. A
+   * corpus a finished pass left short of the states is one the walk gave up on,
+   * and no more of it is coming until a page load takes the work back.
+   *
+   * @param {Held} state
+   * @returns {string | null} what the header says about the list, and null
+   *   where there is nothing to say.
+   */
+  function statusTextOf(state) {
+    if (state.reading || state.corpus?.running === true) return LOADING_TEXT;
+    if (state.corpus !== null && !state.corpus.complete) return FAILED_TEXT;
+    return null;
+  }
+
+  /**
+   * The rows, and what stands where there are none. Reaching the done view
+   * starts the collection, so a view with no corpus yet is one whose first page
+   * has not landed.
    *
    * @param {Document} doc
    * @param {readonly DoneRow[]} rows
-   * @param {import('./corpus.js').Corpus | null} corpus
-   * @param {boolean} reading
+   * @param {Held} state
    * @returns {Element}
    */
-  function buildBody(doc, rows, corpus, reading) {
+  function buildBody(doc, rows, state) {
     const list = element(doc, 'ul', 'bghsa-done-rows');
     if (rows.length === 0) {
-      list.append(
-        element(doc, 'li', 'Box-row bghsa-done-empty', reading ? READING_TEXT : EMPTY_TEXT)
-      );
+      const empty = state.corpus === null ? (statusTextOf(state) ?? EMPTY_TEXT) : EMPTY_TEXT;
+      list.append(element(doc, 'li', 'Box-row bghsa-done-empty', empty));
       return list;
     }
-    for (const row of rows) list.append(buildRow(doc, row, corpus));
+    for (const row of rows) list.append(buildRow(doc, row, state.corpus));
     return list;
   }
 
@@ -546,17 +598,17 @@ if (typeof require === 'function') {
     const rows = rowsOf(state.corpus);
     const countText = globalThis.bghsa.table.countTextOf(rows.length);
     header.append(element(doc, 'span', 'ml-2 text-normal bghsa-done-count', countText));
-    // What the list is of, which is not a statistic: a walk short of its last
-    // page holds part of the two states, and a maintainer reading a row has to
-    // be able to tell that more are on their way.
-    if (state.corpus !== null && !state.corpus.complete) header.append(chip(doc, PARTIAL_TEXT));
-    if (state.reading) header.append(chip(doc, READING_TEXT));
+    // What the list is of, which is not a statistic: a maintainer reading a row
+    // has to be able to tell whether more are on their way, and whether the
+    // ones that are missing are coming at all.
+    const status = statusTextOf(state);
+    if (status !== null) header.append(chip(doc, status));
     root.append(header);
 
     const banner = buildBanner(doc, state.failures);
     if (banner !== null) root.append(banner);
 
-    root.append(buildBody(doc, rows, state.corpus, state.reading));
+    root.append(buildBody(doc, rows, state));
     return root;
   }
 
@@ -809,12 +861,13 @@ if (typeof require === 'function') {
     NO_REASON,
     EMPTY_TEXT,
     UNREAD_TEXT,
-    PARTIAL_TEXT,
-    READING_TEXT,
+    LOADING_TEXT,
+    FAILED_TEXT,
     FAILURE_MESSAGE,
     UNREADABLE_MESSAGE,
     STYLE_TEXT,
     notes,
+    saving,
     stateOf,
     setState,
     current,
@@ -826,6 +879,7 @@ if (typeof require === 'function') {
     contextFor,
     buildClosure,
     buildRow,
+    statusTextOf,
     buildBody,
     buildView,
     ensureStyle,

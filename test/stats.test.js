@@ -143,7 +143,7 @@ function member(fields) {
 
 /**
  * @param {readonly import('../src/done/corpus.js').CorpusMember[]} members
- * @param {{ complete?: boolean, expected?: Record<string, number | null> }} [over]
+ * @param {{ complete?: boolean, running?: boolean, expected?: Record<string, number | null> }} [over]
  * @returns {import('../src/done/corpus.js').Corpus}
  */
 function corpusOf(members, over = {}) {
@@ -151,6 +151,7 @@ function corpusOf(members, over = {}) {
     members: [...members],
     unread: members.filter((entry) => entry.advisory === null).map((entry) => entry.ghsaId),
     complete: over.complete ?? true,
+    running: over.running ?? false,
     expected: over.expected ?? { published: null, closed: null },
   };
 }

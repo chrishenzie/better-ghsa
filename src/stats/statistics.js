@@ -51,8 +51,11 @@ if (typeof require === 'function') {
   /** What the toggle reads while another view is showing. */
   const SHOW_STATS = 'Show statistics';
 
-  /** What it reads while this one is. */
-  const SHOW_OPEN = 'Show open advisories';
+  /**
+   * What it reads while this one is. Both extension views go back to the same
+   * place, and the done view is where the label is defined.
+   */
+  const SHOW_OPEN = globalThis.bghsa.view.SHOW_OPEN;
 
   /** What the control that writes the file reads. */
   const EXPORT_LABEL = 'Export CSV';
@@ -311,6 +314,7 @@ if (typeof require === 'function') {
       members: halves.flatMap((half) => half.corpus.members),
       unread: halves.flatMap((half) => half.corpus.unread),
       complete: halves.every((half) => half.corpus.complete),
+      running: halves.some((half) => half.corpus.running),
       expected,
     };
   }

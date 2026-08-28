@@ -109,6 +109,7 @@ function corpusOf(members) {
     members: [...members],
     unread: members.filter((entry) => entry.advisory === null).map((entry) => entry.ghsaId),
     complete: true,
+    running: false,
     expected: { published: null, closed: null },
   };
 }

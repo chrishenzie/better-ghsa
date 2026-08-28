@@ -372,6 +372,40 @@ test('a walk that did not reach its last page says the corpus is partial', async
   assert.ok(!collected.corpus.members.some((member) => member.ghsaId === second));
 });
 
+test('a corpus drawn inside the walk says a collection is filling it', async () => {
+  const ids = [ghsa('aaaa')];
+  const pages = {
+    [PUBLISHED_URL]: listHtml({ state: 'published', ids, counts: { published: 1 } }),
+    [CLOSED_URL]: listHtml({ state: 'closed', ids: [], counts: { published: 1 } }),
+  };
+  pages[detailUrl(ids[0] ?? '')] = detailHtml({
+    ghsaId: ids[0] ?? '',
+    state: 'Published',
+    reportedAt: '2026-03-02T00:00:00Z',
+  });
+  const { collect } = harness(pages);
+  /** @type {boolean[]} */
+  const running = [];
+  const collected = await collect({
+    onPage: (held) => {
+      running.push(held.running);
+    },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.ok(running.length > 0, 'the walk drew the corpus at least once');
+  assert.ok(
+    running.every((flag) => flag === true),
+    `a corpus drawn inside the walk said nothing was filling it: ${JSON.stringify(running)}`
+  );
+  assert.strictEqual(
+    collected.corpus.running,
+    false,
+    'the corpus the collection ended on says one is still filling it'
+  );
+  assert.strictEqual(collected.corpus.complete, true);
+});
+
 test('a page of the walk draws the corpus before any advisory is read', async () => {
   const ids = [ghsa('aaaa')];
   const pages = {

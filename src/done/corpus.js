@@ -42,6 +42,10 @@ if (typeof require === 'function') {
  * @property {boolean} complete Whether every walk reached its last page. A
  *   corpus that is not complete holds part of the states, and how much is not
  *   known from the crawl alone.
+ * @property {boolean} running Whether a collection is filling this corpus now.
+ *   A corpus still being filled and one a pass gave up on are both short of the
+ *   states, and only the second is a corpus that will stay that way. The
+ *   `complete` flag alone does not tell them apart.
  * @property {Record<string, number | null>} expected What GitHub's own state
  *   tabs counted, by `?state=`, and null for a tab whose count went unread. It
  *   is the corpus size before any crawl, so it is what says whether the members
@@ -110,6 +114,7 @@ if (typeof require === 'function') {
    *   at?: number,
    *   expected?: Record<string, number | null>,
    *   complete?: boolean,
+   *   running?: boolean,
    *   states?: readonly string[],
    * }} [options] `states` names the `?state=` values the corpus is over, and is
    *   the done pair where it is absent. The statistics are over the whole
@@ -157,6 +162,7 @@ if (typeof require === 'function') {
       members,
       unread,
       complete: options.complete === true,
+      running: options.running === true,
       expected: options.expected ?? expectedOf(null, states),
     };
   }
@@ -186,14 +192,17 @@ if (typeof require === 'function') {
     /**
      * @param {import('../common/crawl.js').CrawledList} list
      * @param {boolean} complete
+     * @param {boolean} running Whether this collection is still going. Every
+     *   corpus drawn from inside the walk is, and the one it ends on is not.
      * @returns {Promise<Corpus>}
      */
-    function assemble(list, complete) {
+    function assemble(list, complete, running) {
       return membersOf(ref, list, {
         storage: options.storage,
         at: clock(),
         expected,
         complete,
+        running,
       });
     }
 
@@ -215,14 +224,14 @@ if (typeof require === 'function') {
         if (options.onPage === undefined) return;
         // The page lands inside the walk, and what it adds to the corpus is
         // drawn without waiting for the walk to finish.
-        void assemble(list, false).then(options.onPage, () => {});
+        void assemble(list, false, true).then(options.onPage, () => {});
       },
     });
 
     await options.queue.add(crawled.ids);
     const read = await options.queue.run();
 
-    return { corpus: await assemble(crawled.list, crawled.complete), crawled, read };
+    return { corpus: await assemble(crawled.list, crawled.complete, false), crawled, read };
   }
 
   const exported = { DONE_STATES, expectedOf, membersOf, collect };

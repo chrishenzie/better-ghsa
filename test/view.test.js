@@ -389,7 +389,7 @@ function member(fields) {
 
 /**
  * @param {readonly import('../src/done/corpus.js').CorpusMember[]} members
- * @param {{ complete?: boolean, expected?: Record<string, number | null> }} [over]
+ * @param {{ complete?: boolean, running?: boolean, expected?: Record<string, number | null> }} [over]
  * @returns {import('../src/done/corpus.js').Corpus}
  */
 function corpusOf(members, over = {}) {
@@ -397,6 +397,7 @@ function corpusOf(members, over = {}) {
     members: [...members],
     unread: members.filter((each) => each.advisory === null).map((each) => each.ghsaId),
     complete: over.complete ?? true,
+    running: over.running ?? false,
     expected: over.expected ?? { published: null, closed: null },
   };
 }
@@ -705,6 +706,40 @@ test("the severity chip takes GitHub's own color and no other chip does", async 
   );
 });
 
+test('the header tells a list still filling from one that will stay short', async () => {
+  const members = [member({ ghsaId: ghsa('eeff'), state: 'closed', severity: 'high' })];
+  const header = `#${view.ROOT_ID} .bghsa-done-header span.Label`;
+
+  // A corpus assembled inside the walk that is filling it.
+  const doc = await page(corpusOf(members, { complete: false, running: true }));
+  assert.deepStrictEqual(textsOf(doc, header), ['Loading...']);
+
+  // The pass ended and the walk never reached the last page, so what is missing
+  // is not on its way.
+  view.setState(doc, { corpus: corpusOf(members, { complete: false, running: false }) });
+  view.draw(doc);
+  assert.deepStrictEqual(textsOf(doc, header), ['Failed to load all advisories']);
+
+  // A walk that reached the last page of both states says nothing.
+  view.setState(doc, { corpus: corpusOf(members, { complete: true, running: false }) });
+  view.draw(doc);
+  assert.deepStrictEqual(textsOf(doc, header), []);
+});
+
+test('the list reads as loading until the first page of the walk lands', async () => {
+  const doc = await page();
+  view.setState(doc, { corpus: null, ref: REF, reading: true });
+  view.draw(doc);
+  assert.strictEqual(textOf(doc, `#${view.ROOT_ID} .bghsa-done-empty`), 'Loading...');
+
+  // A collection that landed and found nothing is a repository with no done
+  // advisory, which is not a repository still loading.
+  view.setState(doc, { corpus: corpusOf([]), reading: false });
+  view.draw(doc);
+  assert.strictEqual(textOf(doc, `#${view.ROOT_ID} .bghsa-done-empty`), view.EMPTY_TEXT);
+  view.setState(doc, { corpus: null, ref: null });
+});
+
 /**
  * One comment on an advisory thread, in the shape the merge reads. A raw
  * payload makes it a state comment; no payload makes it an ordinary comment.
@@ -883,6 +918,67 @@ test('a reason a maintainer sets reaches GitHub as a state comment', async () =>
   edit.edits.delete(edit.keyOf(built));
   edit.written.delete(edit.keyOf(built));
   edit.results.delete(edit.keyOf(built));
+});
+
+test('the closure controls are held still while a save is out', async () => {
+  const read = parseDetail.parseDetail(document(fixture('triage-thread.html')));
+  assert.ok(read !== null, 'the fixture reads as an advisory');
+  const held = await cachedCorpus([{ ghsaId: TRIAGE_ID, state: 'closed', record: read }]);
+  const doc = await page(held);
+
+  /** @type {() => void} */
+  let land = () => {};
+  const landed = new Promise((resolve) => {
+    land = () => resolve(undefined);
+  });
+  /** @type {import('../src/detail/edit.js').EditorContext[]} */
+  const saved = [];
+  const realSave = edit.save;
+  edit.save = async (context) => {
+    saved.push(context);
+    await landed;
+    return { ok: true, reason: null, status: 200, message: 'saved', snapshot: null, merged: null };
+  };
+  try {
+    const flight = view.setReason(doc, TRIAGE_ID, 'out of scope');
+
+    const during = doneRow(doc, TRIAGE_ID);
+    assert.ok(
+      one(during, 'select.bghsa-done-reason').hasAttribute('disabled'),
+      'the reason could be changed under the write carrying it'
+    );
+    assert.ok(
+      one(during, 'button.bghsa-done-save').hasAttribute('disabled'),
+      'a second press could land on the write in flight'
+    );
+    assert.strictEqual(textOf(during, '.bghsa-done-note'), 'Saving...');
+
+    // A press the disabled control cannot make, made anyway.
+    assert.strictEqual(
+      await view.setReason(doc, TRIAGE_ID, 'not a vulnerability'),
+      null,
+      'a second save went out while the first was in flight'
+    );
+
+    land();
+    const outcome = await flight;
+    assert.ok(outcome !== null && outcome.ok, 'the save did not land');
+    assert.strictEqual(saved.length, 1, 'more than one save went out');
+  } finally {
+    edit.save = realSave;
+  }
+
+  const after = doneRow(doc, TRIAGE_ID);
+  assert.ok(
+    !one(after, 'select.bghsa-done-reason').hasAttribute('disabled'),
+    'the flight kept the control it took'
+  );
+  assert.ok(
+    !one(after, 'button.bghsa-done-save').hasAttribute('disabled'),
+    'the flight kept the button it took'
+  );
+  edit.edits.delete(edit.keyOf(/** @type {NonNullable<typeof read>} */ (read)));
+  edit.results.delete(edit.keyOf(/** @type {NonNullable<typeof read>} */ (read)));
 });
 
 test('an advisory nothing has read takes no reason and says why', async () => {
@@ -1116,7 +1212,7 @@ test('a collection that ends does not report the one now running finished', asyn
     'the collection that ended reported the one still crawling finished'
   );
   const drawn = (one(doc, `#${view.ROOT_ID}`).textContent ?? '').replace(/\s+/g, ' ');
-  assert.ok(drawn.includes(view.READING_TEXT), `the view drew: ${drawn}`);
+  assert.ok(drawn.includes(view.LOADING_TEXT), `the view drew: ${drawn}`);
   assert.ok(!drawn.includes(view.EMPTY_TEXT), `the view drew: ${drawn}`);
 
   release();
