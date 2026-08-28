@@ -245,6 +245,35 @@ if (typeof require === 'function') {
   /** What names the facet one filter control holds the table to. */
   const FACET_ATTRIBUTE = 'data-bghsa-facet';
 
+  /** What names the value one menu item holds its control to. */
+  const VALUE_ATTRIBUTE = 'data-bghsa-value';
+
+  /** What the sort control reads. */
+  const SORT_LABEL = 'Sort';
+
+  /** What the item of a filter that holds the table to nothing reads. */
+  const ANY_LABEL = 'Any';
+
+  /** The namespace an octicon's elements belong to. */
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+
+  /**
+   * The check GitHub draws on every item of a `SelectMenu`. A checked item and
+   * an unchecked one carry the same markup: Primer keys the check on
+   * `[aria-checked="true"]`, so every item carries one and the stylesheet says
+   * which is shown.
+   */
+  const CHECK_PATH =
+    'M13.78 4.22a.75.75 0 0 1 0 1.06l-7.25 7.25a.75.75 0 0 1-1.06 0L2.22 9.28a.751.751 0 0 1' +
+    ' .018-1.042.751.751 0 0 1 1.042-.018L6 10.94l6.72-6.72a.75.75 0 0 1 1.06 0Z';
+
+  /** The cross on the button that closes a menu. */
+  const CLOSE_PATH =
+    'M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.749.749 0 0 1 1.275.326.749.749 0 0 1' +
+    '-.215.734L9.06 8l3.22 3.22a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215L8 9.06l-3.22' +
+    ' 3.22a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042L6.94 8 3.72 4.78a.75.75 0 0 1' +
+    ' 0-1.06Z';
+
   /** What the toggle reads while the extension's table is showing. */
   const SHOW_GITHUB = "Show GitHub's view";
 
@@ -1074,27 +1103,114 @@ if (typeof require === 'function') {
   }
 
   /**
-   * @param {Element} field
-   * @returns {string} what a control holds. The live property is read where the
-   *   host offers one, because that is what the maintainer picked.
+   * @param {Document} doc
+   * @param {string} className
+   * @param {string} path
+   * @returns {Element} one octicon, drawn the size GitHub draws them. An SVG
+   *   element takes its class through the attribute, because the property that
+   *   carries it is not a string.
    */
-  function controlValue(field) {
-    const live = /** @type {{ value?: unknown }} */ (/** @type {unknown} */ (field)).value;
-    return typeof live === 'string' ? live : (field.getAttribute('value') ?? '');
+  function octicon(doc, className, path) {
+    const svg = doc.createElementNS(SVG_NS, 'svg');
+    svg.setAttribute('class', `octicon ${className}`);
+    svg.setAttribute('height', '16');
+    svg.setAttribute('width', '16');
+    svg.setAttribute('viewBox', '0 0 16 16');
+    svg.setAttribute('version', '1.1');
+    const drawn = doc.createElementNS(SVG_NS, 'path');
+    drawn.setAttribute('d', path);
+    svg.append(drawn);
+    return svg;
   }
 
   /**
+   * One item of a menu. GitHub's own items are anchors that navigate; picking a
+   * value here moves rows the table already holds, so this is a button, it
+   * carries no `href`, and the surface handles the press.
+   *
    * @param {Document} doc
-   * @param {string} value
+   * @param {string} value What picking it holds the control to.
    * @param {string} label
-   * @param {string} selected
+   * @param {boolean} checked
+   * @param {() => void} pressed
    * @returns {Element}
    */
-  function option(doc, value, label, selected) {
-    const node = element(doc, 'option', '', label);
-    node.setAttribute('value', value);
-    if (value === selected) node.setAttribute('selected', '');
-    return node;
+  function menuItem(doc, value, label, checked, pressed) {
+    const item = element(doc, 'button', 'SelectMenu-item');
+    item.setAttribute('type', 'button');
+    item.setAttribute('role', 'menuitemradio');
+    item.setAttribute('aria-checked', checked ? 'true' : 'false');
+    item.setAttribute(VALUE_ATTRIBUTE, value);
+    const check = octicon(doc, 'octicon-check SelectMenu-icon SelectMenu-icon--check', CHECK_PATH);
+    check.setAttribute('aria-hidden', 'true');
+    item.append(check, element(doc, 'span', '', label));
+    item.addEventListener('click', pressed);
+    return item;
+  }
+
+  /**
+   * One control, in the shape GitHub builds its own table header menus in:
+   * `details` plus `summary` plus `details-menu`, with a `SelectMenu` inside
+   * and no `select` and no `option` anywhere, which `testdata/select-menu.html`
+   * captures.
+   *
+   * The surface runs inside the page, so Primer's stylesheet paints this and
+   * GitHub's `details-menu` element gives it arrow keys across the items,
+   * Escape to close and typeahead. Whether the menu is open rides on the native
+   * `details`, so nothing here carries `aria-expanded`.
+   *
+   * @param {Document} doc
+   * @param {string} className What names this control among the others.
+   * @param {string} label What the control reads, and what its menu is titled.
+   * @param {string} value What it is holding to, which the summary carries after
+   *   the label, and the empty string for one holding to nothing.
+   * @param {readonly Element[]} items
+   * @returns {Element}
+   */
+  function menu(doc, className, label, value, items) {
+    const held = element(
+      doc,
+      'details',
+      `details-reset details-overlay d-inline-block position-relative mr-2 mb-1 ${className}`
+    );
+
+    const summary = element(doc, 'summary', 'btn btn-sm');
+    summary.setAttribute('role', 'button');
+    summary.setAttribute('aria-haspopup', 'menu');
+    summary.append(
+      doc.createTextNode(label),
+      element(doc, 'span', 'bghsa-list-menu-value', value === '' ? '' : `: ${value}`),
+      element(doc, 'span', 'dropdown-caret')
+    );
+    held.append(summary);
+
+    // The close button is the way out of the menu on a narrow viewport, where
+    // Primer draws it as a full screen modal. GitHub's carries a
+    // `data-toggle-for` for its own behavior to act on; this one is closed
+    // here, so one press has one owner.
+    const close = element(doc, 'button', 'SelectMenu-closeButton');
+    close.setAttribute('type', 'button');
+    const cross = octicon(doc, 'octicon-x', CLOSE_PATH);
+    cross.setAttribute('role', 'img');
+    cross.setAttribute('aria-label', 'Close menu');
+    close.append(cross);
+    close.addEventListener('click', () => held.removeAttribute('open'));
+
+    const header = element(doc, 'header', 'SelectMenu-header');
+    header.append(element(doc, 'span', 'SelectMenu-title', label), close);
+
+    const list = element(doc, 'div', 'SelectMenu-list');
+    list.append(...items);
+
+    const modal = element(doc, 'div', 'SelectMenu-modal');
+    modal.append(header, list);
+
+    const body = element(doc, 'details-menu', 'SelectMenu');
+    body.setAttribute('role', 'menu');
+    body.setAttribute('aria-label', label);
+    body.append(modal);
+    held.append(body);
+    return held;
   }
 
   /**
@@ -1102,15 +1218,25 @@ if (typeof require === 'function') {
    * @param {Facet} facet
    * @param {readonly TableRow[]} rows
    * @param {string} selected
-   * @returns {Element[]} what one filter offers: the facet's own label for a
-   *   filter holding the table to nothing, then the values the rows hold.
+   * @returns {Element[]} what one filter offers: the item that holds the table
+   *   to nothing, then the values the rows hold.
    */
-  function filterOptionNodes(doc, facet, rows, selected) {
-    const nodes = [option(doc, '', facet.label, selected)];
+  function filterItems(doc, facet, rows, selected) {
+    /**
+     * @param {string} value
+     * @returns {() => void}
+     */
+    const pressing = (value) => () => {
+      const view = viewStateOf(doc);
+      setViewState(doc, { ...view, filters: { ...view.filters, [facet.key]: value } });
+      drawControls(doc);
+      refreshBody(doc);
+    };
+    const items = [menuItem(doc, '', ANY_LABEL, selected === '', pressing(''))];
     for (const value of filterOptions(rows, facet, selected)) {
-      nodes.push(option(doc, value, value, selected));
+      items.push(menuItem(doc, value, value, value === selected, pressing(value)));
     }
-    return nodes;
+    return items;
   }
 
   /**
@@ -1133,27 +1259,26 @@ if (typeof require === 'function') {
   function buildControls(doc, rows, state) {
     const box = element(doc, 'div', 'd-flex flex-wrap flex-items-center bghsa-list-controls');
 
-    const sort = element(doc, 'select', 'form-select select-sm mr-2 mb-1 bghsa-list-sort');
-    sort.setAttribute('aria-label', 'Sort');
-    for (const each of SORTS) sort.append(option(doc, each.key, each.label, state.sort));
-    sort.addEventListener('change', () => {
-      setViewState(doc, { ...viewStateOf(doc), sort: controlValue(sort) });
-      refreshBody(doc);
-    });
-    box.append(sort);
+    const held = SORTS.find((each) => each.key === state.sort) ?? SORTS[0];
+    const sorts = SORTS.map((each) =>
+      menuItem(doc, each.key, each.label, each.key === held?.key, () => {
+        setViewState(doc, { ...viewStateOf(doc), sort: each.key });
+        drawControls(doc);
+        refreshBody(doc);
+      })
+    );
+    box.append(menu(doc, 'bghsa-list-sort', SORT_LABEL, held?.label ?? '', sorts));
 
     for (const facet of FACETS) {
       const selected = state.filters[facet.key] ?? '';
-      const control = element(doc, 'select', 'form-select select-sm mr-2 mb-1 bghsa-list-filter');
-      control.setAttribute('aria-label', facet.label);
+      const control = menu(
+        doc,
+        'bghsa-list-filter',
+        facet.label,
+        selected,
+        filterItems(doc, facet, rows, selected)
+      );
       control.setAttribute(FACET_ATTRIBUTE, facet.key);
-      control.append(...filterOptionNodes(doc, facet, rows, selected));
-      control.addEventListener('change', () => {
-        const held = viewStateOf(doc);
-        const filters = { ...held.filters, [facet.key]: controlValue(control) };
-        setViewState(doc, { ...held, filters });
-        refreshBody(doc);
-      });
       box.append(control);
     }
 
@@ -1161,7 +1286,7 @@ if (typeof require === 'function') {
     reset.setAttribute('type', 'button');
     reset.addEventListener('click', () => {
       setViewState(doc, defaultViewState());
-      resetControls(doc);
+      drawControls(doc);
       refreshBody(doc);
     });
     box.append(reset);
@@ -1169,17 +1294,24 @@ if (typeof require === 'function') {
   }
 
   /**
+   * Draws the controls again from the view the document is now showing, which
+   * is what puts every menu on the item that view names and every summary on
+   * the value it is holding to.
+   *
    * @param {Document} doc
-   * @returns {void} draws the controls again from the view the document is now
-   *   showing, which is what puts every one of them back on its blank option.
+   * @returns {void}
    */
-  function resetControls(doc) {
+  function drawControls(doc) {
     const root = doc.getElementById(ROOT_ID);
     const view = views.get(doc);
     if (root === null || view === undefined) return;
     const held = root.querySelector('.bghsa-list-controls');
     if (held === null) return;
-    held.replaceWith(buildControls(doc, view.rows, viewStateOf(doc)));
+    const fresh = buildControls(doc, view.rows, viewStateOf(doc));
+    // The controls go out of view with the table. A redraw while GitHub's own
+    // view is showing must not bring them back.
+    if (held.classList.contains(HIDDEN_CLASS)) fresh.classList.add(HIDDEN_CLASS);
+    held.replaceWith(fresh);
   }
 
   /**
@@ -1194,18 +1326,26 @@ if (typeof require === 'function') {
     const root = doc.getElementById(ROOT_ID);
     const view = views.get(doc);
     if (root === null || view === undefined) return;
+    const state = viewStateOf(doc);
     for (const control of root.querySelectorAll(`[${FACET_ATTRIBUTE}]`)) {
       const facet = facetFor(control.getAttribute(FACET_ATTRIBUTE) ?? '');
       if (facet === null) continue;
-      const selected = controlValue(control);
-      const wanted = filterOptionNodes(doc, facet, view.rows, selected);
-      const held = [...control.querySelectorAll('option')];
+      const list = control.querySelector('.SelectMenu-list');
+      if (list === null) continue;
+      const selected = state.filters[facet.key] ?? '';
+      const wanted = filterItems(doc, facet, view.rows, selected);
+      const shown = [...list.querySelectorAll(`[${VALUE_ATTRIBUTE}]`)];
       const same =
-        held.length === wanted.length &&
-        held.every((each, at) => each.getAttribute('value') === wanted[at]?.getAttribute('value'));
+        shown.length === wanted.length &&
+        shown.every(
+          (each, at) =>
+            each.getAttribute(VALUE_ATTRIBUTE) === wanted[at]?.getAttribute(VALUE_ATTRIBUTE)
+        );
+      // Only a menu whose items changed is rebuilt, so a read landing does not
+      // shut a menu a maintainer is reading.
       if (same) continue;
-      while (control.firstChild !== null) control.removeChild(control.firstChild);
-      control.append(...wanted);
+      while (list.firstChild !== null) list.removeChild(list.firstChild);
+      list.append(...wanted);
     }
   }
 
@@ -2123,6 +2263,9 @@ if (typeof require === 'function') {
     EMPTY_TEXT,
     WALKING_TEXT,
     FACET_ATTRIBUTE,
+    VALUE_ATTRIBUTE,
+    SORT_LABEL,
+    ANY_LABEL,
     viewStateOf,
     setViewState,
     viewCountText,
@@ -2130,7 +2273,11 @@ if (typeof require === 'function') {
     progressChip,
     setProgress,
     leftToRead,
+    menuItem,
+    menu,
+    filterItems,
     buildControls,
+    drawControls,
     buildBody,
     refreshBody,
     syncFilterOptions,

@@ -2096,37 +2096,28 @@ test('every filter reads the fixture the cache holds', async () => {
 });
 
 /**
- * @param {Element} node
- * @returns {void} tells the control's handler that its value moved.
+ * @param {Element} control The `details` a control is built on.
+ * @returns {Element[]} the items its menu offers, in the order it offers them.
  */
-function changed(node) {
-  const view = node.ownerDocument?.defaultView;
-  if (view === null || view === undefined) throw new Error('the document has no view');
-  node.dispatchEvent(new view.Event('change', { bubbles: true }));
+function itemNodes(control) {
+  return Array.from(control.querySelectorAll(`[${table.VALUE_ATTRIBUTE}]`));
 }
 
 /**
- * Picks an option the way a maintainer does. The selection is the `selected`
- * attribute here, which is what this document model reads a select's value
- * from.
+ * Presses an item the way a maintainer does.
  *
- * @param {Element} select
- * @param {string} value
+ * @param {Element} control
+ * @param {string} value What the item holds the control to.
  * @returns {void}
  */
-function choose(select, value) {
-  let found = false;
-  for (const option of select.querySelectorAll('option')) {
-    const held = option.getAttribute('value') ?? '';
-    if (held === value) {
-      option.setAttribute('selected', '');
-      found = true;
-    } else {
-      option.removeAttribute('selected');
-    }
+function press(control, value) {
+  for (const item of itemNodes(control)) {
+    if ((item.getAttribute(table.VALUE_ATTRIBUTE) ?? '') !== value) continue;
+    /** @type {HTMLElement} */ (/** @type {unknown} */ (item)).click();
+    return;
   }
-  if (!found) throw new Error(`the control offers no ${value === '' ? 'blank option' : value}`);
-  changed(select);
+  const named = value === '' ? 'item that holds it to nothing' : value;
+  throw new Error(`the control offers no ${named}`);
 }
 
 /**
@@ -2142,13 +2133,25 @@ function filterIn(doc, facet) {
 }
 
 /**
- * @param {Element} select
- * @returns {string} what the control offers, as one line.
+ * @param {Element} control
+ * @returns {string} what its menu offers, as one line.
  */
-function optionsOf(select) {
-  return Array.from(select.querySelectorAll('option'))
-    .map((option) => option.textContent ?? '')
+function itemsOf(control) {
+  return itemNodes(control)
+    .map((item) => item.textContent ?? '')
     .join(' | ');
+}
+
+/**
+ * @param {Element} control
+ * @returns {string} the value of the one item its menu marks checked. Where it
+ *   marks none or marks several, that is what comes back, because a menu
+ *   carrying two checks is as wrong as one carrying none.
+ */
+function checkedIn(control) {
+  const held = itemNodes(control).filter((item) => item.getAttribute('aria-checked') === 'true');
+  if (held.length !== 1) return `${held.length} items checked`;
+  return held[0]?.getAttribute(table.VALUE_ATTRIBUTE) ?? '';
 }
 
 /**
@@ -2193,7 +2196,7 @@ test('the controls offer every value the table holds', async () => {
   await render(doc, { [keyFor('GHSA-jmvx-2wfw-xfgj')]: entryOf(TRIAGE_RECORD, 'triage') });
 
   const sort = one(doc, `#${table.ROOT_ID} .bghsa-list-sort`);
-  const offered = optionsOf(sort);
+  const offered = itemsOf(sort);
   const wanted = table.SORTS.map((each) => each.label).join(' | ');
   assert.ok(offered === wanted, `the sort offers: ${offered}`);
   assert.ok(
@@ -2212,16 +2215,133 @@ test('the controls offer every value the table holds', async () => {
   // Every filter comes up holding the table to nothing, reading the facet it
   // acts on, and offering what the rows of the table hold.
   assert.ok(
-    optionsOf(filterIn(doc, 'owner')) === 'Owner | samuelkarp',
-    `the owner filter offers: ${optionsOf(filterIn(doc, 'owner'))}`
+    itemsOf(filterIn(doc, 'owner')) === `${table.ANY_LABEL} | samuelkarp`,
+    `the owner filter offers: ${itemsOf(filterIn(doc, 'owner'))}`
   );
   assert.ok(
-    optionsOf(filterIn(doc, 'waiting')) === 'Waiting | Blocked on the reporter',
-    `the waiting filter offers: ${optionsOf(filterIn(doc, 'waiting'))}`
+    itemsOf(filterIn(doc, 'waiting')) === 'Any | Blocked on the reporter',
+    `the waiting filter offers: ${itemsOf(filterIn(doc, 'waiting'))}`
   );
 
   const reset = one(doc, `#${table.ROOT_ID} .bghsa-list-reset`);
   assert.ok((reset.textContent ?? '') === table.RESET_LABEL, `the reset reads: ${reset.textContent}`);
+});
+
+/**
+ * A table over two advisories one owner apiece, which is what the filter menus
+ * below offer the values of.
+ *
+ * @returns {{ doc: Document, root: Element }}
+ */
+function ownedTable() {
+  return tableOver([
+    sortRow('GHSA-aaaa-aaaa-aaaa', { read: true, owners: ['ada'] }),
+    sortRow('GHSA-bbbb-bbbb-bbbb', { read: true, owners: ['zoe'] }),
+  ]);
+}
+
+/**
+ * @param {Document} doc
+ * @param {string} facet
+ * @returns {string} what the summary of one filter reads.
+ */
+function summaryOf(doc, facet) {
+  return (
+    one(doc, `#${table.ROOT_ID} [${table.FACET_ATTRIBUTE}="${facet}"] > summary`).textContent ?? ''
+  );
+}
+
+test('a filter menu says to a screen reader what it is and whether it is open', () => {
+  const { doc } = ownedTable();
+  const control = filterIn(doc, 'owner');
+
+  // The open state is the native details element's, which a screen reader
+  // reads off the element itself. Nothing declares it a second time, because a
+  // declared state is one that can go stale while the menu is open.
+  assert.ok(control.tagName.toLowerCase() === 'details', `the control is a ${control.tagName}`);
+  const box = one(doc, `#${table.ROOT_ID} .bghsa-list-controls`);
+  assert.ok(box.querySelector('[aria-expanded]') === null, 'a control carries aria-expanded');
+
+  // The face of the menu, which is what a reader lands on before it is open.
+  const summary = one(doc, `#${table.ROOT_ID} [${table.FACET_ATTRIBUTE}="owner"] > summary`);
+  assert.ok(summary.getAttribute('role') === 'button', 'the summary does not say it is a button');
+  assert.ok(
+    summary.getAttribute('aria-haspopup') === 'menu',
+    'the summary does not say it opens a menu'
+  );
+
+  // What opens, named so that a reader arriving in it knows which filter it
+  // belongs to, since the summary is no longer what is being read.
+  const body = one(doc, `#${table.ROOT_ID} [${table.FACET_ATTRIBUTE}="owner"] details-menu`);
+  assert.ok(body.getAttribute('role') === 'menu', 'the menu does not say it is one');
+  assert.ok(
+    body.getAttribute('aria-label') === 'Owner',
+    `the menu is labeled: ${body.getAttribute('aria-label')}`
+  );
+
+  // One of these is held at a time, which is what parts a radio item from a
+  // checkbox item to a reader moving through the menu.
+  for (const item of itemNodes(control)) {
+    assert.ok(item.getAttribute('role') === 'menuitemradio', 'an item is not a menu item');
+    assert.ok(item.hasAttribute('aria-checked'), 'an item does not say whether it is held');
+  }
+});
+
+test('a menu marks the item the view is holding to, and marks no other', () => {
+  const { doc } = ownedTable();
+  assert.ok(checkedIn(filterIn(doc, 'owner')) === '', `a filter came up holding: ${checkedIn(filterIn(doc, 'owner'))}`);
+  assert.ok(summaryOf(doc, 'owner') === 'Owner', `the summary reads: ${summaryOf(doc, 'owner')}`);
+
+  press(filterIn(doc, 'owner'), 'ada');
+  assert.ok(
+    checkedIn(filterIn(doc, 'owner')) === 'ada',
+    `the owner filter marks: ${checkedIn(filterIn(doc, 'owner'))}`
+  );
+  // The summary says what the filter is holding to without the menu being
+  // opened, which is what the face of a select used to carry.
+  assert.ok(summaryOf(doc, 'owner') === 'Owner: ada', `the summary reads: ${summaryOf(doc, 'owner')}`);
+  // The sort is a menu of its own, and pressing an owner leaves it alone.
+  const sort = one(doc, `#${table.ROOT_ID} .bghsa-list-sort`);
+  assert.ok(checkedIn(sort) === table.DEFAULT_SORT, `the sort marks: ${checkedIn(sort)}`);
+
+  press(filterIn(doc, 'owner'), 'zoe');
+  assert.ok(
+    checkedIn(filterIn(doc, 'owner')) === 'zoe',
+    `after a second press: ${checkedIn(filterIn(doc, 'owner'))}`
+  );
+});
+
+test('pressing an item changes the view and navigates nowhere', () => {
+  const { doc, root } = ownedTable();
+  const box = one(doc, `#${table.ROOT_ID} .bghsa-list-controls`);
+  assert.ok(box.querySelector('[href]') === null, 'a control would navigate');
+  for (const item of box.querySelectorAll(`[${table.VALUE_ATTRIBUTE}]`)) {
+    assert.ok(item.tagName.toLowerCase() === 'button', `an item is a ${item.tagName}`);
+    assert.ok(item.getAttribute('type') === 'button', 'an item would submit the form it sits in');
+  }
+
+  press(filterIn(doc, 'owner'), 'ada');
+  assert.ok(shownIds(doc) === 'GHSA-aaaa-aaaa-aaaa', `the rows ada owns: ${shownIds(doc)}`);
+  assert.ok(doc.getElementById(table.ROOT_ID) === root, 'the whole table was rebuilt');
+
+  press(filterIn(doc, 'owner'), '');
+  assert.ok(
+    shownIds(doc) === 'GHSA-aaaa-aaaa-aaaa GHSA-bbbb-bbbb-bbbb',
+    `the whole table is back: ${shownIds(doc)}`
+  );
+});
+
+test('the button in a menu header closes it', () => {
+  const { doc } = ownedTable();
+  const control = filterIn(doc, 'owner');
+  control.setAttribute('open', '');
+  const close = one(doc, `#${table.ROOT_ID} [${table.FACET_ATTRIBUTE}="owner"] .SelectMenu-closeButton`);
+  assert.ok(
+    (close.querySelector('[aria-label]')?.getAttribute('aria-label') ?? '') === 'Close menu',
+    'the close button says nothing about what it does'
+  );
+  /** @type {HTMLElement} */ (/** @type {unknown} */ (close)).click();
+  assert.ok(!control.hasAttribute('open'), 'the menu stayed open');
 });
 
 test('a filter that keeps nothing says so', () => {
@@ -2239,8 +2359,8 @@ test('a filter that keeps nothing says so', () => {
       severityLabel: 'Low',
     }),
   ]);
-  choose(filterIn(doc, 'owner'), 'ada');
-  choose(filterIn(doc, 'severity'), 'Low');
+  press(filterIn(doc, 'owner'), 'ada');
+  press(filterIn(doc, 'severity'), 'Low');
   assert.ok(shownIds(doc) === '', `rows under a filter nothing matches: ${shownIds(doc)}`);
   const empty = textOf(doc, `#${table.ROOT_ID} .bghsa-list-empty`);
   assert.ok(empty === table.EMPTY_TEXT, `what stands in for the rows: ${empty}`);
@@ -2271,9 +2391,9 @@ test('the reset goes back to the default order and drops every filter', () => {
       severityLabel: 'Critical',
     }),
   ]);
-  choose(one(doc, `#${table.ROOT_ID} .bghsa-list-sort`), 'severity');
+  press(one(doc, `#${table.ROOT_ID} .bghsa-list-sort`), 'severity');
   assert.ok(shownIds(doc) === 'GHSA-bbbb-bbbb-bbbb GHSA-aaaa-aaaa-aaaa', `sorted: ${shownIds(doc)}`);
-  choose(filterIn(doc, 'owner'), 'ada');
+  press(filterIn(doc, 'owner'), 'ada');
   assert.ok(shownIds(doc) === 'GHSA-aaaa-aaaa-aaaa', `sorted and filtered: ${shownIds(doc)}`);
 
   /** @type {HTMLElement} */ (
@@ -2285,12 +2405,12 @@ test('the reset goes back to the default order and drops every filter', () => {
   // behind controls still naming the view that was.
   const sort = one(doc, `#${table.ROOT_ID} .bghsa-list-sort`);
   assert.ok(
-    (sort.querySelector('option[selected]')?.textContent ?? '') === table.DEFAULT_SORT_LABEL,
-    'the sort control still names the sort that was'
+    checkedIn(sort) === table.DEFAULT_SORT,
+    `the sort control still names the sort that was: ${checkedIn(sort)}`
   );
   assert.ok(
-    (filterIn(doc, 'owner').querySelector('option[selected]')?.getAttribute('value') ?? 'x') === '',
-    'the owner filter still names the owner it was holding'
+    checkedIn(filterIn(doc, 'owner')) === '',
+    `the owner filter still names the owner it was holding: ${checkedIn(filterIn(doc, 'owner'))}`
   );
 });
 
@@ -2308,8 +2428,8 @@ test('a read landing leaves the sort and the filter a maintainer picked alone', 
   // The default order leads with the advisory blocked on us; the waiting sort
   // leads with the one that has waited longest, so the two disagree.
   assert.ok(shownIds(doc) === `GHSA-aaaa-aaaa-aaaa ${ghsaId}`, `the default order: ${shownIds(doc)}`);
-  choose(one(doc, `#${table.ROOT_ID} .bghsa-list-sort`), 'waiting');
-  choose(filterIn(doc, 'owner'), 'ada');
+  press(one(doc, `#${table.ROOT_ID} .bghsa-list-sort`), 'waiting');
+  press(filterIn(doc, 'owner'), 'ada');
   // A row nobody has read is not hidden by a filter over a value a read
   // supplies, so both are showing.
   assert.ok(
@@ -2339,8 +2459,8 @@ test('a read landing leaves the sort and the filter a maintainer picked alone', 
   );
   // The read turned up a severity no row carried, and the control offers it.
   assert.ok(
-    optionsOf(filterIn(doc, 'severity')) === 'Severity | High | None',
-    `the severity filter after the read: ${optionsOf(filterIn(doc, 'severity'))}`
+    itemsOf(filterIn(doc, 'severity')) === 'Any | High | None',
+    `the severity filter after the read: ${itemsOf(filterIn(doc, 'severity'))}`
   );
 
   // The render that follows the pass is what settles it, under the same view.
@@ -2354,7 +2474,7 @@ test('a read for a row a filter is holding out of view still reaches the table',
     sortRow('GHSA-aaaa-aaaa-aaaa', { read: true, owners: ['ada'] }),
     sortRow(ghsaId, { read: true, owners: ['zoe'] }),
   ]);
-  choose(filterIn(doc, 'owner'), 'ada');
+  press(filterIn(doc, 'owner'), 'ada');
   assert.ok(shownIds(doc) === 'GHSA-aaaa-aaaa-aaaa', `under the owner filter: ${shownIds(doc)}`);
 
   const detail = parseDetail.parseDetail(
@@ -2368,8 +2488,8 @@ test('a read for a row a filter is holding out of view still reaches the table',
   assert.ok(!applied, 'a row a filter is holding out of view was drawn');
   // The table took the read in even so, which the filter shows once it is
   // holding to what the read turned up.
-  choose(filterIn(doc, 'severity'), 'High');
-  choose(filterIn(doc, 'owner'), '');
+  press(filterIn(doc, 'severity'), 'High');
+  press(filterIn(doc, 'owner'), '');
   assert.ok(shownIds(doc) === ghsaId, `the row the read filled in: ${shownIds(doc)}`);
 });
 
@@ -2388,26 +2508,23 @@ test('a re-render keeps the view a maintainer picked', async () => {
   // the high, so the two disagree and a picked sort is visible.
   assert.ok(shownIds(doc) === `${low} ${high}`, `the default order: ${shownIds(doc)}`);
 
-  choose(one(doc, `#${table.ROOT_ID} .bghsa-list-sort`), 'severity');
+  press(one(doc, `#${table.ROOT_ID} .bghsa-list-sort`), 'severity');
   assert.ok(shownIds(doc) === `${high} ${low}`, `the highest severity first: ${shownIds(doc)}`);
-  choose(filterIn(doc, 'severity'), 'Low');
+  press(filterIn(doc, 'severity'), 'Low');
   assert.ok(shownIds(doc) === low, `held to the low severity: ${shownIds(doc)}`);
 
   // GitHub replacing the subtree, and the pass that follows a read, both draw
   // the table again. The view a maintainer picked survives that.
   await render(doc, held);
   const sort = one(doc, `#${table.ROOT_ID} .bghsa-list-sort`);
+  assert.ok(checkedIn(sort) === 'severity', 'the sort was lost when the table was drawn again');
   assert.ok(
-    (sort.querySelector('option[selected]')?.getAttribute('value') ?? '') === 'severity',
-    'the sort was lost when the table was drawn again'
-  );
-  assert.ok(
-    (filterIn(doc, 'severity').querySelector('option[selected]')?.getAttribute('value') ?? '') === 'Low',
+    checkedIn(filterIn(doc, 'severity')) === 'Low',
     'the filter was lost when the table was drawn again'
   );
   assert.ok(shownIds(doc) === low, `the rows after the table was drawn again: ${shownIds(doc)}`);
 
-  choose(filterIn(doc, 'severity'), 'High');
+  press(filterIn(doc, 'severity'), 'High');
   assert.ok(shownIds(doc) === high, `the row the filter keeps: ${shownIds(doc)}`);
 });
 

@@ -38,14 +38,33 @@ function fixture(name) {
 }
 
 /**
- * The `bghsa` member a file hangs its exports off: the file's base name with
- * each dashed word capitalized, as types/bghsa.d.ts declares it.
+ * The `bghsa` member each file hangs its exports off, by the path the manifest
+ * names the file under, read from the declaration in types/bghsa.d.ts.
  *
- * @param {string} file
- * @returns {string}
+ * The declaration names a member against a whole path, so the member a file has
+ * to leave behind is the one written down for that file. Deriving it from the
+ * base name instead let two files in different directories answer for each
+ * other: `src/done/stats.js` and a second `stats.js` elsewhere would both look
+ * for `bghsa.stats`, and either one loading would satisfy the check for both.
+ *
+ * @type {Map<string, string>}
+ */
+const DECLARED = new Map(
+  [
+    ...fs
+      .readFileSync(path.join(root, 'types', 'bghsa.d.ts'), 'utf8')
+      .matchAll(/^\s*(\w+): typeof import\('\.\.\/([^']+)'\);$/gm),
+  ].map((found) => [String(found[2]), String(found[1])])
+);
+
+/**
+ * @param {string} file A path the manifest loads, as it writes it.
+ * @returns {string} the member that file has to leave behind.
  */
 function memberOf(file) {
-  return path.basename(file, '.js').replace(/-([a-z])/g, (_, letter) => letter.toUpperCase());
+  const held = DECLARED.get(file);
+  if (held === undefined) throw new Error(`types/bghsa.d.ts declares no member for ${file}`);
+  return held;
 }
 
 /**
@@ -234,6 +253,31 @@ test('every manifest content script loads in one shared scope', async () => {
 
   assert.deepStrictEqual([...failures, ...rejections], []);
   assert.deepStrictEqual(Object.keys(sandbox.bghsa).sort(), scripts.map(memberOf).sort());
+});
+
+test('every content script is declared under a name of its own', () => {
+  // A file the declaration has no line for has no member this check could ask
+  // for, and one declared for a file the manifest never loads is a line nothing
+  // stands behind.
+  assert.deepStrictEqual(
+    scripts.filter((file) => !DECLARED.has(file)),
+    [],
+    'a content script types/bghsa.d.ts declares no member for'
+  );
+  assert.deepStrictEqual(
+    [...DECLARED.keys()].filter((file) => !scripts.includes(file)),
+    [],
+    'a member declared for a file the manifest does not load'
+  );
+
+  // Two files under one member is the collision this check exists to catch:
+  // either of them loading would answer for both.
+  const names = [...DECLARED.values()];
+  assert.deepStrictEqual(
+    names.filter((name, at) => names.indexOf(name) !== at),
+    [],
+    'a member two files are declared under'
+  );
 });
 
 test('a GitHub page the extension has no surface for is left alone', async () => {
