@@ -127,12 +127,15 @@ if (typeof require === 'function') {
     '.bghsa-stats-title { gap: 0 8px; }',
     '.bghsa-stats-line { display: flex; align-items: baseline; gap: 4px 12px; }',
     '.bghsa-stats-value { flex: 1 1 auto; }',
-    '.bghsa-stats-count { color: var(--fgColor-muted); white-space: nowrap; text-align: right; }',
-    '.bghsa-stats-ratio { color: var(--fgColor-muted); white-space: nowrap;' +
+    // `currentColor` is what a foreground falls back to: the page's own text
+    // color reads in either theme, where a fixed one would be wrong in one.
+    '.bghsa-stats-count { color: var(--fgColor-muted, currentColor);' +
+      ' white-space: nowrap; text-align: right; }',
+    '.bghsa-stats-ratio { color: var(--fgColor-muted, currentColor); white-space: nowrap;' +
       ' text-align: right; flex: 0 0 3rem; }',
-    '.bghsa-stats-meta { color: var(--fgColor-muted); }',
-    '.bghsa-stats-empty { color: var(--fgColor-muted); }',
-    '.bghsa-stats-uncomputed { color: var(--fgColor-muted); }',
+    '.bghsa-stats-meta { color: var(--fgColor-muted, currentColor); }',
+    '.bghsa-stats-empty { color: var(--fgColor-muted, currentColor); }',
+    '.bghsa-stats-uncomputed { color: var(--fgColor-muted, currentColor); }',
   ].join('\n');
 
   /** What the view holds for each document. @type {WeakMap<Document, Held>} */

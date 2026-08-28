@@ -40,14 +40,21 @@ if (typeof require === 'function') {
     '.bghsa-missing { font-style: italic; }',
     '.bghsa-confirmed { display: flex; flex-direction: column; gap: 6px; }',
     '.bghsa-confirmation-name { flex: 0 0 13rem; }',
-    '.bghsa-confirmation-note { color: var(--fgColor-muted); }',
-    '.bghsa-since { color: var(--fgColor-muted); }',
-    '.bghsa-tone-attention { color: var(--fgColor-default);' +
-      ' background-color: var(--bgColor-attention);' +
-      ' border-color: var(--bgColor-attention); }',
-    '.bghsa-tone-danger { color: var(--fgColor-default);' +
-      ' background-color: var(--bgColor-danger);' +
-      ' border-color: var(--bgColor-danger); }',
+    // `currentColor` is what a foreground falls back to: the page's own text
+    // color reads in either theme, where a fixed one would be wrong in one.
+    '.bghsa-confirmation-note { color: var(--fgColor-muted, currentColor); }',
+    '.bghsa-since { color: var(--fgColor-muted, currentColor); }',
+    // The chips sit beside GitHub's own `Label--secondary`, a neutral outline
+    // over the page's background. A muted fill is the tone that reads as
+    // colored next to one and still carries default-strength text in both
+    // themes, where an emphasis fill would want `--fgColor-onEmphasis` over it.
+    // The fills fall back to a translucent color, which lands in either theme.
+    '.bghsa-tone-attention { color: var(--fgColor-default, currentColor);' +
+      ' background-color: var(--bgColor-attention-muted, rgba(212, 167, 44, 0.2));' +
+      ' border-color: var(--borderColor-attention-emphasis, #bf8700); }',
+    '.bghsa-tone-danger { color: var(--fgColor-default, currentColor);' +
+      ' background-color: var(--bgColor-danger-muted, rgba(207, 34, 46, 0.2));' +
+      ' border-color: var(--borderColor-danger-emphasis, #cf222e); }',
   ].join('\n');
 
   /** The text shown in place of a value that could not be read. */

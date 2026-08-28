@@ -119,10 +119,12 @@ if (typeof require === 'function') {
   /** Every rule the done view adds to the page. */
   const STYLE_TEXT = [
     '.bghsa-done-chips { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; }',
-    '.bghsa-done-meta { color: var(--fgColor-muted); }',
-    '.bghsa-done-observed { color: var(--fgColor-muted); white-space: nowrap; }',
-    '.bghsa-done-empty { color: var(--fgColor-muted); }',
-    '.bghsa-done-count { color: var(--fgColor-muted); }',
+    // `currentColor` is what a foreground falls back to: the page's own text
+    // color reads in either theme, where a fixed one would be wrong in one.
+    '.bghsa-done-meta { color: var(--fgColor-muted, currentColor); }',
+    '.bghsa-done-observed { color: var(--fgColor-muted, currentColor); white-space: nowrap; }',
+    '.bghsa-done-empty { color: var(--fgColor-muted, currentColor); }',
+    '.bghsa-done-count { color: var(--fgColor-muted, currentColor); }',
     '.bghsa-done-header { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; }',
   ].join('\n');
 

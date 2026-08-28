@@ -218,15 +218,22 @@ if (typeof require === 'function') {
     '.bghsa-list-chips { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; }',
     '.bghsa-list-status { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; }',
     '.bghsa-list-owners { display: flex; flex-wrap: wrap; gap: 2px; align-items: center; }',
-    '.bghsa-list-observed { color: var(--fgColor-muted); white-space: nowrap; }',
-    '.bghsa-list-meta { color: var(--fgColor-muted); }',
-    '.bghsa-list-empty { color: var(--fgColor-muted); }',
-    '.bghsa-tone-attention { color: var(--fgColor-default);' +
-      ' background-color: var(--bgColor-attention);' +
-      ' border-color: var(--bgColor-attention); }',
-    '.bghsa-tone-danger { color: var(--fgColor-default);' +
-      ' background-color: var(--bgColor-danger);' +
-      ' border-color: var(--bgColor-danger); }',
+    // `currentColor` is what a foreground falls back to: the page's own text
+    // color reads in either theme, where a fixed one would be wrong in one.
+    '.bghsa-list-observed { color: var(--fgColor-muted, currentColor); white-space: nowrap; }',
+    '.bghsa-list-meta { color: var(--fgColor-muted, currentColor); }',
+    '.bghsa-list-empty { color: var(--fgColor-muted, currentColor); }',
+    // The chips sit beside GitHub's own `Label--secondary`, a neutral outline
+    // over the page's background. A muted fill is the tone that reads as
+    // colored next to one and still carries default-strength text in both
+    // themes, where an emphasis fill would want `--fgColor-onEmphasis` over it.
+    // The fills fall back to a translucent color, which lands in either theme.
+    '.bghsa-tone-attention { color: var(--fgColor-default, currentColor);' +
+      ' background-color: var(--bgColor-attention-muted, rgba(212, 167, 44, 0.2));' +
+      ' border-color: var(--borderColor-attention-emphasis, #bf8700); }',
+    '.bghsa-tone-danger { color: var(--fgColor-default, currentColor);' +
+      ' background-color: var(--bgColor-danger-muted, rgba(207, 34, 46, 0.2));' +
+      ' border-color: var(--borderColor-danger-emphasis, #cf222e); }',
     `.${DIM_CLASS} { opacity: 0.55; }`,
   ].join('\n');
 
