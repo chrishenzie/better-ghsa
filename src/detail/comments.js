@@ -29,7 +29,7 @@ if (typeof require === 'function') {
    */
   const CHIP_TEXT = {
     untrusted: 'Ignored: non-member state',
-    'invalid payload': 'Tracking state this extension could not read',
+    'invalid payload': 'Unable to parse tracking state',
     'not a snapshot': 'No tracking state in this comment',
     'unsupported schema': 'Tracking state from a newer extension',
   };

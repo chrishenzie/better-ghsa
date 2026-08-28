@@ -407,22 +407,10 @@ if (typeof require === 'function') {
         );
       }
       if (merged.readOnly) {
-        return refused(
-          'read-only',
-          null,
-          'Error: this advisory carries a snapshot in a schema version this' +
-            ' extension does not read. Update the extension.',
-          merged
-        );
+        return refused('read-only', null, 'Error: update the extension', merged);
       }
       if (merged.confirmationRequired && options.confirmed !== true) {
-        return refused(
-          'confirmation',
-          null,
-          'Error: this advisory carries a snapshot this extension could not' +
-            ' interpret, and superseding it takes a confirmation.',
-          merged
-        );
+        return refused('confirmation', null, 'Error: unparsed tracking state', merged);
       }
 
       const at = options.at ?? nowStamp();

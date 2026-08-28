@@ -446,6 +446,7 @@ test('a snapshot this extension could not interpret takes one confirmation', asy
   const refusal = await run(page, { ref: DRAFT_REF, loadedSeq: 2 });
   assert.strictEqual(refusal.outcome.ok, false);
   assert.strictEqual(refusal.outcome.reason, 'confirmation');
+  assert.strictEqual(refusal.outcome.message, 'Error: unparsed tracking state');
   assert.strictEqual(refusal.calls.length, 1, 'a comment request went out');
   assert.strictEqual(refusal.outcome.merged?.confirmationRequired, true);
 
@@ -486,6 +487,7 @@ test('a schema major this extension does not read refuses the write', async () =
   const { outcome, calls } = await run(page, { ref: DRAFT_REF, loadedSeq: 2, confirmed: true });
   assert.strictEqual(outcome.ok, false);
   assert.strictEqual(outcome.reason, 'read-only');
+  assert.strictEqual(outcome.message, 'Error: update the extension');
   assert.strictEqual(calls.length, 1, 'a comment request went out');
   assert.strictEqual(outcome.merged?.readOnly, true);
 });

@@ -154,7 +154,7 @@ test('a snapshot excluded for failing validation marks its comment', () => {
   const placed = comments.markComments(draftDoc, mergeOf(draftDoc));
   assert.strictEqual(placed.length, 1);
   const chip = /** @type {Element} */ (placed[0]);
-  assert.strictEqual(text(chip), 'Tracking state this extension could not read');
+  assert.strictEqual(text(chip), 'Unable to parse tracking state');
   // Not the tone a snapshot from outside the organization takes: that one is
   // the only chip here a maintainer has to act on.
   assert.strictEqual(chip.getAttribute('class'), 'Label Label--secondary bghsa-tone-attention');

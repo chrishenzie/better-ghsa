@@ -715,6 +715,10 @@ test('an excluded snapshot takes one confirmation, and the panel asks for it', a
   assert.strictEqual(talk.posts().length, 0, 'a write went out without the confirmation');
 
   const again = await editorFor(page, { fetch: talk.fetch, parseDocument: talk.parseDocument });
+  assert.strictEqual(
+    text(control(again.editor, 'input.bghsa-supersede').parentElement ?? again.editor),
+    'Supersede unparsed state'
+  );
   tick(control(again.editor, 'input.bghsa-supersede'), true);
   const outcome = await edit.save(again.context);
   assert.ok(outcome.ok === true, `the confirmed save failed: ${outcome.message}`);
@@ -732,7 +736,7 @@ test('a schema this extension does not read leaves the panel read-only', async (
   assert.strictEqual(context.merged.readOnly, true);
   assert.ok(editor.querySelector('button.bghsa-save') === null, 'the panel still offers a save');
   assert.ok(editor.querySelector('select.bghsa-triage') === null, 'the panel still offers controls');
-  assert.strictEqual(text(control(editor, '.bghsa-read-only')), edit.READ_ONLY_MESSAGE);
+  assert.strictEqual(text(control(editor, '.bghsa-read-only')), 'Update the extension to edit');
 });
 
 /**

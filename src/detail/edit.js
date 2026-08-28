@@ -106,10 +106,11 @@ if (typeof require === 'function') {
  */
 
 (() => {
-  /** What the panel says where a snapshot names a schema version it cannot read. */
-  const READ_ONLY_MESSAGE =
-    'This advisory carries tracking state in a schema version this extension does not' +
-    ' read, so the panel cannot edit it. Update the extension.';
+  /**
+   * What the panel says where a snapshot names a schema version it cannot read.
+   * It stands where the controls would be, so the absence is already visible.
+   */
+  const READ_ONLY_MESSAGE = 'Update the extension to edit';
 
   /** What the panel says once a write has landed. */
   const SAVED_MESSAGE = 'Saved. The advisory carries these values now.';
@@ -141,9 +142,12 @@ if (typeof require === 'function') {
   const LEAVE_MESSAGE =
     'This panel holds tracking changes that were never saved. Leave them behind?';
 
-  /** What the checkbox reads that supersedes a snapshot the merge would not take. */
-  const SUPERSEDE_LABEL =
-    'Supersede the snapshot this extension could not read';
+  /**
+   * What the checkbox reads that supersedes a snapshot the merge would not
+   * take. Nothing is deleted: the save writes a higher sequence number and the
+   * unreadable comment stays where it is.
+   */
+  const SUPERSEDE_LABEL = 'Supersede unparsed state';
 
   /**
    * The advisories with control changes waiting, keyed as {@link keyOf} keys

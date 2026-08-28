@@ -184,18 +184,18 @@ if (typeof require === 'function') {
   }
 
   /**
-   * Who acted and when, as a sentence. A record naming no login reads as a
+   * Who acted and when. The chip beside this carries the verb, so the note
+   * carries the two facts it does not. A record naming no login reads as a
    * maintainer, because the confirmation stands whether or not the login
    * survived.
    *
    * @param {import('./tracking.js').Confirmation} state
-   * @param {string} action
    * @returns {string}
    */
-  function attribution(state, action) {
+  function attribution(state) {
     const who = state.by === null ? 'A maintainer' : state.by;
     const at = globalThis.bghsa.text.formatTime(state.at);
-    return at === null ? `${who} ${action}.` : `${who} ${action} on ${at}.`;
+    return at === null ? who : `${who}, ${at}`;
   }
 
   /**
@@ -206,7 +206,7 @@ if (typeof require === 'function') {
    *   unread, where the chip already says the state is unknown.
    */
   function confirmationNote(state) {
-    if (state.status === 'confirmed') return attribution(state, 'confirmed this value');
+    if (state.status === 'confirmed') return attribution(state);
     return null;
   }
 
@@ -244,7 +244,7 @@ if (typeof require === 'function') {
    */
   function buildConfirmations(doc, tracking) {
     const container = element(doc, 'div', 'Box-row bghsa-confirmed');
-    container.append(element(doc, 'div', 'text-bold', 'Confirmed by a maintainer'));
+    container.append(element(doc, 'div', 'text-bold bghsa-confirmed-heading', 'Confirmations'));
     // The tracks in the order tracking names them, which is the order the
     // panel shows them in.
     for (const track of globalThis.bghsa.tracking.CONFIRMATION_TRACKS) {

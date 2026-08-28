@@ -312,6 +312,7 @@ test('the panel reports whether the description is the original text', () => {
 
 test('the panel leads with the three confirmations', () => {
   const built = build(triage);
+  assert.strictEqual(text(built.querySelector('.bghsa-confirmed-heading')), 'Confirmations');
   assert.deepStrictEqual(texts(built, '.bghsa-confirmation-name'), [
     'Advisory title',
     'Advisory description',
@@ -383,7 +384,7 @@ test('a confirmed value names who confirmed it and when', async () => {
   assert.ok(title.chip === 'Confirmed', `the title chip reads ${title.chip}`);
   assert.ok(title.classes === 'Label Label--secondary', `a confirmed chip is toned: ${title.classes}`);
   assert.ok(
-    title.note === 'samuelkarp confirmed this value on 2026-08-25 18:04 UTC.',
+    title.note === 'samuelkarp, 2026-08-25 18:04 UTC',
     `the note reads ${title.note}`
   );
   assert.deepStrictEqual(texts(built, '.bghsa-warning'), []);

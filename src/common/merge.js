@@ -182,12 +182,13 @@ if (typeof require === 'function') require('./schema.js');
       // or malformed `betterGhsa` is reported.
       if (!report.schemaSupported) {
         readOnly = true;
+        // The chip beside this message already says the snapshot comes from a
+        // newer extension, so the version is the one fact left to carry.
         warn(
           warnings,
           'unsupported schema',
           source,
-          `the snapshot in ${label(source)} carries schema version ${report.version ?? 'none'}, ` +
-            'which this extension does not read. Update the extension.'
+          `Schema version ${report.version ?? 'none'}`
         );
         continue;
       }
