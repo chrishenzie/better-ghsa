@@ -1087,7 +1087,7 @@ test('the button on a repository off the allowlist writes nothing and says why',
   await settle();
 
   assert.deepStrictEqual(texts(built, '.bghsa-preserve-result'), [
-    "Nothing was written: someone/else is not on this extension's allowlist.",
+    "Error: someone/else is not on this extension's allowlist.",
   ]);
   assert.strictEqual(button.hasAttribute('disabled'), false);
   assert.ok(built.contains(button), 'the button was taken out of the panel');
@@ -1107,7 +1107,7 @@ test('a press that could not tell the provenance writes nothing and says why', a
   assert.strictEqual(outcome.reason, 'provenance');
   assert.strictEqual(fake.calls.length, 0);
   assert.deepStrictEqual(texts(built, '.bghsa-preserve-result'), [
-    "Nothing was written: this extension could not tell whether the description is the reporter's original text.",
+    "Error: this extension could not tell whether the description is the reporter's original text.",
   ]);
   assert.strictEqual(button.hasAttribute('disabled'), false);
 });
@@ -1125,7 +1125,7 @@ test('a press that wrote the comment takes the button away and says so', async (
   assert.strictEqual(outcome.ok, true);
   assert.strictEqual(fake.posts().length, 1);
   assert.strictEqual(built.querySelector('button.bghsa-preserve'), null);
-  assert.strictEqual(rowText(built, 'Original report'), 'The original report is preserved.');
+  assert.strictEqual(rowText(built, 'Original report'), 'Preserved');
   assert.deepStrictEqual(texts(built, '.bghsa-preserve-result'), []);
 });
 
@@ -1143,8 +1143,7 @@ test('a press whose result GitHub did not confirm leaves the button pressed', as
   assert.strictEqual(outcome.reason, 'unwritten');
   assert.strictEqual(button.hasAttribute('disabled'), true);
   assert.deepStrictEqual(texts(built, '.bghsa-preserve-result'), [
-    'The write could not be confirmed: GitHub answered without the comment.' +
-      ' Reload the page to see whether the comment was created.',
+    'Error: failed to validate save',
   ]);
 });
 
@@ -1160,7 +1159,7 @@ test('a panel rebuilt after a press that wrote offers no button', async () => {
 
   const again = build(triage);
   assert.strictEqual(again.querySelector('button.bghsa-preserve'), null);
-  assert.strictEqual(rowText(again, 'Original report'), 'The original report is preserved.');
+  assert.strictEqual(rowText(again, 'Original report'), 'Preserved');
   preserve.attempts.clear();
 });
 
@@ -1181,7 +1180,7 @@ test('a failed press leaves one result, not one per press', async () => {
     );
   }
   assert.deepStrictEqual(texts(built, '.bghsa-preserve-result'), [
-    "Nothing was written: someone/else is not on this extension's allowlist.",
+    "Error: someone/else is not on this extension's allowlist.",
   ]);
 });
 
@@ -1208,7 +1207,7 @@ test('a press that read the comment already on the advisory takes the button awa
   assert.strictEqual(fake.posts().length, 0);
   assert.strictEqual(built.querySelector('button.bghsa-preserve'), null);
   assert.deepStrictEqual(texts(built, '.bghsa-preserve-result'), []);
-  assert.strictEqual(rowText(built, 'Original report'), 'The original report is already preserved.');
+  assert.strictEqual(rowText(built, 'Original report'), 'Preserved');
   preserve.attempts.clear();
 });
 
@@ -1230,7 +1229,7 @@ test('a press that could not read the advisory page can be pressed again', async
   assert.strictEqual(calls.length, 1);
   assert.strictEqual(button.hasAttribute('disabled'), false);
   assert.deepStrictEqual(texts(built, '.bghsa-preserve-result'), [
-    'Nothing was written: GitHub answered 503 for the advisory page.',
+    'Error: failed to refresh advisory data',
   ]);
   preserve.attempts.clear();
 });

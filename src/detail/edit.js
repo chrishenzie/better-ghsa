@@ -7,6 +7,7 @@ if (typeof require === 'function') {
   require('../common/dom.js');
   require('../common/text.js');
   require('../common/schema.js');
+  require('../common/write.js');
   require('../common/merge.js');
   require('../common/parse-detail.js');
   require('../common/derive.js');
@@ -127,11 +128,11 @@ if (typeof require === 'function') {
   const FLIGHT_MARK = 'data-bghsa-flight';
 
   /** What the panel says when Save is pressed with every control as it stands. */
-  const UNCHANGED_MESSAGE = 'Nothing was written: no control on this panel holds a change.';
+  const UNCHANGED_MESSAGE = 'Error: no control on this panel holds a change.';
 
   /** What the panel says where the page did not say which advisory it is. */
   const UNREADABLE_MESSAGE =
-    'Nothing was written: this extension could not read which advisory this page is.';
+    'Error: this extension could not read which advisory this page is.';
 
   /** What a maintainer is asked before leaving changes that were never written. */
   const LEAVE_MESSAGE =
@@ -486,7 +487,7 @@ if (typeof require === 'function') {
    */
   function unrecordedMessage(names) {
     return (
-      'Nothing was written: the value on the page could not be read, so a confirmation of the' +
+      'Error: the value on the page could not be read, so a confirmation of the' +
       ` ${names.join(', ')} cannot be recorded.`
     );
   }
@@ -897,7 +898,7 @@ if (typeof require === 'function') {
       .flatMap((one) => one.fields.map((field) => `${one.key}.${field}`))
       .join(', ');
     return (
-      `Nothing was written: clearing the ${names} would delete ${fields}, which this extension` +
+      `Error: clearing the ${names} would delete ${fields}, which this extension` +
       ' does not recognize and carries forward untouched. Update the extension.'
     );
   }
@@ -966,14 +967,12 @@ if (typeof require === 'function') {
    * @param {unknown} error
    * @returns {string} what the panel says where a save ended in an error rather
    *   than a result. Where the request went and what became of it are both
-   *   unknown here, and the message says so.
+   *   unknown here, which is the same outcome as a write GitHub took and would
+   *   not read back. The error goes to the console.
    */
   function failedMessage(error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    return (
-      `The save did not finish: ${detail}. This extension cannot tell whether the write` +
-      ' landed. Reload the advisory to see what it carries.'
-    );
+    console.warn('[better-ghsa] the save did not finish', error);
+    return globalThis.bghsa.write.UNCONFIRMED_MESSAGE;
   }
 
   /**

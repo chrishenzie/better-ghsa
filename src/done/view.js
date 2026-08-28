@@ -113,7 +113,7 @@ if (typeof require === 'function') {
 
   /** What the view says where a reason cannot be written from here. */
   const UNREADABLE_MESSAGE =
-    'Nothing was written: this extension has not read this advisory, so it cannot tell' +
+    'Error: this extension has not read this advisory, so it cannot tell' +
     ' which advisory to write on.';
 
   /** Every rule the done view adds to the page. */

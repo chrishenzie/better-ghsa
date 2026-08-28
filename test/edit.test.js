@@ -681,7 +681,7 @@ test('a confirmation the page cannot back is not written and is named', async ()
   assert.strictEqual(talk.calls.length, 0, 'a save carrying nothing reached GitHub');
   assert.strictEqual(
     outcome.message,
-    'Nothing was written: the value on the page could not be read, so a confirmation of the' +
+    'Error: the value on the page could not be read, so a confirmation of the' +
       ' advisory title cannot be recorded.'
   );
   assert.strictEqual(
@@ -1201,7 +1201,7 @@ test('clearing a record holding an unknown field is refused', async () => {
   assert.strictEqual(talk.posts().length, 0, 'a write that would delete a field went out');
   assert.strictEqual(
     outcome.message,
-    'Nothing was written: clearing the embargo would delete embargo.reason, which this' +
+    'Error: clearing the embargo would delete embargo.reason, which this' +
       ' extension does not recognize and carries forward untouched. Update the extension.'
   );
   assert.strictEqual(edit.editsFor(key).embargo, false, 'the refused change was dropped');
@@ -1558,10 +1558,7 @@ test('a save that threw is recorded and asks for a pass', async () => {
     const outcome = await edit.save(context);
     assert.ok(outcome.ok === false, 'a save that threw came back as a write that landed');
     assert.ok(outcome.reason === 'failed', `the save came back as ${outcome.reason}`);
-    assert.ok(
-      outcome.message.includes('crypto.subtle is undefined'),
-      `the panel says: ${outcome.message}`
-    );
+    assert.strictEqual(outcome.message, 'Error: failed to validate save');
   });
   assert.strictEqual(passes, 1, 'the save asked for no pass');
   assert.ok(!edit.saving.has(key), 'the panel is still marked as writing');
@@ -1609,7 +1606,7 @@ test('a save that ended in an error leaves the panel usable', async () => {
 
   assert.ok(!edit.saving.has(key), 'the panel is still marked as writing');
   assert.ok(
-    note(editor).includes('The save did not finish'),
+    note(editor).includes('Error: failed to validate save'),
     `the panel says: ${note(editor)}`
   );
   assert.strictEqual(

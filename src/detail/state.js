@@ -84,8 +84,12 @@ if (typeof require === 'function') {
  */
 
 (() => {
-  /** What the panel says while a write on this advisory is already going out. */
-  const IN_FLIGHT_MESSAGE = 'A write is already on its way to GitHub for this advisory.';
+  /**
+   * What the panel says while a write on this advisory is already going out.
+   * The controls that started it are held still until it settles, so this is
+   * the state of a disabled control and not a refusal a press can reach.
+   */
+  const IN_FLIGHT_MESSAGE = globalThis.bghsa.write.SAVING_MESSAGE;
 
   /**
    * The advisories a write is going out for. A second write while one is in
@@ -327,12 +331,7 @@ if (typeof require === 'function') {
     const nameWithOwner = `${ref.owner}/${ref.repo}`;
 
     if (!globalThis.bghsa.allowlist.isAllowed(nameWithOwner)) {
-      return refused(
-        'allowlist',
-        null,
-        `Nothing was written: ${nameWithOwner} is not on this extension's allowlist.`,
-        null
-      );
+      return refused('allowlist', null, write.allowlistMessage(nameWithOwner), null);
     }
 
     const key = advisoryKey(ref);
@@ -349,7 +348,7 @@ if (typeof require === 'function') {
       if (fetched.failure !== null || fetched.page === null) {
         const failure = fetched.failure;
         if (failure === null) {
-          return refused('fetch', null, 'Nothing was written: the advisory page could not be read.', null);
+          return refused('fetch', null, write.REFRESH_MESSAGE, null);
         }
         return refused(failure.reason, failure.status, failure.message, null);
       }
@@ -357,12 +356,7 @@ if (typeof require === 'function') {
 
       const fresh = globalThis.bghsa.parseDetail.parseDetail(page);
       if (fresh === null || fresh.ref === null || !sameRef(fresh.ref, ref)) {
-        return refused(
-          'mismatch',
-          null,
-          `Nothing was written: the page this extension read is not ${nameWithOwner} ${ref.ghsaId}.`,
-          null
-        );
+        return refused('mismatch', null, write.mismatchMessage(ref), null);
       }
 
       const viewer = fresh.viewer;
@@ -370,7 +364,7 @@ if (typeof require === 'function') {
         return refused(
           'unreadable',
           null,
-          'Nothing was written: this extension could not read which account it is signed in' +
+          'Error: this extension could not read which account it is signed in' +
             ' as, and a write under the wrong account is not one it can take back.',
           null
         );
@@ -381,8 +375,7 @@ if (typeof require === 'function') {
         return refused(
           'stale',
           null,
-          `Nothing was written: this advisory is at sequence ${merged.observedSeq} and the` +
-            ` panel was loaded at ${loadedSeq}. Reload and apply the change again.`,
+          'Error: concurrent edits',
           merged
         );
       }
@@ -395,7 +388,7 @@ if (typeof require === 'function') {
         return refused(
           'ambiguous',
           null,
-          `Nothing was written: ${viewer} has ${own.length} state comments on this advisory,` +
+          `Error: ${viewer} has ${own.length} state comments on this advisory,` +
             ' and this extension writes one. Delete the ones that do not belong.',
           merged
         );
@@ -407,7 +400,7 @@ if (typeof require === 'function') {
         return refused(
           'superseded',
           null,
-          `Nothing was written: this advisory's state at sequence ${merged.observedSeq} comes from` +
+          `Error: this advisory's state at sequence ${merged.observedSeq} comes from` +
             ` ${found ?? 'another maintainer'} now, and not from the snapshot the panel was loaded` +
             ' with. Reload and apply the change again.',
           merged
@@ -417,7 +410,7 @@ if (typeof require === 'function') {
         return refused(
           'read-only',
           null,
-          'Nothing was written: this advisory carries a snapshot in a schema version this' +
+          'Error: this advisory carries a snapshot in a schema version this' +
             ' extension does not read. Update the extension.',
           merged
         );
@@ -426,7 +419,7 @@ if (typeof require === 'function') {
         return refused(
           'confirmation',
           null,
-          'Nothing was written: this advisory carries a snapshot this extension could not' +
+          'Error: this advisory carries a snapshot this extension could not' +
             ' interpret, and superseding it takes a confirmation.',
           merged
         );
@@ -459,7 +452,7 @@ if (typeof require === 'function') {
         return refused(
           'invalid',
           null,
-          'Nothing was written: the snapshot this extension built is one it would not read' +
+          'Error: the snapshot this extension built is one it would not read' +
             ` back: ${reading.problems.join('; ')}.`,
           merged
         );

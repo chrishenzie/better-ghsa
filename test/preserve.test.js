@@ -343,7 +343,7 @@ test('the fixed summary text on a comment is what says the report is preserved',
   assert.strictEqual(state.available, false);
   assert.strictEqual(state.writable, false);
   assert.strictEqual(state.reason, 'preserved');
-  assert.strictEqual(state.message, 'The original report is already preserved.');
+  assert.strictEqual(state.message, 'Preserved');
   const held = preserve.preservationComment(preserved.comments);
   assert.ok(held !== null, 'the marker named no comment');
   assert.strictEqual(state.href, `#${held?.elementId}`);
@@ -366,7 +366,7 @@ test('an advisory in a repository off the allowlist offers a button that refuses
   assert.strictEqual(state.reason, 'allowlist');
   assert.strictEqual(
     state.message,
-    "Nothing was written: someone/else is not on this extension's allowlist."
+    "Error: someone/else is not on this extension's allowlist."
   );
 });
 
@@ -377,7 +377,7 @@ test('a description whose provenance did not read refuses the write', () => {
   assert.strictEqual(state.reason, 'provenance');
   assert.strictEqual(
     state.message,
-    "Nothing was written: this extension could not tell whether the description is the reporter's original text."
+    "Error: this extension could not tell whether the description is the reporter's original text."
   );
 });
 
@@ -574,7 +574,7 @@ test('a second press in one page lifetime is not offered', async () => {
   const state = preserve.offered(advisory);
   assert.strictEqual(state.available, false);
   assert.strictEqual(state.reason, 'preserved');
-  assert.strictEqual(state.message, 'The original report is preserved.');
+  assert.strictEqual(state.message, 'Preserved');
 
   const second = await preserve.preserve(advisory, run(fake));
   assert.strictEqual(second.ok, false);
@@ -593,10 +593,7 @@ test('a press whose answer did not confirm it is not offered again', async () =>
   assert.ok(state.available === false, 'the button is offered while a press is in flight');
   assert.strictEqual(state.reason, 'attempted');
   assert.strictEqual(state.message, preserve.ATTEMPTED_MESSAGE);
-  assert.strictEqual(
-    state.message,
-    'A press has already gone to GitHub for this advisory. Reload the page to see whether the comment was created.'
-  );
+  assert.strictEqual(state.message, 'Reload page');
 
   const second = await preserve.preserve(advisory, run(fake));
   assert.strictEqual(second.ok, false);

@@ -365,7 +365,7 @@ test('two state comments of one maintainer are named before the holder', async (
   assert.strictEqual(calls.length, 1, 'a comment request went out');
   assert.strictEqual(
     outcome.message,
-    'Nothing was written: samuelkarp has 2 state comments on this advisory, and this' +
+    'Error: samuelkarp has 2 state comments on this advisory, and this' +
       ' extension writes one. Delete the ones that do not belong.'
   );
 });
@@ -379,11 +379,7 @@ test('a page that moved past the sequence the panel loaded refuses the write', a
     assert.strictEqual(outcome.snapshot, null);
     // The panel reloads from what the page says now.
     assert.strictEqual(outcome.merged?.observedSeq, OBSERVED);
-    assert.strictEqual(
-      outcome.message,
-      `Nothing was written: this advisory is at sequence ${OBSERVED} and the panel was` +
-        ` loaded at ${loadedSeq}. Reload and apply the change again.`
-    );
+    assert.strictEqual(outcome.message, 'Error: concurrent edits');
   }
 });
 
@@ -400,7 +396,7 @@ test('a snapshot other than the one the panel loaded refuses the write', async (
   assert.strictEqual(outcome.merged?.observedSeq, OBSERVED);
   assert.strictEqual(
     outcome.message,
-    `Nothing was written: this advisory's state at sequence ${OBSERVED} comes from samuelkarp` +
+    `Error: this advisory's state at sequence ${OBSERVED} comes from samuelkarp` +
       ' now, and not from the snapshot the panel was loaded with. Reload and apply the change' +
       ' again.'
   );
@@ -476,7 +472,7 @@ test('a snapshot this extension would not read back is not written', async () =>
   assert.strictEqual(outcome.snapshot, null);
   assert.strictEqual(
     outcome.message,
-    'Nothing was written: the snapshot this extension built is one it would not read back:' +
+    'Error: the snapshot this extension built is one it would not read back:' +
       ' owners is not an array of strings.'
   );
 });

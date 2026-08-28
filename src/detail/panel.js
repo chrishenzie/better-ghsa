@@ -7,6 +7,7 @@ if (typeof require === 'function') {
   require('../common/dom.js');
   require('../common/text.js');
   require('../common/trust.js');
+  require('../common/write.js');
   require('../common/merge.js');
   require('../common/parse-detail.js');
   require('../common/derive.js');
@@ -371,13 +372,13 @@ if (typeof require === 'function') {
     for (const stale of host?.querySelectorAll('.bghsa-preserve-result') ?? []) stale.remove();
     button.setAttribute('disabled', '');
     button.setAttribute('aria-disabled', 'true');
-    if (note !== null) note.textContent = 'Writing the comment.';
+    if (note !== null) note.textContent = globalThis.bghsa.write.SAVING_MESSAGE;
 
     const outcome = await globalThis.bghsa.preserve.preserve(advisory, options);
 
     if (outcome.ok) {
       button.remove();
-      if (note !== null) note.textContent = 'The original report is preserved.';
+      if (note !== null) note.textContent = globalThis.bghsa.preserve.PRESERVED_MESSAGE;
       return outcome;
     }
     // The comment is on the advisory, written from somewhere else. There is
@@ -388,13 +389,10 @@ if (typeof require === 'function') {
       return outcome;
     }
     if (note !== null) note.textContent = '';
+    // A press that could have created the comment leaves the button gone: the
+    // row says to reload, and what the reload shows is whether it landed.
     const retryable = outcome.reason !== null && RETRYABLE.includes(outcome.reason);
-    const banner = warning(
-      doc,
-      retryable
-        ? outcome.message
-        : `${outcome.message} Reload the page to see whether the comment was created.`
-    );
+    const banner = warning(doc, outcome.message);
     banner.classList.add('bghsa-preserve-result');
     host?.append(banner);
     if (retryable) {

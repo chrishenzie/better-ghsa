@@ -322,6 +322,63 @@ require('./allowlist.js');
   }
 
   /**
+   * What a surface says while a write it started is on its way to GitHub. It is
+   * the state of the controls that write came from, which are held still until
+   * it settles, and the panel and the done view read it from here so one event
+   * reads the same however it was started.
+   */
+  const SAVING_MESSAGE = 'Saving...';
+
+  /**
+   * What refuses a write whose re-read of the advisory page did not arrive.
+   * What GitHub answered, or what the read threw, goes to the console.
+   */
+  const REFRESH_MESSAGE = 'Error: failed to refresh advisory data';
+
+  /** What reports a write GitHub refused or never answered. */
+  const FAILED_MESSAGE = 'Error: failed to save';
+
+  /**
+   * What reports a write GitHub took whose result could not be read back. The
+   * comment may or may not be there.
+   */
+  const UNCONFIRMED_MESSAGE = 'Error: failed to validate save';
+
+  /** What refuses a write the page carries no form to send. */
+  const NO_FORM_MESSAGE = 'Error: cannot post';
+
+  /**
+   * @param {string} nameWithOwner
+   * @returns {string} what refuses a write on that repository. Three write
+   *   paths check the allowlist and all three say this.
+   */
+  function allowlistMessage(nameWithOwner) {
+    return `Error: ${nameWithOwner} is not on this extension's allowlist.`;
+  }
+
+  /**
+   * @param {import('./parse-detail.js').AdvisoryRef} ref
+   * @returns {string} what refuses a write whose page turned out to be another
+   *   advisory than the one it was asked for.
+   */
+  function mismatchMessage(ref) {
+    return `Error: the page this extension read is not ${ref.owner}/${ref.repo} ${ref.ghsaId}.`;
+  }
+
+  /**
+   * The detail a refusal no longer carries. The message a maintainer reads names
+   * what failed; what GitHub said about it is here.
+   *
+   * @param {string} what
+   * @param {unknown} [detail]
+   * @returns {void}
+   */
+  function log(what, detail) {
+    if (detail === undefined) console.warn(`[better-ghsa] ${what}`);
+    else console.warn(`[better-ghsa] ${what}`, detail);
+  }
+
+  /**
    * The advisory detail page a write reads before it builds anything.
    *
    * @param {import('./parse-detail.js').AdvisoryRef} ref
@@ -357,27 +414,16 @@ require('./allowlist.js');
     try {
       const response = await send(detailUrl(ref), DETAIL_INIT);
       if (!(response.status >= 200 && response.status < 300)) {
+        log(`the advisory page could not be read: GitHub answered ${response.status}`);
         return {
           page: null,
-          failure: result(
-            false,
-            'fetch',
-            response.status,
-            `Nothing was written: GitHub answered ${response.status} for the advisory page.`
-          ),
+          failure: result(false, 'fetch', response.status, REFRESH_MESSAGE),
         };
       }
       return { page: toDocument(await response.text()), failure: null };
     } catch (error) {
-      return {
-        page: null,
-        failure: result(
-          false,
-          'fetch',
-          null,
-          `Nothing was written: the advisory page could not be read: ${String(error)}`
-        ),
-      };
+      log('the advisory page could not be read', error);
+      return { page: null, failure: result(false, 'fetch', null, REFRESH_MESSAGE) };
     }
   }
 
@@ -412,22 +458,17 @@ require('./allowlist.js');
   function refuseBeforeRequest(ref, body, contains) {
     const nameWithOwner = `${ref.owner}/${ref.repo}`;
     if (!globalThis.bghsa.allowlist.isAllowed(nameWithOwner)) {
-      return result(
-        false,
-        'allowlist',
-        null,
-        `Nothing was written: ${nameWithOwner} is not on this extension's allowlist.`
-      );
+      return result(false, 'allowlist', null, allowlistMessage(nameWithOwner));
     }
     if (collapse(body) === '') {
-      return result(false, 'unverifiable', null, 'Nothing was written: the comment is empty.');
+      return result(false, 'unverifiable', null, 'Error: the comment is empty.');
     }
     if (contains.every((needle) => collapse(needle) === '')) {
       return result(
         false,
         'unverifiable',
         null,
-        'Nothing was written: this extension has no way to confirm the write.'
+        'Error: this extension has no way to confirm the write.'
       );
     }
     return null;
@@ -458,12 +499,14 @@ require('./allowlist.js');
         headers: { 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
       });
     } catch (error) {
-      return result(false, 'unreachable', null, `The write failed: ${String(error)}`);
+      log('the write got no answer from GitHub', error);
+      return result(false, 'unreachable', null, FAILED_MESSAGE);
     }
 
     const status = response.status;
     if (!(status >= 200 && status < 300)) {
-      return result(false, 'status', status, `The write failed: GitHub answered ${status}.`);
+      log(`the write failed: GitHub answered ${status}`);
+      return result(false, 'status', status, FAILED_MESSAGE);
     }
 
     const toDocument =
@@ -472,15 +515,11 @@ require('./allowlist.js');
     try {
       written = commentContains(toDocument(await response.text()), contains);
     } catch (error) {
-      return result(false, 'unwritten', status, `The write could not be confirmed: ${String(error)}`);
+      log('the write could not be confirmed', error);
+      return result(false, 'unwritten', status, UNCONFIRMED_MESSAGE);
     }
     if (!written) {
-      return result(
-        false,
-        'unwritten',
-        status,
-        'The write could not be confirmed: GitHub answered without the comment.'
-      );
+      return result(false, 'unwritten', status, UNCONFIRMED_MESSAGE);
     }
     return result(true, null, status, 'The comment was written.');
   }
@@ -501,12 +540,7 @@ require('./allowlist.js');
 
     const form = findCommentForm(doc);
     if (form === null) {
-      return result(
-        false,
-        'no-form',
-        null,
-        'Nothing was written: this page carries no comment form.'
-      );
+      return result(false, 'no-form', null, NO_FORM_MESSAGE);
     }
     const action = form.getAttribute('action') ?? '';
     if (!actionMatchesRef(action, ref)) {
@@ -514,7 +548,7 @@ require('./allowlist.js');
         false,
         'mismatch',
         null,
-        'Nothing was written: the comment form on this page posts somewhere other than' +
+        'Error: the comment form on this page posts somewhere other than' +
           ` ${ref.owner}/${ref.repo} ${ref.ghsaId}.`
       );
     }
@@ -555,7 +589,7 @@ require('./allowlist.js');
         false,
         'no-form',
         null,
-        `Nothing was written: this page carries no edit form for comment ${commentId}.`
+        NO_FORM_MESSAGE
       );
     }
     const action = form.getAttribute('action') ?? '';
@@ -564,7 +598,7 @@ require('./allowlist.js');
         false,
         'mismatch',
         null,
-        'Nothing was written: the edit form on this page posts somewhere other than' +
+        'Error: the edit form on this page posts somewhere other than' +
           ` ${ref.owner}/${ref.repo} ${ref.ghsaId} comment ${commentId}.`
       );
     }
@@ -576,7 +610,7 @@ require('./allowlist.js');
         false,
         'no-token',
         null,
-        `Nothing was written: the edit form for comment ${commentId} carries no` +
+        `Error: the edit form for comment ${commentId} carries no` +
           ` ${missing.join(' and no ')}.`
       );
     }
@@ -587,6 +621,13 @@ require('./allowlist.js');
 
   const exported = {
     DETAIL_INIT,
+    SAVING_MESSAGE,
+    REFRESH_MESSAGE,
+    FAILED_MESSAGE,
+    UNCONFIRMED_MESSAGE,
+    NO_FORM_MESSAGE,
+    allowlistMessage,
+    mismatchMessage,
     EDIT_BODY_FIELD,
     REQUIRED_EDIT_FIELDS,
     detailUrl,

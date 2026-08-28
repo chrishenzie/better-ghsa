@@ -234,7 +234,7 @@ test('a comment form posting to another advisory is not written to', async () =>
   assert.strictEqual(fake.calls.length, 0, 'a request went out');
   assert.strictEqual(
     outcome.message,
-    'Nothing was written: the comment form on this page posts somewhere other than' +
+    'Error: the comment form on this page posts somewhere other than' +
       ' git-utensils/Spoon-Knife GHSA-jmvx-2wfw-xfgj.'
   );
 });
@@ -281,7 +281,7 @@ test('a repository off the allowlist is refused before a request is built', asyn
   assert.strictEqual(fake.calls.length, 0);
   assert.strictEqual(
     outcome.message,
-    "Nothing was written: someone/else is not on this extension's allowlist."
+    "Error: someone/else is not on this extension's allowlist."
   );
 });
 
@@ -318,7 +318,7 @@ test('a non-2xx answer is a failed write', async () => {
     assert.strictEqual(outcome.ok, false, `status ${status}`);
     assert.strictEqual(outcome.reason, 'status', `status ${status}`);
     assert.strictEqual(outcome.status, status);
-    assert.strictEqual(outcome.message, `The write failed: GitHub answered ${status}.`);
+    assert.strictEqual(outcome.message, 'Error: failed to save');
   }
 });
 
@@ -330,7 +330,7 @@ test('a 2xx answer without the comment is a failed write', async () => {
   assert.strictEqual(outcome.status, 200);
   assert.strictEqual(
     outcome.message,
-    'The write could not be confirmed: GitHub answered without the comment.'
+    'Error: failed to validate save'
   );
 });
 
@@ -504,7 +504,7 @@ test('an edit form posting to another comment is not written to', async () => {
   assert.strictEqual(fake.calls.length, 0, 'a request went out');
   assert.strictEqual(
     outcome.message,
-    'Nothing was written: the edit form on this page posts somewhere other than' +
+    'Error: the edit form on this page posts somewhere other than' +
       ` git-utensils/Spoon-Knife GHSA-jmvx-2wfw-xfgj comment ${EDIT_ID}.`
   );
 });
@@ -519,7 +519,7 @@ test('a page carrying no edit form for that comment is not edited', async () => 
   assert.strictEqual(fake.calls.length, 0);
   assert.strictEqual(
     outcome.message,
-    'Nothing was written: this page carries no edit form for comment 999999.'
+    'Error: cannot post'
   );
 });
 
@@ -537,7 +537,7 @@ test('an edit form carrying no concurrency token is not sent', async () => {
   assert.strictEqual(fake.calls.length, 0, 'a request went out');
   assert.strictEqual(
     outcome.message,
-    `Nothing was written: the edit form for comment ${EDIT_ID} carries no` +
+    `Error: the edit form for comment ${EDIT_ID} carries no` +
       ' repository_advisory_comment[bodyVersion].'
   );
   const whole = editPage(action, EDIT_TOKENS);
@@ -578,7 +578,7 @@ test('a page the write could not read produces a failure and no page', async () 
   assert.strictEqual(refused.failure?.status, 404);
   assert.strictEqual(
     refused.failure?.message,
-    'Nothing was written: GitHub answered 404 for the advisory page.'
+    'Error: failed to refresh advisory data'
   );
 
   const unreachable = await write.fetchAdvisoryPage(REF, {

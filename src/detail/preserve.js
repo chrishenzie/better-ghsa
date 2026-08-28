@@ -90,13 +90,26 @@ if (typeof require === 'function') {
     return `${MARKER_PREFIX}${value}`;
   }
 
-  /** What the panel says while a press is on its way to GitHub. */
-  const PENDING_MESSAGE = 'A press is already on its way to GitHub for this advisory.';
+  /**
+   * What the panel says while a press is on its way to GitHub. The button that
+   * started it is disabled until it settles, so this is the state of a disabled
+   * control and not a refusal a press can reach.
+   */
+  const PENDING_MESSAGE = globalThis.bghsa.write.SAVING_MESSAGE;
 
-  /** What the panel says once a press has gone out unconfirmed. */
-  const ATTEMPTED_MESSAGE =
-    'A press has already gone to GitHub for this advisory. Reload the page to see' +
-    ' whether the comment was created.';
+  /**
+   * What the panel says once a press has gone out unconfirmed. No second press
+   * goes out: a duplicate preservation comment is visible to the reporter, and
+   * only a fresh read of the page says whether the first one landed.
+   */
+  const ATTEMPTED_MESSAGE = 'Reload page';
+
+  /**
+   * What the panel's Original report row reads once the comment is on the
+   * advisory. It is a link where the page carries the comment's anchor and plain
+   * text where it does not, and it reads the same either way.
+   */
+  const PRESERVED_MESSAGE = 'Preserved';
 
   /**
    * How far a press has got on each advisory, by `owner/repo/GHSA-id`. GitHub
@@ -253,7 +266,7 @@ if (typeof require === 'function') {
         false,
         false,
         'preserved',
-        'The original report is already preserved.',
+        PRESERVED_MESSAGE,
         `#${held.elementId}`
       );
     }
@@ -263,7 +276,7 @@ if (typeof require === 'function') {
         true,
         false,
         'unreadable',
-        'Nothing was written: this extension could not read which repository this advisory is in.'
+        'Error: this extension could not read which repository this advisory is in.'
       );
     }
     const nameWithOwner = `${ref.owner}/${ref.repo}`;
@@ -272,7 +285,7 @@ if (typeof require === 'function') {
         true,
         false,
         'allowlist',
-        `Nothing was written: ${nameWithOwner} is not on this extension's allowlist.`
+        globalThis.bghsa.write.allowlistMessage(nameWithOwner)
       );
     }
     if (advisory.descriptionOriginal === null) {
@@ -280,7 +293,7 @@ if (typeof require === 'function') {
         true,
         false,
         'provenance',
-        'Nothing was written: this extension could not tell whether the description is' +
+        'Error: this extension could not tell whether the description is' +
           " the reporter's original text."
       );
     }
@@ -289,7 +302,7 @@ if (typeof require === 'function') {
         true,
         false,
         'unreadable',
-        'Nothing was written: this extension could not read the advisory title and description.'
+        'Error: this extension could not read the advisory title and description.'
       );
     }
     return availability(true, true, null, 'Preserve the title and description in a comment.');
@@ -311,7 +324,7 @@ if (typeof require === 'function') {
     if (!state.writable || ref === null) return state;
     const attempt = attempts.get(attemptKey(ref));
     if (attempt === 'written') {
-      return availability(false, false, 'preserved', 'The original report is preserved.');
+      return availability(false, false, 'preserved', PRESERVED_MESSAGE);
     }
     if (attempt === 'sent') return availability(false, false, 'attempted', ATTEMPTED_MESSAGE);
     if (attempt === 'pending') return availability(false, false, 'pending', PENDING_MESSAGE);
@@ -375,7 +388,7 @@ if (typeof require === 'function') {
       attempts.delete(key);
       return (
         fetched.failure ??
-        failed('fetch', null, 'Nothing was written: the advisory page could not be read.')
+        failed('fetch', null, globalThis.bghsa.write.REFRESH_MESSAGE)
       );
     }
     const page = fetched.page;
@@ -383,12 +396,7 @@ if (typeof require === 'function') {
     const fresh = globalThis.bghsa.parseDetail.parseDetail(page);
     if (fresh === null || fresh.ref === null || !sameRef(fresh.ref, ref)) {
       attempts.delete(key);
-      return failed(
-        'mismatch',
-        null,
-        `Nothing was written: the page this extension read is not ${ref.owner}/${ref.repo}` +
-          ` ${ref.ghsaId}.`
-      );
+      return failed('mismatch', null, globalThis.bghsa.write.mismatchMessage(ref));
     }
 
     const current = inspect(fresh);
@@ -404,7 +412,7 @@ if (typeof require === 'function') {
       return failed(
         'unreadable',
         null,
-        'Nothing was written: this extension could not read what the comment would say.'
+        'Error: this extension could not read what the comment would say.'
       );
     }
 
@@ -434,6 +442,7 @@ if (typeof require === 'function') {
     MARKER_PREFIX,
     PENDING_MESSAGE,
     ATTEMPTED_MESSAGE,
+    PRESERVED_MESSAGE,
     newMarker,
     balanceDetails,
     preservationComment,
