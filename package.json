@@ -6,7 +6,7 @@
   "license": "Apache-2.0",
   "scripts": {
     "check": "tsc --noEmit",
-    "test": "node --test"
+    "test": "node --test --test-concurrency=1"
   },
   "devDependencies": {
     "@types/node": "^20.19.43",
