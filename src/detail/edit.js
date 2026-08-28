@@ -68,20 +68,6 @@ if (typeof require === 'function') {
  */
 
 /**
- * What a save would carry, and what it could not.
- *
- * A confirmation binds to a fingerprint of the value on the page, so a staged
- * confirmation of a value the page did not give has nothing to record. It is
- * not a change the panel can write, and it is not a change the panel forgets:
- * it stays staged and is named, because a maintainer who ticked it is owed the
- * reason it did not go.
- *
- * @typedef {object} Writable
- * @property {Pending} diff The staged values a save writes.
- * @property {ConfirmationTrack[]} blocked The confirmations it cannot record.
- */
-
-/**
  * One list of values a maintainer adds to and removes from: a chip per value
  * carrying a Remove button, a text field with the candidates behind it, and an
  * Add button. Owners and backport targets are one control over two sets of
@@ -428,103 +414,18 @@ if (typeof require === 'function') {
   }
 
   /**
-   * The values a control holds that a save leaves behind, and what the panel says
-   * about each. The lift date is not among them: turning the embargo off stages
-   * no date, so there is none to leave behind.
-   *
-   * @type {Record<string, string>}
-   */
-  const HELD_NOTES = {
-    closureDuplicateOf:
-      'The duplicate advisory is held and is not written while the closure reason is not' +
-      ' duplicate.',
-  };
-
-  /**
-   * @param {TrackingView} tracking
-   * @param {Pending} pending
-   * @returns {string[]} the staged fields a save leaves behind because the
-   *   control that gates them is off.
-   */
-  function heldTracks(tracking, pending) {
-    const all = staged(tracking, pending);
-    const writing = differences(tracking, pending);
-    /** @type {string[]} */
-    const names = [];
-    if (all.embargoLift !== undefined && writing.embargoLift === undefined) {
-      names.push('embargoLift');
-    }
-    if (all.closureDuplicateOf !== undefined && writing.closureDuplicateOf === undefined) {
-      names.push('closureDuplicateOf');
-    }
-    return names;
-  }
-
-  /**
-   * The one gate a save, the Save button, and the note all read. What
-   * {@link changesOf} writes is what this says is writable, so the panel never
-   * counts a change the write would leave out.
-   *
-   * @param {TrackingView} tracking
-   * @param {Fingerprints} fingerprints
-   * @param {Pending} pending
-   * @returns {Writable}
-   */
-  function writable(tracking, fingerprints, pending) {
-    const diff = differences(tracking, pending);
-    /** @type {ConfirmationTrack[]} */
-    const blocked = [];
-    if (diff.confirm !== undefined) {
-      /** @type {Partial<Record<ConfirmationTrack, boolean>>} */
-      const recordable = {};
-      for (const track of globalThis.bghsa.tracking.CONFIRMATION_TRACKS) {
-        const staged = diff.confirm[track.key];
-        if (staged === undefined) continue;
-        if (staged && fingerprints[track.key] === null) blocked.push(track.key);
-        else recordable[track.key] = staged;
-      }
-      if (Object.keys(recordable).length === 0) delete diff.confirm;
-      else diff.confirm = recordable;
-    }
-    return { diff, blocked };
-  }
-
-  /**
-   * @param {TrackingView} tracking
-   * @param {Fingerprints} fingerprints
-   * @param {Pending} pending
-   * @returns {string[]} the confirmations a save cannot record, named as the
-   *   panel names them.
-   */
-  function blockedTracks(tracking, fingerprints, pending) {
-    const blocked = writable(tracking, fingerprints, pending).blocked;
-    return globalThis.bghsa.tracking.CONFIRMATION_TRACKS.filter((track) =>
-      blocked.includes(track.key)
-    ).map((track) => track.short);
-  }
-
-  /**
-   * @param {string[]} names
-   * @returns {string} what the panel says where that is all a save would carry.
-   */
-  function unrecordedMessage(names) {
-    return (
-      'Error: the value on the page could not be read, so a confirmation of the' +
-      ` ${names.join(', ')} cannot be recorded.`
-    );
-  }
-
-  /**
    * The tracks whose controls hold something the advisory does not, named as the
    * panel names them. An empty list is a panel with nothing to write.
    *
+   * {@link differences} is the one gate a save, the Save button and the note all
+   * read, so the panel never counts a change the write would leave out.
+   *
    * @param {TrackingView} tracking
-   * @param {Fingerprints} fingerprints
    * @param {Pending} pending
    * @returns {string[]}
    */
-  function changedTracks(tracking, fingerprints, pending) {
-    const diff = writable(tracking, fingerprints, pending).diff;
+  function changedTracks(tracking, pending) {
+    const diff = differences(tracking, pending);
     /** @type {string[]} */
     const names = [];
     if (diff.triage !== undefined) names.push('triage');
@@ -804,7 +705,7 @@ if (typeof require === 'function') {
    * @returns {Record<string, unknown>}
    */
   function changesOf(tracking, fingerprints, pending, envelope) {
-    const diff = writable(tracking, fingerprints, pending).diff;
+    const diff = differences(tracking, pending);
     /** @type {Record<string, unknown>} */
     const changes = {};
 
@@ -1051,13 +952,7 @@ if (typeof require === 'function') {
       return stopped(context, key, 'in-flight', globalThis.bghsa.state.IN_FLIGHT_MESSAGE);
     }
     const pending = editsFor(key);
-    if (changedTracks(context.tracking, context.fingerprints, pending).length === 0) {
-      // A staged confirmation with nothing behind it is work the maintainer did,
-      // and a save that would carry only that carries nothing at all.
-      const blocked = blockedTracks(context.tracking, context.fingerprints, pending);
-      if (blocked.length > 0) {
-        return stopped(context, key, 'unrecordable', unrecordedMessage(blocked));
-      }
+    if (changedTracks(context.tracking, pending).length === 0) {
       return stopped(context, key, 'unchanged', UNCHANGED_MESSAGE);
     }
     const ref = context.advisory.ref;
@@ -1066,7 +961,7 @@ if (typeof require === 'function') {
     results.delete(key);
     // What the request carries, held from before it goes out. The store moves on
     // under a save, and what lands is what was captured here.
-    const captured = writable(context.tracking, context.fingerprints, pending).diff;
+    const captured = differences(context.tracking, pending);
     saving.add(key);
     /** @type {StateWriteResult} */
     let outcome;
@@ -1096,7 +991,7 @@ if (typeof require === 'function') {
     } catch (error) {
       // Every failure the writer knows comes back as a result. One that reaches
       // here is the ground moving under it, and the panel says so rather than
-      // holding "Writing to GitHub" until something else asks for a pass.
+      // holding "Saving..." until something else asks for a pass.
       saving.delete(key);
       return stopped(context, key, 'failed', failedMessage(error));
     }
@@ -1729,16 +1624,10 @@ if (typeof require === 'function') {
     hook.run = () => {
       const flight = saving.has(key);
       const pending = editsFor(key);
-      const names = changedTracks(context.tracking, context.fingerprints, pending);
-      const blocked = blockedTracks(context.tracking, context.fingerprints, pending);
-      const held = heldTracks(context.tracking, pending);
+      const names = changedTracks(context.tracking, pending);
       /** @type {string[]} */
       const said = [];
       if (names.length > 0) said.push(`Unsaved changes: ${names.join(', ')}.`);
-      for (const field of held) {
-        const sentence = HELD_NOTES[field];
-        if (sentence !== undefined) said.push(sentence);
-      }
       // What a save did lands in the panel as a flash on the next pass. A result
       // this panel was not built for is one no pass has shown, so the note
       // carries it: the pass may be the thing that failed.
@@ -1748,10 +1637,7 @@ if (typeof require === 'function') {
       // that state.
       note.textContent = flight ? WRITING_MESSAGE : said.join(' ');
       setDisabled(saveButton, flight || names.length === 0);
-      setDisabled(
-        discardButton,
-        flight || (names.length === 0 && blocked.length === 0 && held.length === 0)
-      );
+      setDisabled(discardButton, flight || names.length === 0);
       // Every control is held still while the request is out, whether this is
       // the pass that sent it or a pass the page asked for in the meantime, and
       // the flight gives back what it took once it settles. A control already
@@ -1824,11 +1710,6 @@ if (typeof require === 'function') {
     release,
     staged,
     differences,
-    HELD_NOTES,
-    heldTracks,
-    writable,
-    blockedTracks,
-    unrecordedMessage,
     changedTracks,
     prune,
     pendingOn,

@@ -5,6 +5,7 @@ globalThis.bghsa ??= /** @type {BghsaNamespace} */ ({});
 // The manifest orders content scripts; under Node the dependencies are named here.
 if (typeof require === 'function') {
   require('../common/dom.js');
+  require('../common/text.js');
   require('../common/trust.js');
   require('../common/schema.js');
   require('../common/merge.js');
@@ -233,7 +234,7 @@ if (typeof require === 'function') {
   ].join('\n');
 
   /** What the sort control reads while the table is in its default order. */
-  const DEFAULT_SORT_LABEL = 'Default order';
+  const DEFAULT_SORT_LABEL = 'Default';
 
   /** What the control that goes back to the default order reads. */
   const RESET_LABEL = 'Reset';
@@ -241,8 +242,11 @@ if (typeof require === 'function') {
   /** What stands in the table where a filter keeps no row. */
   const EMPTY_TEXT = 'No matches';
 
-  /** What the header says while the refresh is walking the list pages. */
-  const WALKING_TEXT = 'Walking the list';
+  /**
+   * What the header says while the refresh is walking the list pages. The walk
+   * has no count to give: it is finding out how many advisories there are.
+   */
+  const WALKING_TEXT = 'Loading...';
 
   /** What names the facet one filter control holds the table to. */
   const FACET_ATTRIBUTE = 'data-bghsa-facet';
@@ -280,7 +284,7 @@ if (typeof require === 'function') {
   const SHOW_GITHUB = "Show GitHub's view";
 
   /** What the toggle reads while GitHub's own view is showing. */
-  const SHOW_TABLE = 'Show the Better GHSA table';
+  const SHOW_TABLE = 'Show Better GHSA';
 
   /** The view the list page comes up on. */
   const VIEW_TABLE = 'table';
@@ -324,39 +328,6 @@ if (typeof require === 'function') {
     return value === '' ? value : `${value[0]?.toUpperCase() ?? ''}${value.slice(1)}`;
   }
 
-  /**
-   * @param {string | number | null} at
-   * @returns {number | null} the instant `at` names, and null for a value that
-   *   does not read as one.
-   */
-  function instantOf(at) {
-    if (at === null) return null;
-    const parsed = typeof at === 'number' ? at : Date.parse(at);
-    return Number.isFinite(parsed) ? parsed : null;
-  }
-
-  /**
-   * @param {string | number | null} at
-   * @returns {string | null} that instant to the minute in UTC. A string that
-   *   does not read as a time comes back as it stands, because a stored value
-   *   is whatever a maintainer's browser wrote.
-   */
-  function formatTime(at) {
-    const parsed = instantOf(at);
-    if (parsed === null) return typeof at === 'string' ? at : null;
-    return new Date(parsed).toISOString().replace('T', ' ').replace(/:\d\d\.\d+Z$/, ' UTC');
-  }
-
-  /**
-   * @param {string | number | null} at
-   * @returns {string | null} the day that instant falls on, in UTC.
-   */
-  function formatDate(at) {
-    const parsed = instantOf(at);
-    if (parsed === null) return typeof at === 'string' ? at : null;
-    return new Date(parsed).toISOString().slice(0, 10);
-  }
-
   /** What the patch chip reads while the fork holds an open pull request. */
   const PATCH_IN_REVIEW = 'Patch in review';
 
@@ -365,6 +336,12 @@ if (typeof require === 'function') {
 
   /** What the patch chip reads where a pull request named a state nobody reads. */
   const PATCH_UNKNOWN = 'Unknown';
+
+  /**
+   * What the Embargo filter offers for an advisory under one. It is the wording
+   * on the editor checkbox that produces the state.
+   */
+  const EMBARGO_SET_VALUE = 'In force';
 
   /** What the Patch filter offers for a draft whose fork holds an open pull request. */
   const PATCH_IN_REVIEW_VALUE = 'In review';
@@ -792,8 +769,13 @@ if (typeof require === 'function') {
     {
       key: 'embargo',
       label: 'Embargo',
-      values: ['Overdue', 'Set'],
-      valuesOf: (row) => (row.embargoOverdue ? ['Set', 'Overdue'] : row.embargo ? ['Set'] : []),
+      values: ['Overdue', EMBARGO_SET_VALUE],
+      valuesOf: (row) =>
+        row.embargoOverdue
+          ? [EMBARGO_SET_VALUE, 'Overdue']
+          : row.embargo
+            ? [EMBARGO_SET_VALUE]
+            : [],
     },
   ];
 
@@ -821,7 +803,10 @@ if (typeof require === 'function') {
       key: 'waiting',
       label: 'Longest waiting',
       compare: (a, b) =>
-        globalThis.bghsa.order.compareNumber(instantOf(a.waitingSince), instantOf(b.waitingSince)),
+        globalThis.bghsa.order.compareNumber(
+          globalThis.bghsa.text.instantOf(a.waitingSince),
+          globalThis.bghsa.text.instantOf(b.waitingSince)
+        ),
     },
   ];
 
@@ -997,7 +982,7 @@ if (typeof require === 'function') {
   function metaTextOf(row) {
     const parts = [];
     if (row.ghsaId !== null) parts.push(row.ghsaId);
-    const opened = formatDate(row.openedAt);
+    const opened = globalThis.bghsa.text.formatDate(row.openedAt);
     if (opened !== null) parts.push(`opened ${opened}`);
     if (row.reporter !== null) parts.push(`by ${row.reporter}`);
     return parts.join(' ');
@@ -1123,10 +1108,21 @@ if (typeof require === 'function') {
         doc,
         'div',
         'pl-2 flex-shrink-0 text-small bghsa-list-observed',
-        `Observed ${formatTime(row.observedAt) ?? 'never'}`
+        observedTextOf(row)
       )
     );
     return item;
+  }
+
+  /**
+   * @param {TableRow} row
+   * @returns {string} when this row's data was read. A row no advisory read
+   *   backs says so: the moment its list markup was read is when GitHub's own
+   *   row was seen, not when the advisory behind it was.
+   */
+  function observedTextOf(row) {
+    const at = row.read ? globalThis.bghsa.text.formatTime(row.observedAt) : null;
+    return at === null ? 'Not read' : `Observed ${at}`;
   }
 
   /**
@@ -1433,7 +1429,7 @@ if (typeof require === 'function') {
       doc,
       'span',
       'Label Label--secondary bghsa-list-progress',
-      `${held.left} to read`
+      `Loading (${held.left} left)...`
     );
   }
 
@@ -2291,8 +2287,8 @@ if (typeof require === 'function') {
     PARSED_SELECTORS,
     sentenceCase,
     formatTime,
-    formatDate,
     isDefaultView,
+    observedTextOf,
     patchStateOf,
     backportsDoneIn,
     cveTextOf,

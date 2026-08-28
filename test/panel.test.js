@@ -221,7 +221,7 @@ async function buildWith(advisory, payload) {
 function provenance(root) {
   for (const line of root.querySelectorAll('.bghsa-confirmation')) {
     if (text(line.querySelector('.bghsa-confirmation-name')) !== 'Description') continue;
-    return text(line.querySelectorAll('.Label')[1]);
+    return text(line.querySelectorAll('.Label')[1] ?? null);
   }
   throw new Error('no description confirmation line');
 }

@@ -424,7 +424,7 @@ if (typeof require === 'function') {
       }
       return built.row;
     }
-    const button = element(doc, 'button', 'btn btn-sm bghsa-preserve', 'Preserve original report');
+    const button = element(doc, 'button', 'btn btn-sm bghsa-preserve', 'Preserve');
     button.setAttribute('type', 'button');
     built.body.append(button);
     built.body.append(element(doc, 'span', 'ml-2 bghsa-preserve-note', state.message));

@@ -526,10 +526,10 @@ if (typeof require === 'function') {
    * REQUIREMENTS.md section 11 displays what it can, marks the result
    * incomplete, and shows a banner.
    *
-   * The Partial crawl chip is not that banner. A walk that has not reached its
-   * last page is one a navigation stopped as readily as one GitHub refused, and
-   * a read that failed leaves a row standing as unread, which is also what a
-   * row nothing has got to yet looks like.
+   * The header's own progress chip is not that banner. A walk that has not
+   * reached its last page is one a navigation stopped as readily as one GitHub
+   * refused, and a read that failed leaves a row standing as unread, which is
+   * also what a row nothing has got to yet looks like.
    *
    * @param {Document} doc
    * @param {readonly string[]} failures

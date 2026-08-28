@@ -219,8 +219,10 @@ test("a triage row carries what GitHub's row carried, from the list markup alone
   const chips = chipLine(row);
   assert.ok(chips === 'High[Label--orange bghsa-dim]', `chips with nothing read: ${chips}`);
 
+  // The list markup says when GitHub's row was seen, not when the advisory
+  // behind it was read, and no advisory read backs this row.
   const observed = textOf(row, '.bghsa-list-observed');
-  assert.ok(observed === 'Observed 2026-08-26 12:00 UTC', `observed: ${observed}`);
+  assert.ok(observed === 'Not read', `observed: ${observed}`);
 
   assert.ok(row.querySelector('.bghsa-list-owners') === null, 'an unowned row shows no owner icon');
 });
@@ -970,7 +972,7 @@ function pageOf(html) {
   );
 }
 
-test('a row shows when its data was observed, not when it was drawn', async () => {
+test('a row no advisory read backs says so, whenever its markup was seen', async () => {
   const owner = 'observed-crawl';
   const repo = 'repo';
   const ghsaId = 'GHSA-aaaa-aaaa-aaaa';
@@ -1018,15 +1020,11 @@ test('a row shows when its data was observed, not when it was drawn', async () =
   const observed = new Map(
     rows.map((row) => [row.getAttribute('data-bghsa-ghsa'), textOf(row, '.bghsa-list-observed')])
   );
-  assert.ok(
-    observed.get(ghsaId) === 'Observed 2026-08-24 09:00 UTC',
-    `the crawled row: ${observed.get(ghsaId)}`
-  );
-  // The row GitHub rendered was read now, and says so.
-  assert.ok(
-    observed.get(drawn) === 'Observed 2026-08-26 12:00 UTC',
-    `the row on the page: ${observed.get(drawn)}`
-  );
+  // Neither row has an advisory read behind it. The cell stands for when the
+  // advisory was read, and when its list markup was seen is not that: one was
+  // walked two days ago and the other was rendered by GitHub now.
+  assert.ok(observed.get(ghsaId) === 'Not read', `the crawled row: ${observed.get(ghsaId)}`);
+  assert.ok(observed.get(drawn) === 'Not read', `the row on the page: ${observed.get(drawn)}`);
 });
 
 test('a read supplies every value on the row it stamps', async () => {
@@ -1204,7 +1202,12 @@ test('the header says what the refresh is doing and stops when it is done', asyn
 
   // The first request is a list page, which is the walk. The three after it
   // are the advisories the walk named, counting down as each one lands.
-  assert.deepStrictEqual(said, [table.WALKING_TEXT, '3 to read', '2 to read', '1 to read']);
+  assert.deepStrictEqual(said, [
+    table.WALKING_TEXT,
+    'Loading (3 left)...',
+    'Loading (2 left)...',
+    'Loading (1 left)...',
+  ]);
   assert.strictEqual(progressText(doc), null, 'the header still said a refresh was running');
 
   // The count the header carried all along is still beside it.
@@ -1251,7 +1254,7 @@ test('the chip the header carries is dimmed and says nothing with nothing left',
     'Label Label--secondary bghsa-list-progress',
     `the chip carried ${walking.className}`
   );
-  assert.strictEqual(walking.textContent, 'Walking the list', 'the walk chip read otherwise');
+  assert.strictEqual(walking.textContent, 'Loading...', 'the walk chip read otherwise');
   assert.strictEqual(
     table.progressChip(doc, { phase: 'reading', left: 0 }),
     null,
@@ -2154,7 +2157,7 @@ test('every filter reads the fixture the cache holds', async () => {
   assert.ok(
     facetLine(read) ===
       'waiting=Blocked on the reporter severity=High owner=samuelkarp state=Triage' +
-        ' patch= backports=Outstanding embargo=Set',
+        ' patch= backports=Outstanding embargo=In force',
     `the facets of the cached triage read: ${facetLine(read)}`
   );
 
@@ -2315,7 +2318,7 @@ test('the controls offer every value the table holds', async () => {
   const wanted = table.SORTS.map((each) => each.label).join(' | ');
   assert.ok(offered === wanted, `the sort offers: ${offered}`);
   assert.ok(
-    offered === 'Default order | Highest severity | Longest waiting',
+    offered === 'Default | Highest severity | Longest waiting',
     `the sort labels: ${offered}`
   );
 

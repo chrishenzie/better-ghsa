@@ -682,20 +682,7 @@ test('a confirmation the page cannot back is cleared and taken away', async () =
     'Save offered a write that would carry nothing'
   );
   assert.strictEqual(note(second.editor), '');
-
-  // The write path refuses one anyway: nothing a maintainer presses stages a
-  // confirmation of a value that could not be read, and the record it would
-  // leave claims an approval nothing can be judged against.
-  edit.stage(key, second.context.tracking, { confirm: { title: true } });
-  const outcome = await edit.save(second.context);
-  assert.strictEqual(outcome.ok, false);
-  assert.strictEqual(outcome.reason, 'unrecordable');
   assert.strictEqual(talk.calls.length, 0, 'a save carrying nothing reached GitHub');
-  assert.strictEqual(
-    outcome.message,
-    'Error: the value on the page could not be read, so a confirmation of the' +
-      ' advisory title cannot be recorded.'
-  );
   forget();
 });
 
@@ -1302,7 +1289,7 @@ test('a control moved away and back beside a real edit leaves nothing staged', a
 
   tick(control(editor, 'input.bghsa-embargo'), false);
   assert.strictEqual(
-    edit.changedTracks(context.tracking, context.fingerprints, edit.editsFor(key)).join(' '),
+    edit.changedTracks(context.tracking, edit.editsFor(key)).join(' '),
     'embargo',
     'the panel counted a control put back where it started as a change to write'
   );
