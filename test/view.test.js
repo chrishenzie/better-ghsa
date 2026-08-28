@@ -702,11 +702,11 @@ test("the severity chip takes GitHub's own color and no other chip does", async 
     ])
   );
 
-  assert.deepStrictEqual(chipLine(doneRow(doc, painted)), 'Closed Low Unread');
+  assert.deepStrictEqual(chipLine(doneRow(doc, painted)), 'Closed Low');
   assert.deepStrictEqual(
     chipColors(doneRow(doc, painted)),
-    ['Label--secondary', 'Label--orange', 'Label--secondary'],
-    'the state and the unread mark stay dimmed beside a severity that does not'
+    ['Label--secondary', 'Label--orange'],
+    'the state stays dimmed beside a severity that does not'
   );
 
   assert.deepStrictEqual(chipLine(doneRow(doc, read)), 'Published Moderate');
@@ -718,7 +718,7 @@ test("the severity chip takes GitHub's own color and no other chip does", async 
 
   assert.deepStrictEqual(
     chipColors(doneRow(doc, bare)),
-    ['Label--secondary', 'Label--secondary', 'Label--secondary'],
+    ['Label--secondary', 'Label--secondary'],
     'a severity GitHub carried no modifier on'
   );
 });
@@ -782,7 +782,7 @@ test('the list reads as loading until the first page of the walk lands', async (
   // advisory, which is not a repository still loading.
   view.setState(doc, { corpus: corpusOf([]), reading: false });
   view.draw(doc);
-  assert.strictEqual(textOf(doc, `#${view.ROOT_ID} .bghsa-done-empty`), view.EMPTY_TEXT);
+  assert.strictEqual(textOf(doc, `#${view.ROOT_ID} .bghsa-done-empty`), 'Not found');
   view.setState(doc, { corpus: null, ref: null });
 });
 
@@ -1102,7 +1102,7 @@ test('an advisory nothing has read takes no reason and says why', async () => {
   assert.strictEqual(outcome, null, 'nothing was written');
   assert.strictEqual(
     textOf(doneRow(doc, ghsa('iiii')), '.bghsa-done-note'),
-    view.UNREADABLE_MESSAGE
+    'Error: cannot set reason'
   );
   view.notes.clear();
 });
@@ -1220,18 +1220,19 @@ test('a page or a read the crawl could not take shows a banner', async () => {
   assert.ok(held !== null, 'the collection ran');
 
   const banner = one(doc, `#${view.ROOT_ID} .bghsa-done-banner`);
-  assert.ok(
-    (banner.textContent ?? '').includes(view.FAILURE_MESSAGE),
-    'the banner says what a failed read means for what is drawn'
-  );
   const lines = textsOf(banner, '.bghsa-done-failure');
   assert.strictEqual(lines.length, 2, `the failures named: ${lines.join(' | ')}`);
+  assert.strictEqual(
+    banner.textContent ?? '',
+    lines.join(''),
+    'the banner is the failure lines and nothing above them'
+  );
   assert.ok(
-    lines.some((line) => line.includes(closedUrl)),
+    lines.includes(`Failed to load ${closedUrl}`),
     `the list page that failed is named: ${lines.join(' | ')}`
   );
   assert.ok(
-    lines.some((line) => line === '1 advisory could not be read.'),
+    lines.includes('Failed to load 1 advisory'),
     `the read that failed is counted: ${lines.join(' | ')}`
   );
   assert.deepStrictEqual(view.stateOf(doc).failures, lines, 'the view holds what it drew');

@@ -89,6 +89,9 @@ if (typeof require === 'function') {
   /** What it reads while this one is. The statistics use it for the way back. */
   const SHOW_OPEN = 'Show open';
 
+  /** What the Box this view draws is headed. */
+  const HEADING_TEXT = 'Completed';
+
   /** What the control that writes one closure reason reads. */
   const SAVE_LABEL = 'Save';
 
@@ -96,29 +99,26 @@ if (typeof require === 'function') {
   const NO_REASON = 'No reason';
 
   /** What stands where the crawl has found no done advisory. */
-  const EMPTY_TEXT = 'No published or closed advisory';
-
-  /** What stands where nothing has read an advisory the list named. */
-  const UNREAD_TEXT = 'Unread';
+  const EMPTY_TEXT = 'Not found';
 
   /** What says a collection is filling the list. */
   const LOADING_TEXT = 'Loading...';
 
   /**
+   * The verb every failure on this surface carries: the header's own, the line
+   * for a list page the walk could not take, and the line counting the
+   * advisories no read landed for.
+   */
+  const FAILED_PREFIX = 'Failed to load';
+
+  /**
    * What says the list is short of the two states and nothing further is
    * coming: the walk ended on pages GitHub would not serve.
    */
-  const FAILED_TEXT = 'Failed to load all advisories';
-
-  /** What the banner says when something the corpus is built from failed. */
-  const FAILURE_MESSAGE =
-    'Some of this could not be read. What is drawn here leaves those advisories' +
-    ' out, or draws them from an older read.';
+  const FAILED_TEXT = `${FAILED_PREFIX} all advisories`;
 
   /** What the view says where a reason cannot be written from here. */
-  const UNREADABLE_MESSAGE =
-    'Error: this extension has not read this advisory, so it cannot tell' +
-    ' which advisory to write on.';
+  const UNREADABLE_MESSAGE = 'Error: cannot set reason';
 
   /** Every rule the done view adds to the page. */
   const STYLE_TEXT = [
@@ -487,7 +487,6 @@ if (typeof require === 'function') {
         chip(doc, globalThis.bghsa.table.sentenceCase(row.severityLabel), row.severityClass)
       );
     }
-    if (!row.read) chips.append(chip(doc, UNREAD_TEXT));
     main.append(chips);
 
     const note = noteFor(row, corpus);
@@ -512,19 +511,11 @@ if (typeof require === 'function') {
   }
 
   /**
-   * @param {unknown} reason
-   * @returns {string} what a failure says for itself.
-   */
-  function reasonTextOf(reason) {
-    if (reason === null || reason === undefined) return 'no reason was given';
-    if (reason instanceof Error) return reason.message;
-    return String(reason);
-  }
-
-  /**
    * What the view says when a page of the walk or an advisory read failed.
    * REQUIREMENTS.md section 11 displays what it can, marks the result
-   * incomplete, and shows a banner.
+   * incomplete, and shows a banner. The banner is the
+   * failures themselves; nothing stands above them saying that some of this
+   * could not be read, because each line already says it.
    *
    * The header's own progress chip is not that banner. A walk that has not
    * reached its last page is one a navigation stopped as readily as one GitHub
@@ -538,7 +529,6 @@ if (typeof require === 'function') {
   function buildBanner(doc, failures) {
     if (failures.length === 0) return null;
     const box = element(doc, 'div', 'flash flash-warn m-3 bghsa-done-banner');
-    box.append(element(doc, 'div', '', FAILURE_MESSAGE));
     for (const failure of failures) {
       box.append(element(doc, 'div', 'mt-1 text-small bghsa-done-failure', failure));
     }
@@ -602,7 +592,7 @@ if (typeof require === 'function') {
     root.setAttribute('data-bghsa-done', '1');
 
     const header = element(doc, 'div', 'Box-header bghsa-done-header');
-    header.append(element(doc, 'strong', '', 'Done'));
+    header.append(element(doc, 'strong', '', HEADING_TEXT));
     const rows = rowsOf(state.corpus);
     const countText = globalThis.bghsa.table.countTextOf(rows.length);
     header.append(element(doc, 'span', 'ml-2 text-normal bghsa-done-count', countText));
@@ -787,8 +777,8 @@ if (typeof require === 'function') {
         href: options.href ?? globalThis.location?.href,
         storage: options.storage,
         now: options.now,
-        onFailure: (state, url, reason) => {
-          noteFailure(`The ${state} list page ${url} could not be read: ${reasonTextOf(reason)}`);
+        onFailure: (_state, url) => {
+          noteFailure(`${FAILED_PREFIX} ${url}`);
         },
         onPage: (corpus) => {
           // A page landing after the maintainer has gone to another repository
@@ -803,9 +793,7 @@ if (typeof require === 'function') {
           setState(doc, { corpus: collected.corpus });
           const failed = collected.read.failed;
           if (failed > 0) {
-            noteFailure(
-              `${globalThis.bghsa.table.countTextOf(failed)} could not be read.`
-            );
+            noteFailure(`${FAILED_PREFIX} ${globalThis.bghsa.table.countTextOf(failed)}`);
           }
         }
         return collected.corpus;
@@ -863,16 +851,10 @@ if (typeof require === 'function') {
     ROOT_ID,
     STYLE_ID,
     MODE,
-    SHOW_DONE,
     SHOW_OPEN,
-    SAVE_LABEL,
-    NO_REASON,
     EMPTY_TEXT,
-    UNREAD_TEXT,
     LOADING_TEXT,
     FAILED_TEXT,
-    FAILURE_MESSAGE,
-    UNREADABLE_MESSAGE,
     STYLE_TEXT,
     notes,
     saving,
@@ -881,19 +863,10 @@ if (typeof require === 'function') {
     current,
     rowsOf,
     memberOf,
-    metaTextOf,
-    reasonTextOf,
-    buildBanner,
     contextFor,
-    buildClosure,
-    buildRow,
-    statusTextOf,
     buildBody,
-    buildView,
     ensureStyle,
     draw,
-    buildToggle,
-    toggle,
     show,
     setReason,
     collect,
