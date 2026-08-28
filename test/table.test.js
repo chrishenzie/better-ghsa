@@ -379,7 +379,7 @@ test("the table holds GitHub's segmented control, rows, and query form out of vi
 
   const container = one(doc, '#advisories');
   const controls = table.nativeControls(container);
-  assert.ok(controls.length === 2, `controls the table hides: ${controls.length}`);
+  assert.ok(controls.length === 3, `controls the table hides: ${controls.length}`);
 
   const box = /** @type {Element} */ (controls[0]);
   assert.ok(box.querySelector('segmented-control') !== null, 'the hidden Box holds the tabs');
@@ -391,6 +391,16 @@ test("the table holds GitHub's segmented control, rows, and query form out of vi
   assert.ok(
     filter.tagName.toLowerCase() === 'repository-advisories-filter',
     `the second control: ${filter.tagName}`
+  );
+  const paging = /** @type {Element} */ (controls[2]);
+  assert.ok(
+    paging.classList.contains('paginate-container'),
+    `the third control: ${paging.className}`
+  );
+  assert.strictEqual(
+    paging.closest('div.Box'),
+    null,
+    'GitHub keeps its pagination outside the Box, which is why hiding the Box misses it'
   );
 
   for (const control of controls) {

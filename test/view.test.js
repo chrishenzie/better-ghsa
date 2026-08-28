@@ -280,9 +280,15 @@ function listHtml(page) {
         '</div>'
     )
     .join('');
+  // GitHub's pagination is a sibling of the Box, which is where the real page
+  // puts it.
   return (
     `<div id="advisories"><segmented-control><ul>${tabs}</ul></segmented-control>` +
-    `<div class="Box">${rows}</div></div>`
+    `<div class="Box">${rows}</div>` +
+    '<div class="paginate-container"><div class="pagination">' +
+    '<span class="previous_page disabled">Previous</span>' +
+    '<span class="next_page disabled">Next</span>' +
+    '</div></div></div>'
   );
 }
 

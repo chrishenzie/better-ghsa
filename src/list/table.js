@@ -1491,13 +1491,18 @@ if (typeof require === 'function') {
       'd-flex flex-wrap flex-items-center flex-justify-between mb-2 bghsa-list-bar'
     );
     bar.append(buildControls(doc, view.rows, state));
-    const toggle = element(doc, 'button', 'btn btn-sm bghsa-list-toggle', SHOW_GITHUB);
+    // The toggles are one group. Each of them switches the same thing, which is
+    // which view the page shows, and GitHub words a set of buttons over one
+    // thing as a `BtnGroup`. A surface's control is made a member of the group
+    // here, so the surface has nothing to know about where it lands.
+    const group = element(doc, 'div', 'BtnGroup bghsa-list-toggles');
+    const toggle = element(doc, 'button', 'BtnGroup-item btn btn-sm bghsa-list-toggle', SHOW_GITHUB);
     toggle.setAttribute('type', 'button');
     toggle.addEventListener('click', () => {
       setShowingNative(doc, !showingNative(doc));
       applyVisibility(doc);
     });
-    bar.append(toggle);
+    group.append(toggle);
     for (const surface of [...surfaces]) {
       /** @type {Element | null} */
       let node = null;
@@ -1506,8 +1511,12 @@ if (typeof require === 'function') {
       } catch {
         // A surface that cannot build its control leaves the bar as it is.
       }
-      if (node !== null) bar.append(node);
+      if (node !== null) {
+        node.classList.add('BtnGroup-item');
+        group.append(node);
+      }
     }
+    bar.append(group);
     root.append(bar);
 
     const box = element(doc, 'div', 'Box mb-3 bghsa-list-box');
@@ -1554,9 +1563,15 @@ if (typeof require === 'function') {
 
   /**
    * GitHub's own controls, which the table holds out of view while it is
-   * showing: the Box carrying the segmented control and the native rows, and the
-   * query form. The segmented control and the rows are one element, so restoring
-   * them is one act and cannot restore half.
+   * showing: the Box carrying the segmented control and the native rows, the
+   * query form, and the pagination. The segmented control and the rows are one
+   * element, so restoring them is one act and cannot restore half.
+   *
+   * GitHub keeps its pagination outside that Box, so holding the Box out of
+   * view leaves the pagination on screen over rows it did not draw and cannot
+   * page. It goes and comes back with the rest of GitHub's controls. The Box
+   * stays first in the list, because that is what the table anchors itself
+   * above.
    *
    * @param {Element} container The `div#advisories`.
    * @returns {Element[]}
@@ -1572,6 +1587,9 @@ if (typeof require === 'function') {
     if (box !== null) found.push(box);
     for (const filter of container.querySelectorAll('repository-advisories-filter')) {
       if (!found.includes(filter)) found.push(filter);
+    }
+    for (const paging of container.querySelectorAll('.paginate-container')) {
+      if (!found.includes(paging)) found.push(paging);
     }
     return found;
   }

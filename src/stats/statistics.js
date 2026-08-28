@@ -644,7 +644,7 @@ if (typeof require === 'function') {
    * @returns {Element}
    */
   function buildToggle(doc) {
-    const node = element(doc, 'button', 'btn btn-sm ml-2 bghsa-stats-toggle', SHOW_STATS);
+    const node = element(doc, 'button', 'btn btn-sm bghsa-stats-toggle', SHOW_STATS);
     node.setAttribute('type', 'button');
     node.addEventListener('click', () => {
       toggle(doc);
