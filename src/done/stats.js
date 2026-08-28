@@ -96,20 +96,40 @@ if (typeof require === 'function') {
   const CLOSE_EVENT = /\bclosed this\b/;
 
   /**
-   * The timings this reader computes, and what each is measured between.
+   * What a timeline event reads when an advisory is published.
    *
-   * @type {readonly { key: string, name: string }[]}
+   * Closing and publishing are two different endings, and REQUIREMENTS.md
+   * section 10 measures to each of them separately. A published advisory is one
+   * a maintainer released to the world; a closed one is one nobody is going to.
+   *
+   * The phrase is matched whole, for the reason {@link DRAFT_EVENT} is. The same
+   * timeline carries `released this` from GitHub the day after the publication,
+   * which is the advisory reaching the global database and not a maintainer
+   * publishing it.
+   */
+  const PUBLISH_EVENT = /\bpublished this\b/;
+
+  /**
+   * The timings this reader computes, what each is measured between, and what
+   * an advisory it could not measure is called.
+   *
+   * `omission` is the reason the metric is absent, which the reader is owed
+   * beside the count of how many it is absent for. Every omission is one thing:
+   * the event the timing needs never happened on the page.
+   *
+   * @type {readonly { key: string, name: string, omission: string }[]}
    */
   const TIMINGS = [
-    { key: 'firstResponse', name: 'Report to first response' },
-    { key: 'reportToDraft', name: 'Report to draft' },
-    { key: 'reportToClose', name: 'Report to close' },
+    { key: 'firstResponse', name: 'Time to first response', omission: 'No response' },
+    { key: 'accept', name: 'Time to accept', omission: 'Never accepted' },
+    { key: 'close', name: 'Time to close', omission: 'Never closed' },
+    { key: 'publish', name: 'Time to publish', omission: 'Never published' },
   ];
 
   /**
    * The section 10 timings this reader does not compute, each naming why.
    *
-   * All three of section 10's timings are read from the page, so this is empty.
+   * All four of section 10's timings are read from the page, so this is empty.
    * A timing whose event stops being observable is named here with its reason,
    * and section 10 leaves it out of the statistics rather than estimating it.
    *
@@ -230,6 +250,29 @@ if (typeof require === 'function') {
   }
 
   /**
+   * When the advisory was published.
+   *
+   * The earliest publication is the one taken, the same as the earliest close
+   * is.
+   *
+   * @param {import('../common/parse-detail.js').ParsedDetail} advisory
+   * @returns {number | null} the instant, and null where the timeline records no
+   *   publication. An advisory nobody published contributes to no timing, and
+   *   not a duration of zero.
+   */
+  function publishAt(advisory) {
+    /** @type {number | null} */
+    let earliest = null;
+    for (const event of advisory.timeline) {
+      if (!PUBLISH_EVENT.test(event.text)) continue;
+      const at = instantOf(event.at);
+      if (at === null) continue;
+      if (earliest === null || at < earliest) earliest = at;
+    }
+    return earliest;
+  }
+
+  /**
    * @param {import('../common/parse-detail.js').ParsedDetail | null} advisory
    * @param {(advisory: import('../common/parse-detail.js').ParsedDetail) => number | null} event
    * @returns {number | null} how long after the report that event happened, and
@@ -339,6 +382,8 @@ if (typeof require === 'function') {
     const drafts = [];
     /** @type {(number | null)[]} */
     const closes = [];
+    /** @type {(number | null)[]} */
+    const publishes = [];
 
     for (const member of held.members) {
       const advisory = member.advisory;
@@ -350,6 +395,7 @@ if (typeof require === 'function') {
       firstResponses.push(durationOf(advisory, firstResponseAt));
       drafts.push(durationOf(advisory, draftAt));
       closes.push(durationOf(advisory, closeAt));
+      publishes.push(durationOf(advisory, publishAt));
     }
 
     return {
@@ -365,8 +411,9 @@ if (typeof require === 'function') {
       },
       timings: {
         firstResponse: timing(firstResponses, over),
-        reportToDraft: timing(drafts, over),
-        reportToClose: timing(closes, over),
+        accept: timing(drafts, over),
+        close: timing(closes, over),
+        publish: timing(publishes, over),
       },
       uncomputed: { ...UNCOMPUTED },
     };
@@ -375,6 +422,7 @@ if (typeof require === 'function') {
   const exported = {
     DRAFT_EVENT,
     CLOSE_EVENT,
+    PUBLISH_EVENT,
     TIMINGS,
     UNCOMPUTED,
     monthOf,
@@ -382,6 +430,7 @@ if (typeof require === 'function') {
     firstResponseAt,
     draftAt,
     closeAt,
+    publishAt,
     durationOf,
     tally,
     timing,

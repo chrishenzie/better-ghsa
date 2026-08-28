@@ -112,13 +112,19 @@ if (typeof require === 'function') {
   /**
    * Every rule the statistics view adds to the page.
    *
-   * Each count is a list of its own and the lists sit against the top of the
-   * row they wrap into, so one of thirty rows does not stretch one of one.
+   * Each count is a list of its own, and the lists pack down columns. A list of
+   * one row and a list of thirty share no row baseline, so the short one is
+   * followed by the next list and not by a column's worth of nothing.
+   *
+   * The columns are sized by width, so how many there are follows the window
+   * and a narrow one gets a single column running the width of the page. A box
+   * is never split down the middle by the column it ends at.
    */
   const STYLE_TEXT = [
     '.bghsa-stats-over { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; }',
-    '.bghsa-stats-lists { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0 16px; }',
-    '.bghsa-stats-list { flex: 0 1 20rem; min-width: 14rem; }',
+    '.bghsa-stats-lists { columns: 20rem; column-gap: 16px; }',
+    '.bghsa-stats-list { break-inside: avoid; }',
+    '.bghsa-stats-title { gap: 0 8px; }',
     '.bghsa-stats-line { display: flex; align-items: baseline; gap: 4px 12px; }',
     '.bghsa-stats-value { flex: 1 1 auto; }',
     '.bghsa-stats-count { color: var(--fgColor-muted); white-space: nowrap; text-align: right; }',
@@ -226,6 +232,16 @@ if (typeof require === 'function') {
    */
   function formatRatio(ratio) {
     return `${Math.round(ratio * 100)}%`;
+  }
+
+  /**
+   * @param {number} count
+   * @returns {string} how many advisories every number below is over. It is the
+   *   whole of what was counted, so it is said as a plain number: `Over 144`
+   *   reads as a floor under a number that has none.
+   */
+  function totalTextOf(count) {
+    return `${count} total ${count === 1 ? 'advisory' : 'advisories'}`;
   }
 
   /**
@@ -337,7 +353,7 @@ if (typeof require === 'function') {
     const table = globalThis.bghsa.table;
     const box = element(doc, 'div', 'Box-body bghsa-stats-over');
     const corpus = whole(halves);
-    box.append(chip(doc, `Over ${table.countTextOf(corpus.members.length)}`));
+    box.append(chip(doc, totalTextOf(corpus.members.length)));
     for (const half of halves) {
       const size = half.corpus.members.length;
       const node = chip(doc, `${size} ${half.name.toLowerCase()}`);
@@ -373,6 +389,24 @@ if (typeof require === 'function') {
   }
 
   /**
+   * One list's header: what the list is, and how much of the corpus it holds.
+   *
+   * The two sit at either end of one line, and the rule that spaces them keeps
+   * them apart where the name runs the width of the box.
+   *
+   * @param {Document} doc
+   * @param {string} name
+   * @param {string} meta
+   * @returns {Element}
+   */
+  function buildHeader(doc, name, meta) {
+    const header = element(doc, 'div', 'Box-header d-flex flex-items-baseline bghsa-stats-title');
+    header.append(element(doc, 'strong', 'flex-auto', name));
+    header.append(element(doc, 'span', 'text-small bghsa-stats-meta', meta));
+    return header;
+  }
+
+  /**
    * One count, as a list of its own sized to what it holds.
    *
    * @param {Document} doc
@@ -383,12 +417,7 @@ if (typeof require === 'function') {
   function buildTally(doc, group, tally) {
     const box = element(doc, 'div', 'Box mb-3 bghsa-stats-list');
     box.setAttribute('data-bghsa-count', group.key);
-    const header = element(doc, 'div', 'Box-header d-flex flex-items-baseline');
-    header.append(element(doc, 'strong', 'flex-auto', group.name));
-    header.append(
-      element(doc, 'span', 'text-small bghsa-stats-meta', `${tally.counted} of ${tally.corpus}`)
-    );
-    box.append(header);
+    box.append(buildHeader(doc, group.name, `${tally.counted} of ${tally.corpus}`));
 
     const list = element(doc, 'ul', 'bghsa-stats-rows');
     const entries = Object.entries(tally.counts).sort((left, right) =>
@@ -424,27 +453,25 @@ if (typeof require === 'function') {
    * One timing, as a list of its own.
    *
    * @param {Document} doc
-   * @param {{ key: string, name: string }} timing
+   * @param {{ key: string, name: string, omission: string }} timing
    * @param {import('../done/stats.js').Timing} found
    * @returns {Element}
    */
   function buildTiming(doc, timing, found) {
     const box = element(doc, 'div', 'Box mb-3 bghsa-stats-list');
     box.setAttribute('data-bghsa-timing', timing.key);
-    const header = element(doc, 'div', 'Box-header d-flex flex-items-baseline');
-    header.append(element(doc, 'strong', 'flex-auto', timing.name));
-    header.append(
-      element(
-        doc,
-        'span',
-        'text-small bghsa-stats-meta',
-        `${found.counted} of ${found.corpus}, ${found.omitted} omitted`
-      )
-    );
-    box.append(header);
+    box.append(buildHeader(doc, timing.name, `${found.counted} of ${found.corpus}`));
     const list = element(doc, 'ul', 'bghsa-stats-rows');
     for (const each of SPREAD) {
       list.append(buildLine(doc, each.name, formatDuration(found[each.key]), ''));
+    }
+    if (found.omitted > 0) {
+      // Why the rest are not in the numbers above, where the reader is looking
+      // at them: the event this timing measures to never happened on them. It
+      // is the reason and the count, as a row of the list.
+      const line = buildLine(doc, timing.omission, String(found.omitted), '');
+      line.classList.add('bghsa-stats-omitted');
+      list.append(line);
     }
     box.append(list);
     return box;
@@ -673,34 +700,18 @@ if (typeof require === 'function') {
     MODE,
     SHOW_STATS,
     SHOW_OPEN,
-    EXPORT_LABEL,
     EMPTY_TEXT,
-    NOTHING_TEXT,
     READING_TEXT,
-    HALVES,
-    COUNT_GROUPS,
-    SPREAD,
     STYLE_TEXT,
     stateOf,
     current,
-    nameOf,
-    formatDuration,
-    formatRatio,
+    totalTextOf,
     read,
-    whole,
-    expectedTotal,
     reading,
-    buildOver,
-    buildTally,
-    buildTiming,
-    buildStats,
-    buildView,
     exportCsv,
     ensureStyle,
     draw,
     load,
-    buildToggle,
-    toggle,
     show,
   };
 

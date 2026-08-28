@@ -412,7 +412,7 @@ test('the statistics are over the whole corpus, open and done', async () => {
 
   assert.deepStrictEqual(
     over(doc),
-    ['Over 5 advisories', '3 open', '2 done', '2 unread'],
+    ['5 total advisories', '3 open', '2 done', '2 unread'],
     'the corpus is both halves, and both are walked to their last page'
   );
 
@@ -441,13 +441,13 @@ test('the statistics are over the whole corpus, open and done', async () => {
   );
 
   assert.deepStrictEqual(
-    timingLines(doc, 'reportToDraft'),
-    ['Min 2d 0h', 'Median 2d 0h', 'Mean 2d 0h', 'Max 2d 0h'],
+    timingLines(doc, 'accept'),
+    ['Min 2d 0h', 'Median 2d 0h', 'Mean 2d 0h', 'Max 2d 0h', 'Never accepted 4'],
     'the open half contributes its timings'
   );
   assert.strictEqual(
-    textOf(doc, `#${statistics.ROOT_ID} [data-bghsa-timing="reportToDraft"] .bghsa-stats-meta`),
-    '1 of 5, 4 omitted'
+    textOf(doc, `#${statistics.ROOT_ID} [data-bghsa-timing="accept"] .bghsa-stats-meta`),
+    '1 of 5'
   );
 });
 
@@ -469,7 +469,7 @@ test('a half nothing has crawled says what its numbers are over', async () => {
   // The open half is the page the maintainer is looking at and nothing more,
   // because no walk of it has run. It says so beside the numbers.
   assert.deepStrictEqual(over(doc), [
-    'Over 4 advisories',
+    '4 total advisories',
     '2 open',
     'Open not crawled',
     '2 done',
@@ -494,7 +494,7 @@ test('a half nothing has crawled says what its numbers are over', async () => {
   statsToggle(other.doc).click();
   await statistics.load(other.doc);
   assert.deepStrictEqual(over(other.doc), [
-    'Over 3 advisories',
+    '3 total advisories',
     '3 open',
     '0 done',
     'Done not crawled',
@@ -555,7 +555,7 @@ test('the statistics view asks GitHub for nothing of its own', async () => {
   );
   assert.deepStrictEqual(
     over(doc),
-    ['Over 3 advisories', '1 open', '2 done', '3 unread'],
+    ['3 total advisories', '1 open', '2 done', '3 unread'],
     'and it still drew the whole corpus, so the count above is not over nothing'
   );
 });
@@ -638,7 +638,7 @@ test('the numbers are not drawn under the repository the maintainer moved to', a
   });
   statsToggle(doc).click();
   await statistics.load(doc);
-  assert.deepStrictEqual(over(doc), ['Over 2 advisories', '1 open', '1 done', '2 unread']);
+  assert.deepStrictEqual(over(doc), ['2 total advisories', '1 open', '1 done', '2 unread']);
   assert.strictEqual(statistics.current(doc).ref?.owner, ref.owner);
 
   // GitHub replaces the turbo frame on a soft navigation and keeps the
@@ -661,3 +661,147 @@ test('the numbers are not drawn under the repository the maintainer moved to', a
   );
   assert.strictEqual(statistics.exportCsv(doc), null, 'and a file of them can still be asked for');
 });
+
+test('each timing says how many it could not measure and why', async () => {
+  const silent = ghsa('ssss');
+  const acceptedOne = ghsa('tttt');
+  const acceptedTwo = ghsa('uuuu');
+  const publishedId = ghsa('vvvv');
+  const closedOne = ghsa('wwww');
+  const closedTwo = ghsa('xxxx');
+  const reported = '2026-03-02T00:00:00Z';
+  const { doc } = await repository({
+    owner: 'stats-omitted',
+    states: {
+      triage: [{ ghsaId: silent }],
+      draft: [{ ghsaId: acceptedOne }, { ghsaId: acceptedTwo }],
+      published: [{ ghsaId: publishedId }],
+      closed: [{ ghsaId: closedOne }, { ghsaId: closedTwo }],
+    },
+    reads: [
+      {
+        ghsaId: acceptedOne,
+        state: 'Draft',
+        reportedAt: reported,
+        timeline: [{ at: '2026-03-03T00:00:00Z', text: 'samuelkarp accepted this report' }],
+      },
+      {
+        ghsaId: acceptedTwo,
+        state: 'Draft',
+        reportedAt: reported,
+        timeline: [{ at: '2026-03-05T00:00:00Z', text: 'samuelkarp accepted this report' }],
+      },
+      {
+        ghsaId: publishedId,
+        state: 'Published',
+        reportedAt: reported,
+        timeline: [
+          { at: '2026-03-04T00:00:00Z', text: 'samuelkarp accepted this report' },
+          { at: '2026-03-12T00:00:00Z', text: 'samuelkarp published this' },
+        ],
+      },
+      {
+        ghsaId: closedOne,
+        state: 'Closed',
+        reportedAt: reported,
+        timeline: [{ at: '2026-03-06T00:00:00Z', text: 'samuelkarp closed this' }],
+      },
+      {
+        ghsaId: closedTwo,
+        state: 'Closed',
+        reportedAt: reported,
+        timeline: [{ at: '2026-03-10T00:00:00Z', text: 'samuelkarp closed this' }],
+      },
+    ],
+    crawl: ['open', 'done'],
+  });
+
+  statsToggle(doc).click();
+  await statistics.load(doc);
+
+  // Six advisories: one nothing has read, three accepted, one of those three
+  // published, and two closed. No comment is on any of them, so nobody
+  // answered a reporter. Each timing's last row names the event it needed and
+  // how many advisories never had it, and the four numbers differ, so a row
+  // taking another timing's count would read wrong here.
+  assert.deepStrictEqual(timingLines(doc, 'firstResponse'), [
+    'Min —',
+    'Median —',
+    'Mean —',
+    'Max —',
+    'No response 6',
+  ]);
+  assert.deepStrictEqual(timingLines(doc, 'accept'), [
+    'Min 1d 0h',
+    'Median 2d 0h',
+    'Mean 2d 0h',
+    'Max 3d 0h',
+    'Never accepted 3',
+  ]);
+  assert.deepStrictEqual(timingLines(doc, 'close'), [
+    'Min 4d 0h',
+    'Median 6d 0h',
+    'Mean 6d 0h',
+    'Max 8d 0h',
+    'Never closed 4',
+  ]);
+  assert.deepStrictEqual(timingLines(doc, 'publish'), [
+    'Min 10d 0h',
+    'Median 10d 0h',
+    'Mean 10d 0h',
+    'Max 10d 0h',
+    'Never published 5',
+  ]);
+  assert.strictEqual(
+    textOf(doc, `#${statistics.ROOT_ID} [data-bghsa-timing="close"] .bghsa-stats-meta`),
+    '2 of 6',
+    'and the header says what it measured, without the omission it now carries'
+  );
+});
+
+test('a timing that measured every advisory carries no omission row', async () => {
+  const first = ghsa('yyyy');
+  const second = ghsa('zzzz');
+  const reported = '2026-03-02T00:00:00Z';
+  const { doc } = await repository({
+    owner: 'stats-omitted-none',
+    states: { draft: [{ ghsaId: first }, { ghsaId: second }] },
+    showing: 'draft',
+    reads: [
+      {
+        ghsaId: first,
+        state: 'Draft',
+        reportedAt: reported,
+        timeline: [{ at: '2026-03-03T00:00:00Z', text: 'samuelkarp accepted this report' }],
+      },
+      {
+        ghsaId: second,
+        state: 'Draft',
+        reportedAt: reported,
+        timeline: [{ at: '2026-03-03T00:00:00Z', text: 'samuelkarp accepted this report' }],
+      },
+    ],
+    crawl: ['open'],
+  });
+
+  statsToggle(doc).click();
+  await statistics.load(doc);
+
+  assert.deepStrictEqual(timingLines(doc, 'accept'), [
+    'Min 1d 0h',
+    'Median 1d 0h',
+    'Mean 1d 0h',
+    'Max 1d 0h',
+  ]);
+  assert.strictEqual(
+    doc.querySelector(`#${statistics.ROOT_ID} [data-bghsa-timing="accept"] .bghsa-stats-omitted`),
+    null,
+    'nothing was left out, so there is nothing to say'
+  );
+  assert.deepStrictEqual(
+    timingLines(doc, 'publish'),
+    ['Min —', 'Median —', 'Mean —', 'Max —', 'Never published 2'],
+    'and a timing that measured nothing still says why'
+  );
+});
+

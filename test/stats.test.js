@@ -164,14 +164,6 @@ const CLOSED_AS = /** @param {string} reason */ (reason) => ({
   closure: { reason },
 });
 
-test('the first response is the first member comment that is not a state comment', () => {
-  const triage = fixture('triage-thread.html');
-  assert.strictEqual(triage.reportedAt, '2026-08-25T22:15:18Z');
-  assert.strictEqual(stats.firstResponseAt(triage), Date.parse('2026-08-25T22:16:30Z'));
-  // 22:15:18 to 22:16:30 is a minute and twelve seconds.
-  assert.strictEqual(stats.durationOf(triage, stats.firstResponseAt), 72 * 1000);
-});
-
 test("a member's state comment is not an answer to the reporter", () => {
   // The draft fixture carries one comment: a state comment from a member. The
   // advisory contributes no first response, and not a response of zero.
@@ -228,14 +220,6 @@ test('the first response is the earliest qualifying comment, not the first found
   assert.strictEqual(stats.durationOf(held, stats.firstResponseAt), 30 * 60 * 1000);
 });
 
-test('entering draft is the acceptance the timeline records', () => {
-  const published = fixture('published-containerd.html');
-  assert.strictEqual(published.reportedAt, '2026-04-07T18:05:12Z');
-  assert.strictEqual(stats.draftAt(published), Date.parse('2026-04-07T19:02:26Z'));
-  // 18:05:12 to 19:02:26 is fifty-seven minutes and fourteen seconds.
-  assert.strictEqual(stats.durationOf(published, stats.draftAt), 3434 * 1000);
-});
-
 test('a reporter accepting credit is not the advisory entering draft', () => {
   const published = fixture('published-containerd.html');
   const credit = published.timeline.find((entry) => /accepted credit/.test(entry.text));
@@ -246,14 +230,6 @@ test('a reporter accepting credit is not the advisory entering draft', () => {
     'and it comes first, so a looser match would read it as the draft'
   );
   assert.strictEqual(stats.draftAt(advisory({ timeline: [credit] })), null);
-});
-
-test('an advisory whose timeline records no acceptance has no draft time', () => {
-  // The draft fixture is a draft a maintainer opened, so nothing accepted it.
-  const draft = fixture('draft.html');
-  assert.deepStrictEqual(draft.timeline, []);
-  assert.strictEqual(stats.draftAt(draft), null);
-  assert.strictEqual(stats.durationOf(draft, stats.draftAt), null);
 });
 
 test('an event the page stamps before the report yields no duration', () => {
@@ -273,26 +249,6 @@ test('an advisory whose report time went unread yields no duration', () => {
   assert.strictEqual(stats.durationOf(held, stats.draftAt), null);
 });
 
-test('the close is the close event the timeline records', () => {
-  const timeline = timelineFixture('invented-close-timeline.html');
-  const held = advisory({ reportedAt: '2026-08-24T16:19:16Z', timeline });
-  assert.strictEqual(stats.closeAt(held), Date.parse('2026-08-24T19:21:00Z'));
-  // 16:19:16 to 19:21:00 is three hours, one minute, and forty-four seconds.
-  assert.strictEqual(stats.durationOf(held, stats.closeAt), 10904 * 1000);
-});
-
-test('an advisory whose timeline records no close has no close time', () => {
-  const held = advisory({
-    reportedAt: '2026-08-24T16:19:16Z',
-    timeline: timelineFixture('invented-close-timeline.html').filter(
-      (entry) => !/closed this/.test(entry.text)
-    ),
-  });
-  assert.strictEqual(held.timeline.length, 4, 'the other four events are still there');
-  assert.strictEqual(stats.closeAt(held), null);
-  assert.strictEqual(stats.durationOf(held, stats.closeAt), null);
-});
-
 test('an advisory closed twice is measured to the close that first resolved it', () => {
   const held = advisory({
     reportedAt: '2026-08-24T16:19:16Z',
@@ -303,6 +259,76 @@ test('an advisory closed twice is measured to the close that first resolved it',
   });
   assert.strictEqual(stats.closeAt(held), Date.parse('2026-08-24T19:21:00Z'));
   assert.strictEqual(stats.durationOf(held, stats.closeAt), 10904 * 1000);
+});
+
+test('GitHub releasing an advisory is not a maintainer publishing it', () => {
+  // The same timeline carries a release the day after the publication. A rule
+  // taking any event that ends in "this" would read the release as one.
+  const published = fixture('published-containerd.html');
+  const released = published.timeline.find((entry) => /released this/.test(entry.text));
+  assert.ok(released !== undefined, 'the fixture carries a release');
+  assert.strictEqual(released?.at, '2026-08-04T18:26:14Z');
+  assert.strictEqual(stats.publishAt(advisory({ timeline: [released] })), null);
+  assert.strictEqual(
+    published.timeline.filter((entry) => stats.PUBLISH_EVENT.test(entry.text)).length,
+    1,
+    'one event on the timeline reads as the publication, and no other'
+  );
+});
+
+test('closing and publishing are two different endings', () => {
+  const published = fixture('published-containerd.html');
+  assert.strictEqual(stats.closeAt(published), null, 'nothing closed the published advisory');
+  assert.strictEqual(stats.publishAt(published), Date.parse('2026-08-03T22:11:52Z'));
+
+  const closed = advisory({
+    reportedAt: '2026-08-24T16:19:16Z',
+    timeline: timelineFixture('invented-close-timeline.html'),
+  });
+  assert.strictEqual(stats.closeAt(closed), Date.parse('2026-08-24T19:21:00Z'));
+  assert.strictEqual(stats.publishAt(closed), null, 'and nothing published the closed one');
+});
+
+/** @typedef {import('../src/common/parse-detail.js').ParsedDetail} Advisory */
+
+test('each timing measures from the report time to the event that ends it', () => {
+  const triage = fixture('triage-thread.html');
+  assert.strictEqual(triage.reportedAt, '2026-08-25T22:15:18Z');
+  const published = fixture('published-containerd.html');
+  assert.strictEqual(published.reportedAt, '2026-04-07T18:05:12Z');
+  const closed = advisory({
+    reportedAt: '2026-08-24T16:19:16Z',
+    timeline: timelineFixture('invented-close-timeline.html'),
+  });
+
+  /** @type {[string, Advisory, (held: Advisory) => number | null, string, number][]} */
+  const cases = [
+    // 22:15:18 to 22:16:30 is a minute and twelve seconds.
+    ['first response', triage, stats.firstResponseAt, '2026-08-25T22:16:30Z', 72 * 1000],
+    // 18:05:12 to 19:02:26 is fifty-seven minutes and fourteen seconds.
+    ['accept', published, stats.draftAt, '2026-04-07T19:02:26Z', 3434 * 1000],
+    // 16:19:16 to 19:21:00 is three hours, one minute, and forty-four seconds.
+    ['close', closed, stats.closeAt, '2026-08-24T19:21:00Z', 10904 * 1000],
+    // 18:05:12 on April 7 to 22:11:52 on August 3 is a hundred and eighteen
+    // days, four hours, six minutes and forty seconds.
+    ['publish', published, stats.publishAt, '2026-08-03T22:11:52Z', 10210000 * 1000],
+  ];
+  for (const [name, held, at, eventAt, duration] of cases) {
+    assert.strictEqual(at(held), Date.parse(eventAt), `${name}: the event`);
+    assert.strictEqual(stats.durationOf(held, at), duration, `${name}: the duration`);
+  }
+});
+
+test('the four timings are named for what each measures', () => {
+  assert.deepStrictEqual(
+    stats.TIMINGS.map((entry) => [entry.key, entry.name, entry.omission]),
+    [
+      ['firstResponse', 'Time to first response', 'No response'],
+      ['accept', 'Time to accept', 'Never accepted'],
+      ['close', 'Time to close', 'Never closed'],
+      ['publish', 'Time to publish', 'Never published'],
+    ]
+  );
 });
 
 /**
@@ -366,16 +392,23 @@ test('time from report to close is a timing, and nothing is left uncomputed', ()
     ])
   );
   assert.deepStrictEqual(Object.keys(summary.timings).sort(), [
+    'accept',
+    'close',
     'firstResponse',
-    'reportToClose',
-    'reportToDraft',
+    'publish',
   ]);
-  assert.deepStrictEqual(summary.timings.reportToClose?.values, [10904 * 1000]);
+  assert.deepStrictEqual(summary.timings.close?.values, [10904 * 1000]);
   assert.strictEqual(
-    summary.timings.reportToClose?.omitted,
+    summary.timings.close?.omitted,
     1,
     'the advisory with no close event contributes nothing, and not a zero'
   );
+  assert.strictEqual(
+    summary.timings.publish?.counted,
+    0,
+    'and neither of the two closed advisories was published'
+  );
+  assert.strictEqual(summary.timings.publish?.omitted, 2);
   assert.deepStrictEqual(summary.uncomputed, {});
   assert.deepStrictEqual(
     stats.TIMINGS.map((entry) => entry.key),
@@ -407,7 +440,7 @@ test('an advisory the event is not observable on contributes to no timing', () =
   assert.strictEqual(first?.mean, 60 * 60 * 1000, 'the mean is over what was measured');
   assert.ok(!(first?.values ?? []).includes(0), 'nothing landed as a zero');
 
-  const draft = summary.timings.reportToDraft;
+  const draft = summary.timings.accept;
   assert.deepStrictEqual(draft?.values, [2 * 60 * 60 * 1000]);
   assert.strictEqual(draft?.omitted, 2);
 });
@@ -592,7 +625,10 @@ test('a corpus of one real advisory measures what its page carries', () => {
   assert.deepStrictEqual({ ...summary.counts.state?.counts }, { published: 1 });
   assert.deepStrictEqual({ ...summary.counts.severity?.counts }, { moderate: 1 });
   assert.deepStrictEqual({ ...summary.counts.month?.counts }, { '2026-04': 1 });
-  assert.deepStrictEqual(summary.timings.reportToDraft?.values, [3434 * 1000]);
+  assert.deepStrictEqual(summary.timings.accept?.values, [3434 * 1000]);
+  assert.deepStrictEqual(summary.timings.publish?.values, [10210000 * 1000]);
+  assert.strictEqual(summary.timings.close?.counted, 0, 'a published advisory is not a closed one');
+  assert.strictEqual(summary.timings.close?.omitted, 1);
   // Redaction dropped every comment node from this capture before it was saved,
   // so the file holds none. An advisory with no comment on it answers nobody,
   // and the summary counts it among the omitted rather than at zero.
