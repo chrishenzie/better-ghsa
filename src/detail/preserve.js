@@ -332,6 +332,23 @@ if (typeof require === 'function') {
   }
 
   /**
+   * Whether a press from this page put a comment on the advisory that this
+   * document does not show. A press that reached GitHub may have created the
+   * comment whatever came back, so it counts from the moment it went out until
+   * the page is read again.
+   *
+   * @param {ParsedDetail} advisory
+   * @returns {boolean}
+   */
+  function ahead(advisory) {
+    const ref = advisory.ref;
+    if (ref === null) return false;
+    const attempt = attempts.get(attemptKey(ref));
+    if (attempt !== 'sent' && attempt !== 'written') return false;
+    return !hasPreservationComment(advisory.comments);
+  }
+
+  /**
    * @param {Availability} state
    * @returns {WriteResult}
    */
@@ -449,6 +466,7 @@ if (typeof require === 'function') {
     hasPreservationComment,
     buildBody,
     offered,
+    ahead,
     preserve,
   };
 

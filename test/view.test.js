@@ -947,7 +947,16 @@ test('a closure reason set here goes out through the stored write path', async (
   edit.save = async (context) => {
     saved.push(context);
     landed();
-    return { ok: true, reason: null, status: 200, message: 'saved', snapshot: null, merged: null };
+    return {
+      ok: true,
+      reason: null,
+      status: 200,
+      message: 'saved',
+      snapshot: null,
+      merged: null,
+      advisory: null,
+      readAt: null,
+    };
   };
   try {
     /** @type {HTMLElement} */ (/** @type {unknown} */ (save)).click();
@@ -1046,7 +1055,16 @@ test('the closure controls are held still while a save is out', async () => {
   edit.save = async (context) => {
     saved.push(context);
     await landed;
-    return { ok: true, reason: null, status: 200, message: 'saved', snapshot: null, merged: null };
+    return {
+      ok: true,
+      reason: null,
+      status: 200,
+      message: 'saved',
+      snapshot: null,
+      merged: null,
+      advisory: null,
+      readAt: null,
+    };
   };
   try {
     const flight = view.setReason(doc, TRIAGE_ID, 'out of scope');

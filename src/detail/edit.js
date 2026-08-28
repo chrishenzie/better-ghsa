@@ -13,6 +13,7 @@ if (typeof require === 'function') {
   require('../common/derive.js');
   require('../common/members.js');
   require('../common/branches.js');
+  require('../common/cache.js');
   require('./tracking.js');
   require('./state.js');
 }
@@ -837,6 +838,44 @@ if (typeof require === 'function') {
   }
 
   /**
+   * Puts what a write left on the advisory into the cache.
+   *
+   * REQUIREMENTS.md section 2: a write this extension makes updates the entry
+   * to carry what was written. The comment went to GitHub and is in no open
+   * document, so every surface reading the cache would otherwise go on showing
+   * the state this save replaced until a refetch came due. The entry is stamped
+   * with the moment the write read the advisory, which is when everything in it
+   * but this write's own comment was observed.
+   *
+   * @param {StateWriteResult} outcome
+   * @returns {Promise<void>}
+   */
+  async function hold(outcome) {
+    const advisory = outcome.advisory;
+    if (advisory === null || advisory.ref === null) return;
+    await globalThis.bghsa.cache.putAdvisory(
+      advisory.ref,
+      advisory,
+      outcome.readAt === null ? {} : { at: outcome.readAt }
+    );
+  }
+
+  /**
+   * Whether a write from this page holds state the document has not caught up
+   * with, which is every moment between a save landing and the page being read
+   * again. What that document parses to is not this advisory's state, and
+   * nothing may store it as an observation of one.
+   *
+   * @param {string} key
+   * @param {MergedState} fromPage The state this document's comments merge to.
+   * @returns {boolean}
+   */
+  function ahead(key, fromPage) {
+    const held = written.get(key);
+    return held !== undefined && fromPage.observedSeq < held.observedSeq;
+  }
+
+  /**
    * The state the panel reads: the one a write from this page left behind while
    * it is ahead of the document, and the document's own once the page catches up.
    *
@@ -883,7 +922,16 @@ if (typeof require === 'function') {
    * @returns {StateWriteResult}
    */
   function refused(reason, message) {
-    return { ok: false, reason, status: null, message, snapshot: null, merged: null };
+    return {
+      ok: false,
+      reason,
+      status: null,
+      message,
+      snapshot: null,
+      merged: null,
+      advisory: null,
+      readAt: null,
+    };
   }
 
   /**
@@ -1003,6 +1051,7 @@ if (typeof require === 'function') {
     if (landed !== null) {
       release(key, captured);
       remember(key, landed);
+      await hold(outcome);
     } else if (outcome.merged !== null) {
       remember(key, outcome.merged);
     }
@@ -1725,6 +1774,8 @@ if (typeof require === 'function') {
     unclearable,
     unclearableMessage,
     remember,
+    hold,
+    ahead,
     preferred,
     afterWrite,
     save,

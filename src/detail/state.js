@@ -10,6 +10,8 @@ if (typeof require === 'function') {
   require('../common/parse-detail.js');
   require('../common/derive.js');
   require('../common/write.js');
+  require('../common/members.js');
+  require('../common/cache.js');
 }
 
 /**
@@ -36,6 +38,13 @@ if (typeof require === 'function') {
  * @property {MergedState | null} merged The state the fetched page carried,
  *   and null where the write never read one. A refused write hands this back
  *   so the panel reloads from what the advisory says now.
+ * @property {ParsedDetail | null} advisory The advisory as it stands once this
+ *   write landed: the page this write read, carrying the comment it wrote.
+ *   Null where nothing was written.
+ * @property {number | null} readAt When that page was read, epoch
+ *   milliseconds. Everything in the advisory but this write's own comment was
+ *   observed then, so it is the observation time a cache entry holding it
+ *   carries.
  */
 
 /**
@@ -140,8 +149,11 @@ if (typeof require === 'function') {
    */
   function holderOf(merged) {
     const by = merged.state === null ? undefined : merged.state['by'];
+    // A snapshot the extension wrote onto a comment it has not read back names
+    // no identifier, and an empty one is that and not a comment of its own.
+    const commentId = merged.source?.id ?? '';
     return {
-      commentId: merged.source?.id ?? null,
+      commentId: commentId === '' ? null : commentId,
       by: merged.source?.author ?? (typeof by === 'string' ? by : null),
     };
   }
@@ -287,16 +299,112 @@ if (typeof require === 'function') {
    * @returns {StateWriteResult}
    */
   function refused(reason, status, message, merged) {
-    return { ok: false, reason, status, message, snapshot: null, merged };
+    return {
+      ok: false,
+      reason,
+      status,
+      message,
+      snapshot: null,
+      merged,
+      advisory: null,
+      readAt: null,
+    };
+  }
+
+  /**
+   * The badge GitHub renders beside this account on this advisory, which is
+   * what says whether its snapshots count toward state. A comment it already
+   * holds carries the badge; where it holds none, a member badge this account
+   * carried on another advisory in the same organization stands for it, and
+   * that is the whole of what the extension has seen.
+   *
+   * @param {ParsedDetail} fresh The advisory as this write read it.
+   * @param {string} viewer The account this write went out under.
+   * @returns {string | null}
+   */
+  function roleOf(fresh, viewer) {
+    const trust = globalThis.bghsa.trust;
+    /** @type {string[]} */
+    const roles = [];
+    for (const comment of fresh.comments) {
+      if (!sameLogin(comment.author, viewer)) continue;
+      for (const badge of comment.roles) if (!roles.includes(badge)) roles.push(badge);
+    }
+    const known = trust.ROLES.find((role) => roles.includes(role)) ?? roles[0] ?? null;
+    if (known !== null) return known;
+    return globalThis.bghsa.members.isKnown(fresh.ref, viewer) ? 'Member' : null;
+  }
+
+  /**
+   * The comment this write left on the advisory, in the shape a reader of the
+   * page parses one into.
+   *
+   * A created comment names no identifier: GitHub minted one and the page this
+   * write read does not carry it. The account it went out under is what stands
+   * for it until the advisory is read again, which is what {@link holderOf}
+   * falls back on.
+   *
+   * @param {ParsedDetail} fresh The advisory as this write read it.
+   * @param {string} viewer The account this write went out under.
+   * @param {ParsedComment | undefined} mine The comment this write edited, and
+   *   undefined where it created one.
+   * @param {import('../common/schema.js').SnapshotReport} report The snapshot
+   *   this write put in that comment, as this extension reads it back.
+   * @param {string} at The write time.
+   * @returns {ParsedComment}
+   */
+  function writtenComment(fresh, viewer, mine, report, at) {
+    const schema = globalThis.bghsa.schema;
+    // What the collapsed block renders to: the summary, the marker in its code
+    // span, and the fence. It is the text a reader of the page would collapse
+    // out of the comment body.
+    const text = [schema.STATE_COMMENT_SUMMARY, schema.STATE_COMMENT_MARKER, report.raw]
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (mine !== undefined) return { ...mine, text, stateComment: report };
+    const role = roleOf(fresh, viewer);
+    return {
+      id: '',
+      elementId: '',
+      author: viewer,
+      role,
+      roles: role === null ? [] : [role],
+      trusted: globalThis.bghsa.trust.isTrustedAuthor(viewer, role),
+      at,
+      text,
+      stateComment: report,
+    };
+  }
+
+  /**
+   * The advisory as it stands once this write landed. REQUIREMENTS.md section
+   * 2: a write this extension makes updates the cache entry to carry what was
+   * written, and the page this write read is everything else that entry holds.
+   *
+   * @param {ParsedDetail} fresh
+   * @param {ParsedComment} written The comment this write left.
+   * @param {ParsedComment | undefined} mine The comment it replaced, and
+   *   undefined where it created one.
+   * @returns {ParsedDetail}
+   */
+  function withWrite(fresh, written, mine) {
+    const comments =
+      mine === undefined
+        ? [...fresh.comments, written]
+        : fresh.comments.map((comment) => (comment === mine ? written : comment));
+    return { ...fresh, comments };
   }
 
   /**
    * @param {WriteResult} outcome
    * @param {Record<string, unknown>} snapshot
    * @param {MergedState} merged
+   * @param {{ advisory: ParsedDetail, readAt: number }} read What this write's
+   *   own fetch read, and when.
    * @returns {StateWriteResult}
    */
-  function settled(outcome, snapshot, merged) {
+  function settled(outcome, snapshot, merged, read) {
     return {
       ok: outcome.ok,
       reason: outcome.reason,
@@ -304,6 +412,8 @@ if (typeof require === 'function') {
       message: outcome.message,
       snapshot: outcome.ok ? snapshot : null,
       merged,
+      advisory: outcome.ok ? read.advisory : null,
+      readAt: outcome.ok ? read.readAt : null,
     };
   }
 
@@ -341,6 +451,9 @@ if (typeof require === 'function') {
     try {
       const send = options.fetch;
       const toDocument = options.parseDocument;
+      // Read before the request goes out, because it is when the page this
+      // write reads was read, and an entry holding that page carries it.
+      const readAt = globalThis.bghsa.cache.now();
       const fetched = await write.fetchAdvisoryPage(ref, {
         ...(send === undefined ? {} : { fetch: send }),
         ...(toDocument === undefined ? {} : { parseDocument: toDocument }),
@@ -460,7 +573,10 @@ if (typeof require === 'function') {
         mine === undefined
           ? await write.createComment({ ...common, ...passed })
           : await write.editComment({ ...common, commentId: mine.id, ...passed });
-      return settled(outcome, snapshot, merged);
+      return settled(outcome, snapshot, merged, {
+        advisory: withWrite(fresh, writtenComment(fresh, viewer, mine, reading, at), mine),
+        readAt,
+      });
     } finally {
       inFlight.delete(key);
     }
@@ -471,13 +587,9 @@ if (typeof require === 'function') {
     inFlight,
     advisoryKey,
     sameLogin,
-    snapshotJson,
     buildBody,
-    ownStateComments,
     holderOf,
     sameHolder,
-    nowStamp,
-    seedTriageSince,
     stampTriageSince,
     writeState,
   };

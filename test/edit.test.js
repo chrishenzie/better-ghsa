@@ -16,6 +16,10 @@ const edit = require('../src/detail/edit.js');
 const members = require('../src/common/members.js');
 const branches = require('../src/common/branches.js');
 const panel = require('../src/detail/panel.js');
+const cache = require('../src/common/cache.js');
+const table = require('../src/list/table.js');
+
+const { fakeStorage } = require('../test-support/storage.js');
 
 /** The write time every save below stamps, so the snapshot it writes is exact. */
 const AT = '2026-08-26T11:00:00Z';
@@ -2069,3 +2073,72 @@ test('a confirmation to supersede is not work to warn about', async () => {
   forget();
 });
 
+/** The list row the table builds this advisory's row on top of. */
+const LIST_ROW = {
+  ghsaId: 'GHSA-jmvx-2wfw-xfgj',
+  owner: 'git-utensils',
+  repo: 'Spoon-Knife',
+  href: '/git-utensils/Spoon-Knife/security/advisories/GHSA-jmvx-2wfw-xfgj',
+  title: 'What the list row says',
+  state: 'Triage',
+  severity: 'high',
+  severityLabel: 'High',
+  severityClass: 'Label--orange',
+  openedAt: '2026-08-01T00:00:00Z',
+  reporter: 'prakleumas',
+};
+
+test('a save that landed leaves the list building the row from what it wrote', async () => {
+  forget();
+  const storage = fakeStorage();
+  let clockAt = Date.parse('2026-08-26T11:00:00Z');
+  cache.setStorage(storage);
+  cache.setClock(() => clockAt);
+  try {
+    const { page, talk } = pair('triage-thread.html');
+    const wiring = { fetch: talk.fetch, parseDocument: talk.parseDocument };
+    // The pass that placed the panel, which holds the advisory as this page
+    // shows it. The fixture's embargo lifts on the thirtieth of September.
+    await panel.render(page);
+    const { editor, context } = await editorFor(page, {
+      ...wiring,
+      rerender: async () => {
+        await panel.render(page);
+      },
+    });
+    type(control(editor, 'input.bghsa-embargo-lift'), '2026-08-01');
+    const outcome = await edit.save(context);
+    assert.ok(outcome.ok === true, `the save failed: ${outcome.message}`);
+    assert.deepStrictEqual(sentSnapshot(talk.calls)['embargo'], { lift: '2026-08-01' });
+
+    const ref = /** @type {import('../src/common/parse-detail.js').AdvisoryRef} */ (
+      context.advisory.ref
+    );
+    // A later pass over the same document, which still does not carry the
+    // comment the save wrote. What it parses to is not an observation of this
+    // advisory, and the entry the write left stands at the moment it was read.
+    const wroteAt = clockAt;
+    clockAt += 4 * 60 * 1000;
+    await panel.render(page);
+
+    const entry = await cache.getAdvisory(ref);
+    assert.ok(entry !== null, 'the cache holds no entry for the advisory that was written to');
+    assert.strictEqual(
+      entry.observedAt,
+      wroteAt,
+      'the entry was restamped with the document the write is not in'
+    );
+    const row = await table.viewRow({ row: LIST_ROW, seenAt: cache.now() }, entry, cache.now());
+
+    assert.strictEqual(row.embargo, true, 'the row carries no embargo');
+    assert.strictEqual(
+      row.embargoLift,
+      '2026-08-01',
+      `the row was built from state the save replaced: ${row.embargoLift}`
+    );
+  } finally {
+    cache.setStorage(null);
+    cache.setClock(null);
+    forget();
+  }
+});

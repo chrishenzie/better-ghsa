@@ -11,6 +11,9 @@ const schema = require('../src/common/schema.js');
 const write = require('../src/common/write.js');
 const merge = require('../src/common/merge.js');
 const state = require('../src/detail/state.js');
+const members = require('../src/common/members.js');
+const record = require('../src/common/record.js');
+const cache = require('../src/common/cache.js');
 
 /**
  * @param {string} name
@@ -616,5 +619,124 @@ test('the state comment names the extension and links to it', () => {
   assert.strictEqual(body.trimEnd().endsWith('\n\n</details>'), true);
   // The marker still rides in a code span of its own, outside the fence.
   assert.strictEqual(body.includes(`\n\`${schema.STATE_COMMENT_MARKER}\`\n`), true);
+});
+
+
+/** The moment the clock reads while a write reads the advisory. */
+const READ_AT = Date.parse('2026-08-26T10:59:00Z');
+
+/**
+ * @param {import('../src/detail/state.js').StateWriteResult} outcome
+ * @returns {import('../src/common/parse-detail.js').ParsedDetail} the advisory
+ *   the write says it left behind, put through the cache's own reader, which is
+ *   what every surface reading a stored record sees.
+ */
+function stored(outcome) {
+  const held = record.advisoryFrom(
+    JSON.parse(JSON.stringify(outcome.advisory))
+  );
+  if (held === null) throw new Error('the write left no advisory the cache can read');
+  return held;
+}
+
+test('a write that landed hands back the advisory carrying what it wrote', async () => {
+  cache.setClock(() => READ_AT);
+  try {
+    const { outcome } = await run(triagePage(), { changes: { triage: 'evaluating' } });
+    assert.ok(outcome.ok === true, `the write failed: ${outcome.message}`);
+    assert.strictEqual(outcome.readAt, READ_AT, 'the advisory was stamped at another moment');
+
+    const after = merge.mergeSnapshots(stored(outcome).comments);
+    assert.strictEqual(after.state?.['triage'], 'evaluating', 'the write is not in the advisory');
+    assert.strictEqual(after.seq, 8);
+    assert.strictEqual(after.observedSeq, 8);
+    // The comment that held state is the one the edit replaced the body of, so
+    // the advisory carries one state comment of this maintainer's and not two.
+    assert.strictEqual(after.source?.id, OWN_ID);
+    assert.strictEqual(
+      stored(outcome).comments.filter(
+        (comment) => comment.author === 'samuelkarp' && comment.stateComment !== null
+      ).length,
+      1,
+      'the edit left the maintainer holding two state comments'
+    );
+    // The unknown field rides along, so a reader of the entry carries it forward
+    // the way a reader of the page would.
+    assert.deepStrictEqual(after.state?.['cutleryPolicy'], { sharpened: true });
+  } finally {
+    cache.setClock(null);
+  }
+});
+
+/**
+ * The triage advisory with every comment this maintainer wrote taken out, which
+ * is the advisory a first write creates a comment on. The page still says which
+ * account it is signed in as: that is read off the new-comment box.
+ *
+ * @returns {Document}
+ */
+function pageWithNoOwnComment() {
+  const page = triagePage();
+  for (const id of [OWN_ID, '282846']) {
+    const group = page.querySelector(`#advisory-comment-${id}`);
+    if (group === null) throw new Error(`the fixture carries no comment ${id}`);
+    group.remove();
+  }
+  return page;
+}
+
+test('a created comment reaches the advisory the write hands back', async () => {
+  const page = pageWithNoOwnComment();
+  // Nothing on this page shows the account a badge. A member badge it carried
+  // on another advisory in this organization is what says its snapshots count.
+  members.clear();
+  members.remember({ owner: 'git-utensils' }, ['samuelkarp']);
+  try {
+    const { outcome } = await run(page, { changes: { triage: 'evaluating' } });
+    assert.ok(outcome.ok === true, `the write failed: ${outcome.message}`);
+
+    const after = merge.mergeSnapshots(stored(outcome).comments);
+    assert.strictEqual(after.state?.['triage'], 'evaluating', 'the created comment holds no state');
+    assert.strictEqual(after.seq, 8);
+    // GitHub minted the comment's identifier and the page this write read does
+    // not carry it, so the login it went out under is what stands for it. A
+    // save built on this entry is not refused as another maintainer's.
+    const holder = state.holderOf(after);
+    assert.strictEqual(holder.commentId, null);
+    assert.strictEqual(holder.by, 'samuelkarp');
+    assert.strictEqual(state.sameHolder(holder, { commentId: '99999', by: 'samuelkarp' }), true);
+  } finally {
+    members.clear();
+  }
+});
+
+test('a created comment whose author shows no badge is not counted as state', async () => {
+  members.clear();
+  const { outcome } = await run(pageWithNoOwnComment(), { changes: { triage: 'evaluating' } });
+  assert.ok(outcome.ok === true, `the write failed: ${outcome.message}`);
+
+  // Nothing this extension has read shows the account a member badge, and a
+  // snapshot from an author it cannot place does not hold state. The comment is
+  // in the advisory either way, and the badge on it settles the question when
+  // the advisory is read again.
+  const held = stored(outcome);
+  const written = held.comments.find(
+    (comment) => comment.author === 'samuelkarp' && comment.stateComment !== null
+  );
+  assert.ok(written !== undefined, 'the created comment is not in the advisory');
+  assert.strictEqual(written.stateComment?.seq, 8);
+  assert.strictEqual(written.trusted, false);
+  assert.strictEqual(
+    merge.mergeSnapshots(held.comments).state,
+    null,
+    'an unplaceable author held state'
+  );
+});
+
+test('a write that was refused hands back no advisory', async () => {
+  const { outcome } = await run(triagePage(), { loadedSeq: OBSERVED - 1 });
+  assert.strictEqual(outcome.ok, false);
+  assert.strictEqual(outcome.advisory, null);
+  assert.strictEqual(outcome.readAt, null);
 });
 

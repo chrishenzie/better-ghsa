@@ -17,6 +17,7 @@ const preserve = require('../src/detail/preserve.js');
 const cache = require('../src/common/cache.js');
 const members = require('../src/common/members.js');
 const branches = require('../src/common/branches.js');
+const edit = require('../src/detail/edit.js');
 
 const { fakeStorage } = require('../test-support/storage.js');
 
@@ -1222,6 +1223,60 @@ test('opening an advisory refreshes its cache entry at no request cost', async (
     globalThis.fetch = sent;
     cache.setStorage(null);
     cache.setClock(null);
+  }
+});
+
+
+test('a document behind a write from this page is not stored as a reading', async () => {
+  const at = Date.parse('2026-08-27T09:00:00Z');
+  const storage = fakeStorage();
+  cache.setStorage(storage);
+  cache.setClock(() => at);
+  const key = edit.keyOf(triage);
+  const fromPage = merge.mergeSnapshots(triage.comments);
+  try {
+    const held = await panel.remember(triage);
+    assert.ok(held !== null, 'the page left no entry to stand on');
+
+    // A save wrote a snapshot above every claim this document carries. The
+    // comment holding it is on GitHub and in no open document, so what this
+    // document parses to is state the extension has already replaced.
+    edit.written.set(key, { ...fromPage, seq: 8, observedSeq: 8, nextSeq: 9 });
+    cache.setClock(() => at + 60 * 1000);
+    const again = await panel.remember(triage);
+
+    assert.strictEqual(again, null, 'the pass stored the document the write is not in');
+    const entry = await cache.getAdvisory(triage.ref);
+    assert.strictEqual(
+      entry?.observedAt,
+      at,
+      'the entry was restamped with content read before the write'
+    );
+  } finally {
+    edit.written.delete(key);
+    cache.setStorage(null);
+    cache.setClock(null);
+  }
+});
+
+test('a document behind a preservation comment this page wrote is not stored', async () => {
+  const storage = fakeStorage();
+  cache.setStorage(storage);
+  const ref = /** @type {import('../src/common/parse-detail.js').AdvisoryRef} */ (triage.ref);
+  const key = `${ref.owner}/${ref.repo}/${ref.ghsaId}`.toLowerCase();
+  try {
+    preserve.attempts.set(key, 'written');
+    const held = await panel.remember(triage);
+    assert.strictEqual(held, null, 'the pass stored a document missing the comment it wrote');
+    assert.deepStrictEqual(Object.keys(storage.entries), []);
+
+    // Once the advisory is read again the comment is in it, and the pass stores
+    // what the document says.
+    preserve.attempts.delete(key);
+    assert.ok((await panel.remember(triage)) !== null, 'a document that caught up was not stored');
+  } finally {
+    preserve.attempts.delete(key);
+    cache.setStorage(null);
   }
 });
 

@@ -54,6 +54,13 @@ and refreshed on a schedule that follows the advisory's state, and a stale
 entry is shown while its refresh runs. An entry is evicted when its advisory no
 longer exists, and by a control that clears the cache immediately.
 
+An entry's observation time is the time the content in it was read. A write
+this extension makes updates the entry to carry what was written, so a surface
+reading the cache afterwards sees the new state. Storing content read before a
+write, under a timestamp taken after it, is the one thing the cache must never
+do: the entry then looks fresh enough to skip a refresh while holding state the
+maintainer has already replaced.
+
 Nothing accumulates for a repository the extension does not read, because the
 allowlist bounds what it ever stores.
 

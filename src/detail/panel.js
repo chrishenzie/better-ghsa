@@ -575,14 +575,29 @@ if (typeof require === 'function') {
    * request, and the list table's next pass finds the entry inside the
    * staleness threshold and spends its slot on an advisory nobody has opened.
    *
+   * A write this page made went to GitHub and is in no open document, so
+   * between a write landing and the page being read again this document shows
+   * state the extension has already replaced. Storing that would put content
+   * read before the write under a timestamp taken after it, which
+   * REQUIREMENTS.md section 2 forbids: the entry would look fresh enough to
+   * skip a refresh while holding what the maintainer replaced. The pass stores
+   * nothing until the document catches up, and the entry the write left stands.
+   * The document is merged here rather than taken from the caller, so a pass
+   * reaches the cache through this and not around it.
+   *
    * @param {import('../common/parse-detail.js').ParsedDetail} advisory
    * @returns {Promise<import('../common/cache.js').CacheEntry | null>} the entry
    *   as it was written, and null where nothing was written: a page that did not
-   *   say which advisory it is, and storage that refused the write. The panel
-   *   draws either way, because the cache is never authoritative.
+   *   say which advisory it is, a document behind a write from this page, and
+   *   storage that refused the write. The panel draws either way, because the
+   *   cache is never authoritative.
    */
   function remember(advisory) {
     if (advisory.ref === null) return Promise.resolve(null);
+    const edit = globalThis.bghsa.edit;
+    const fromPage = globalThis.bghsa.merge.mergeSnapshots(advisory.comments);
+    if (edit.ahead(edit.keyOf(advisory), fromPage)) return Promise.resolve(null);
+    if (globalThis.bghsa.preserve.ahead(advisory)) return Promise.resolve(null);
     return globalThis.bghsa.cache.putAdvisory(advisory.ref, advisory);
   }
 
