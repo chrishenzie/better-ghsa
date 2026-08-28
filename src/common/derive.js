@@ -116,8 +116,7 @@ if (typeof require === 'function') require('./trust.js');
    * and the advisory is not published.
    *
    * An advisory whose state this extension could not read counts as unpublished,
-   * because the page said nothing that says otherwise, and the state it could
-   * not read is named in the panel's incomplete banner.
+   * because the page said nothing that says otherwise.
    *
    * @param {import('./parse-detail.js').ParsedDetail} advisory
    * @param {string | null} lift The stored lift date, and null where no embargo

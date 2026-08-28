@@ -38,7 +38,6 @@ if (typeof require === 'function') {
     // `display: list-item`; these cover the ones that do not.
     '.bghsa-editor-summary { cursor: pointer; list-style: none; }',
     '.bghsa-editor-summary::-webkit-details-marker { display: none; }',
-    '.bghsa-missing { font-style: italic; }',
     '.bghsa-confirmed { display: flex; flex-direction: column; gap: 6px; }',
     '.bghsa-confirmation-name { flex: 0 0 13rem; }',
     // `currentColor` is what a foreground falls back to: the page's own text
@@ -58,40 +57,11 @@ if (typeof require === 'function') {
       ' border-color: var(--borderColor-danger-emphasis, #cf222e); }',
   ].join('\n');
 
-  /** The text shown in place of a value that could not be read. */
-  const MISSING = 'missing';
+  /** What a row reads where the extension could not read the value behind it. */
+  const UNKNOWN = 'Unknown';
 
   /** How every surface builds an element. */
   const element = globalThis.bghsa.dom.element;
-
-  /**
-   * The names of the values the extension could not read from the page. An empty
-   * list means every value it set out to read is in hand.
-   *
-   * @param {import('../common/parse-detail.js').ParsedDetail} advisory
-   * @param {import('../common/derive.js').DerivedState} derived
-   * @returns {string[]}
-   */
-  function missingValues(advisory, derived) {
-    /** @type {string[]} */
-    const missing = [];
-    if (advisory.ghsaId === null) missing.push('advisory id');
-    if (advisory.state === null) missing.push('state');
-    if (advisory.severity === null) missing.push('severity');
-    // The confirmations bind to these, so a track cannot be judged without them.
-    // The scoring sources are named by whether the form carries them: a severity
-    // nobody has set and a vector nobody has filled in are a scoring state, and
-    // a field this extension cannot find is a value it did not read.
-    if (advisory.title === null) missing.push('advisory title');
-    if (advisory.description === null) missing.push('advisory description');
-    if (!advisory.severityFieldPresent) missing.push('severity selection');
-    if (!advisory.cvssV3Present) missing.push('CVSS vector');
-    if (advisory.reporter === null) missing.push('reporter');
-    if (advisory.reportedAt === null) missing.push('report time');
-    if (advisory.descriptionOriginal === null) missing.push('description provenance');
-    if (derived.patch.incomplete) missing.push('pull request state');
-    return missing;
-  }
 
   /**
    * A chip. A tone names a Primer state token, and a chip with no tone is
@@ -150,21 +120,17 @@ if (typeof require === 'function') {
    * something needs attention.
    *
    * The advisory page carries the state, the severity, and the CVE above the
-   * panel, so the row does not repeat them. A value of theirs the extension
-   * could not read is named in the incomplete banner.
+   * panel, so the row does not repeat them.
    *
    * @param {Document} doc
    * @param {import('../common/derive.js').DerivedState} derived
-   * @param {boolean} embargoOverdue Whether the embargo's lift date has gone by
-   *   on an advisory that is not published.
    * @returns {Element}
    */
-  function buildChips(doc, derived, embargoOverdue) {
+  function buildChips(doc, derived) {
     const header = element(doc, 'div', 'Box-header bghsa-chips');
     header.append(element(doc, 'strong', 'mr-2', 'Better GHSA'));
     if (derived.neverReviewed) header.append(chip(doc, 'Never reviewed', 'danger'));
     if (derived.newActivity) header.append(chip(doc, 'New activity', 'attention'));
-    if (embargoOverdue) header.append(chip(doc, 'Embargo overdue', 'danger'));
     return header;
   }
 
@@ -260,6 +226,20 @@ if (typeof require === 'function') {
   }
 
   /**
+   * What the embargo chip reads. The row is labelled `Embargo`, so the chip
+   * says where the embargo stands and does not name it again.
+   *
+   * @param {string | null} lift The stored lift date.
+   * @param {boolean} overdue Whether that date has gone by on an advisory that
+   *   is not published.
+   * @returns {string}
+   */
+  function embargoText(lift, overdue) {
+    if (lift === null) return 'No lift date';
+    return overdue ? `Overdue since ${lift}` : `Lifts ${lift}`;
+  }
+
+  /**
    * A row carrying one chip per value.
    *
    * @param {Document} doc
@@ -310,12 +290,13 @@ if (typeof require === 'function') {
       const built = row(doc, 'Embargo');
       built.body.className = 'flex-auto bghsa-chips';
       // An embargo in force and an embargo whose date has gone by are two
-      // states, and the chip does not paint them alike. The chip row carries the
-      // overdue one as well; this one carries the date.
+      // states, and the words carry the difference: the red tone repeats what
+      // the chip says and never says it alone. The row is labeled `Embargo`, so
+      // the chip carries the date and nothing else.
       built.body.append(
         chip(
           doc,
-          tracking.embargoLift === null ? 'In force, no lift date' : `Lifts ${tracking.embargoLift}`,
+          embargoText(tracking.embargoLift, embargoOverdue),
           embargoOverdue ? 'danger' : 'attention'
         )
       );
@@ -455,34 +436,25 @@ if (typeof require === 'function') {
       advisory,
       tracking.embargo ? tracking.embargoLift : null
     );
-    panel.append(buildChips(doc, derived, embargoOverdue));
+    panel.append(buildChips(doc, derived));
 
-    const missing = missingValues(advisory, derived);
-    if (missing.length > 0) {
-      const banner = warning(
-        doc,
-        `Incomplete: this extension could not read ${missing.join(', ')}.`
-      );
-      banner.classList.add('bghsa-banner');
-      banner.classList.remove('mt-2');
-      panel.append(banner);
-    }
-
-    if (derived.patch.incomplete) {
-      panel.append(warning(doc, 'A pull request named a state this extension does not read.'));
-    }
-
+    // A value the extension could not read is answered in the row that stands
+    // for it, and a value with no row of its own goes unmentioned: the panel
+    // says what the advisory is, and there is nothing to act on in a list of
+    // what a parser missed.
     if (!settled(advisory)) panel.append(buildConfirmations(doc, tracking));
     for (const track of buildTracks(doc, tracking, embargoOverdue)) panel.append(track);
 
     const descriptionRow = row(doc, 'Description');
-    if (advisory.descriptionOriginal === null) {
-      descriptionRow.body.append(doc.createTextNode('Provenance '));
-      descriptionRow.body.append(element(doc, 'span', 'bghsa-missing', MISSING));
-      descriptionRow.body.append(doc.createTextNode('.'));
-    } else {
-      descriptionRow.body.textContent = advisory.descriptionOriginal ? 'Not updated' : 'Updated';
-    }
+    // Nothing on the page says whether this text is the reporter's own where no
+    // preserved comment stands to compare it against, which is the same answer
+    // an unread confirmation gives.
+    descriptionRow.body.textContent =
+      advisory.descriptionOriginal === null
+        ? UNKNOWN
+        : advisory.descriptionOriginal
+          ? 'Not updated'
+          : 'Updated';
     panel.append(descriptionRow.row);
     panel.append(buildPreserve(doc, advisory));
 
@@ -726,12 +698,12 @@ if (typeof require === 'function') {
   const exported = {
     PANEL_ID,
     STYLE_ID,
-    MISSING,
+    UNKNOWN,
     SETTLED_STATES,
     settled,
-    missingValues,
     when,
     sentenceCase,
+    embargoText,
     buildConfirmations,
     buildTracks,
     buildPreserve,

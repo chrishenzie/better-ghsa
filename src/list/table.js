@@ -368,14 +368,17 @@ if (typeof require === 'function') {
   /** What the patch chip reads while the fork holds no pull request. */
   const NO_PATCH = 'No patch yet';
 
+  /** What the patch chip reads where a pull request named a state nobody reads. */
+  const PATCH_UNKNOWN = 'Unknown';
+
   /** The state GitHub gives an advisory nobody has published or closed yet. */
   const DRAFT_STATE = 'Draft';
 
   /**
    * The furthest state the advisory's private fork reached. A pull request whose
-   * state went unread leaves this null where nothing else is open or merged,
-   * because a closed patch and a patch this reader could not judge are not the
-   * same thing.
+   * state went unread leaves the chip reading `Unknown` where nothing else is
+   * open or merged, because a closed patch and a patch this reader could not
+   * judge are not the same thing.
    *
    * @param {import('../common/derive.js').PatchState} patch
    * @returns {string | null}
@@ -384,7 +387,8 @@ if (typeof require === 'function') {
     const states = patch.pullRequests.map((pull) => pull.state);
     if (states.includes('open')) return PATCH_IN_REVIEW;
     if (states.includes('merged')) return 'Patch merged';
-    if (patch.incomplete || states.length === 0) return null;
+    if (patch.incomplete) return PATCH_UNKNOWN;
+    if (states.length === 0) return null;
     return 'Patch closed';
   }
 
@@ -664,13 +668,14 @@ if (typeof require === 'function') {
       chips.push({ text: 'Scoring confirmed' });
     }
 
-    if (row.embargoOverdue) chips.push({ text: 'Embargo overdue', tone: 'danger' });
-    else if (row.embargo) {
+    // A row carries no labels, so each chip names the thing it is about. The
+    // three cases are the ones the panel's embargo row shows.
+    if (row.embargo || row.embargoOverdue) {
       const lift = row.embargoLift;
-      chips.push({
-        text: lift === null ? 'Embargoed' : `Embargo lifts ${lift}`,
-        tone: 'attention',
-      });
+      if (lift === null) chips.push({ text: 'Embargo, no lift date', tone: 'attention' });
+      else if (row.embargoOverdue) {
+        chips.push({ text: `Embargo overdue since ${lift}`, tone: 'danger' });
+      } else chips.push({ text: `Embargo lifts ${lift}`, tone: 'attention' });
     }
 
     return chips;

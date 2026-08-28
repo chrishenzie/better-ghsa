@@ -270,39 +270,34 @@ test('a signal that is not firing carries no chip', () => {
   );
 });
 
-test('an embargo whose lift date has gone by carries a chip in a state color', async () => {
-  const built = await buildWith(triage, { embargo: { lift: '2000-01-01' } });
-  assert.deepStrictEqual(texts(built, '.Box-header .Label'), ['Embargo overdue']);
-  assert.strictEqual(
-    chipClass(built, 'Embargo overdue'),
-    'Label Label--secondary bghsa-tone-danger'
-  );
-});
-
-test('an embargo still in force carries no chip', async () => {
-  const built = await buildWith(triage, { embargo: { lift: '2999-12-31' } });
-  assert.deepStrictEqual(texts(built, '.Box-header .Label'), []);
-});
-
-test('an embargo past its lift date does not look like one in force', async () => {
+test('an embargo past its lift date says overdue in words, not only in tone', async () => {
   const built = await buildWith(triage, { embargo: { lift: '2000-01-01' } });
   assert.deepStrictEqual(rowChip(built, 'Embargo'), {
-    text: 'Lifts 2000-01-01',
+    text: 'Overdue since 2000-01-01',
     classes: 'Label Label--secondary bghsa-tone-danger',
   });
+  // The tone repeats what the chip says and never carries a fact on its own, so
+  // the words part the two states without it.
+  const inForce = await buildWith(triage, { embargo: { lift: '2999-12-31' } });
+  assert.notStrictEqual(
+    rowChip(built, 'Embargo').text,
+    rowChip(inForce, 'Embargo').text,
+    'an overdue embargo and one in force read alike'
+  );
 });
 
 test('an embargo with no lift date is a chip saying so', async () => {
   const built = await buildWith(triage, { embargo: {} });
   assert.deepStrictEqual(rowChip(built, 'Embargo'), {
-    text: 'In force, no lift date',
+    text: 'No lift date',
     classes: 'Label Label--secondary bghsa-tone-attention',
   });
 });
 
-test('an advisory with no embargo carries no overdue chip', async () => {
+test('an advisory with no embargo carries no chip about one', async () => {
   const built = await buildWith(triage, { triage: 'evaluating' });
   assert.deepStrictEqual(texts(built, '.Box-header .Label'), []);
+  assert.deepStrictEqual(rowLabels(built).includes('Embargo'), false);
 });
 
 test('the panel reports whether the description is the original text', () => {
@@ -428,24 +423,27 @@ test('a scoring source the form does not carry reads as unread, not as drift', a
     `the scoring chip is toned: ${scoring.classes}`
   );
   assert.strictEqual(scoring.note, '', `the chip carries a note: ${scoring.note}`);
-  assert.deepStrictEqual(texts(built, '.bghsa-banner'), [
-    'Incomplete: this extension could not read severity selection.',
-  ]);
+  assert.deepStrictEqual(texts(built, '.bghsa-warning'), []);
 });
 
-test('a CVSS vector field the form does not carry raises the banner', async () => {
+test('a CVSS vector the form does not carry reads as unread, not as drift', async () => {
+  // The sibling of the severity case above. Either half of the score going
+  // unread leaves the pair unfingerprintable, so a confirmation stored against
+  // the real pair cannot be checked and is not evidence of a change either.
   const unread = withRenamedField('cvss_v3');
-  assert.strictEqual(unread.cvssV3Present, false);
-  assert.deepStrictEqual(panel.missingValues(unread, derive.derive(unread)), ['CVSS vector']);
-  assert.strictEqual(
-    (await tracking.fingerprints(unread)).scoring,
-    null,
-    'a vector that was not read still fingerprinted'
-  );
-  const built = build(unread);
-  assert.deepStrictEqual(texts(built, '.bghsa-banner'), [
-    'Incomplete: this extension could not read CVSS vector.',
-  ]);
+  const built = await buildWith(unread, {
+    confirmed: {
+      scoring: {
+        by: 'dmcgowan',
+        at: '2026-08-21T14:02:00Z',
+        fp: await schema.scoringFingerprint(triage.severityField, triage.cvssV3),
+      },
+    },
+  });
+  const scoring = confirmation(built, 'Severity');
+  assert.ok(scoring.chip === 'Unknown', `the scoring chip reads ${scoring.chip}`);
+  assert.strictEqual(scoring.note, '', `the chip carries a note: ${scoring.note}`);
+  assert.deepStrictEqual(texts(built, '.bghsa-warning'), []);
 });
 
 test('the stored tracks the triage advisory carries are shown', async () => {
@@ -601,43 +599,9 @@ test('injecting twice leaves one panel', () => {
   assert.strictEqual(doc.querySelectorAll('#bghsa-style').length, 1);
 });
 
-test('an advisory whose every displayed value reads carries no banner', () => {
-  assert.deepStrictEqual(texts(build(triage), '.bghsa-banner'), []);
-});
-
-test('a severity that cannot be read raises the banner, which no chip carries', () => {
-  const built = build(draft);
-  assert.strictEqual(draft.severityLabel, null);
-  assert.deepStrictEqual(texts(built, '.Box-header .Label'), []);
-  assert.deepStrictEqual(texts(built, '.bghsa-banner'), [
-    'Incomplete: this extension could not read severity.',
-  ]);
-});
-
-test('a description whose provenance cannot be read is shown as missing', () => {
+test('a description whose provenance cannot be read is shown as unknown', () => {
   const built = build({ ...draft, descriptionOriginal: null });
-  assert.strictEqual(rowText(built, 'Description'), 'Provenance missing.');
-  assert.deepStrictEqual(texts(built, '.Box-row .bghsa-missing'), ['missing']);
-  assert.deepStrictEqual(texts(built, '.bghsa-banner'), [
-    'Incomplete: this extension could not read severity, description provenance.',
-  ]);
-});
-
-test('a pull request state that went unread raises the banner and a warning', () => {
-  const built = build(withUnreadPullState());
-  assert.deepStrictEqual(texts(built, '.bghsa-banner'), [
-    'Incomplete: this extension could not read pull request state.',
-  ]);
-  assert.deepStrictEqual(texts(built, '.bghsa-warning:not(.bghsa-banner)'), [
-    'A pull request named a state this extension does not read.',
-  ]);
-});
-
-test('a published advisory reads every value it displays', () => {
-  const built = build(published);
-  assert.deepStrictEqual(texts(built, '.Box-header .Label'), []);
-  assert.deepStrictEqual(texts(built, '.bghsa-banner'), []);
-  assert.deepStrictEqual(texts(built, '.bghsa-warning'), []);
+  assert.strictEqual(rowText(built, 'Description'), 'Unknown');
 });
 
 test('a document that is not an advisory detail page gets no panel', async () => {
@@ -646,15 +610,6 @@ test('a document that is not an advisory detail page gets no panel', async () =>
     assert.ok((await panel.render(doc)) === null, name);
     assert.ok(doc.getElementById('bghsa-detail-panel') === null, name);
   }
-});
-
-test('the values the panel could not read are named once each', () => {
-  assert.deepStrictEqual(panel.missingValues(draft, derive.derive(draft)), ['severity']);
-  assert.deepStrictEqual(panel.missingValues(published, derive.derive(published)), []);
-  const unread = withUnreadPullState();
-  assert.deepStrictEqual(panel.missingValues(unread, derive.derive(unread)), [
-    'pull request state',
-  ]);
 });
 
 test('a panel no longer sitting at its anchor is put back there', () => {
@@ -770,27 +725,29 @@ test('a live region whose content is replaced marks its snapshots again', async 
   }
 });
 
-test('a severity a live region stopped carrying reaches the banner', async () => {
+test('a state a live region moved on reaches the panel', async () => {
   reset(triageDoc);
   const title = region('title');
   const refreshed = refreshedCopy(title);
-  const severity = refreshed.querySelector('.Label--large');
-  if (severity === null) throw new Error('the title region carries no severity label');
-  severity.remove();
+  const state = refreshed.querySelector('.State');
+  if (state === null) throw new Error('the title region carries no state label');
+  // The confirmations answer whether the text was made publishable and the
+  // score approved, and publication answers both by having happened.
+  state.textContent = 'Published';
 
   const injected = await panel.render(triageDoc);
   assert.ok(injected !== null, 'render placed no panel');
-  const banners = () =>
-    texts(/** @type {Element} */ (triageDoc.getElementById(panel.PANEL_ID)), '.bghsa-banner');
-  assert.deepStrictEqual(banners(), []);
+  const confirmations = () =>
+    /** @type {Element} */ (triageDoc.getElementById(panel.PANEL_ID)).querySelectorAll(
+      '.bghsa-confirmed'
+    ).length;
+  assert.strictEqual(confirmations(), 1, 'the triage advisory carries no confirmations');
 
   const observer = panel.observe(triageDoc);
   try {
     title.replaceWith(refreshed);
-    await until(() => banners().length > 0);
-    assert.deepStrictEqual(banners(), [
-      'Incomplete: this extension could not read severity.',
-    ]);
+    await until(() => confirmations() === 0);
+    assert.strictEqual(confirmations(), 0, 'the panel still answers for a published advisory');
     assert.strictEqual(triageDoc.querySelectorAll(`#${panel.PANEL_ID}`).length, 1);
   } finally {
     observer?.disconnect();

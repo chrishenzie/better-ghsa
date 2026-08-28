@@ -775,8 +775,8 @@ test('the CVE, patch, backport, and embargo chips read what the advisory holds',
 
   // A pull request this reader could not judge leaves the fork holding one, so
   // the row says neither that a patch is under review nor that none exists.
-  const unjudged = chipsOf({ ...draft, patch: null, pullRequests: 1 });
-  assert.ok(unjudged === 'Blocked on us[danger]', `a patch state nobody read: ${unjudged}`);
+  const unjudged = chipsOf({ ...draft, patch: 'Unknown', pullRequests: 1 });
+  assert.ok(unjudged === 'Blocked on us[danger] | Unknown', `a patch state nobody read: ${unjudged}`);
 
   // The same three forks on an advisory in triage, which is owed no patch.
   for (const held of [
@@ -811,18 +811,21 @@ test('the CVE, patch, backport, and embargo chips read what the advisory holds',
 
   const undated = chipsOf({ read: true, embargo: true });
   assert.ok(
-    undated === 'Blocked on us[danger] | Embargoed[attention]',
+    undated === 'Blocked on us[danger] | Embargo, no lift date[attention]',
     `an embargo with no date: ${undated}`
   );
 
+  // A row carries no labels, so the chip names the embargo and says where it
+  // stands. The date parts the overdue chip from the one in force, because a
+  // tone never carries a fact the chip's words leave out.
   const overdue = chipsOf({ read: true, embargo: true, embargoLift: '2026-08-01', embargoOverdue: true });
   assert.ok(
-    overdue === 'Blocked on us[danger] | Embargo overdue[danger]',
+    overdue === 'Blocked on us[danger] | Embargo overdue since 2026-08-01[danger]',
     `an embargo a maintainer has to act on: ${overdue}`
   );
 });
 
-test('the patch chip says nothing about a pull request whose state went unread', () => {
+test('the patch chip reads Unknown over a pull request whose state went unread', () => {
   const unread = table.patchStateOf({
     hasFork: true,
     pullRequests: [
@@ -835,7 +838,20 @@ test('the patch chip says nothing about a pull request whose state went unread',
     unknown: [1],
     incomplete: true,
   });
-  assert.ok(unread === null, `a patch state this reader cannot judge: ${unread}`);
+  assert.ok(unread === 'Unknown', `a patch state this reader cannot judge: ${unread}`);
+
+  // A fork holding nothing is not a state this reader failed to read.
+  const empty = table.patchStateOf({
+    hasFork: true,
+    pullRequests: [],
+    branches: [],
+    merged: [],
+    open: [],
+    closed: [],
+    unknown: [],
+    incomplete: false,
+  });
+  assert.ok(empty === null, `a fork holding no pull request: ${empty}`);
 });
 
 test('a page that is not an advisory list gets no table', async () => {
