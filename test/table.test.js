@@ -687,7 +687,7 @@ test('a chip stands for a condition that holds and is absent when it does not', 
   assert.ok(unconfirmed === 'Blocked on us[danger]', `text unconfirmed: ${unconfirmed}`);
 });
 
-test('the severity chip carries the scoring confirmation', () => {
+test('the severity chip marks the unconfirmed case and no other', () => {
   const unread = chipsOf({ severityLabel: 'Critical' });
   assert.ok(unread === 'Critical[dim]', `nothing read, so nobody has confirmed it: ${unread}`);
 
@@ -697,19 +697,17 @@ test('the severity chip carries the scoring confirmation', () => {
     `severity nobody confirmed: ${unconfirmed}`
   );
 
+  // The confirmed case is the ordinary one, so the chip is the level alone.
   const confirmed = chipsOf({ read: true, severityLabel: 'Low', severityConfirmed: true });
   assert.ok(
-    confirmed === 'Blocked on us[danger] | Low, confirmed',
+    confirmed === 'Blocked on us[danger] | Low',
     `severity a maintainer confirmed: ${confirmed}`
   );
 
-  // With no severity set there is no chip for the mark to ride, so it stands
-  // alone rather than going unsaid.
+  // With no severity set there is no chip, and the confirmation gets none of
+  // its own: the panel is where a confirmation is read.
   const noSeverity = chipsOf({ read: true, severityConfirmed: true });
-  assert.ok(
-    noSeverity === 'Blocked on us[danger] | Scoring confirmed',
-    `no severity set: ${noSeverity}`
-  );
+  assert.ok(noSeverity === 'Blocked on us[danger]', `no severity set: ${noSeverity}`);
 });
 
 test('the severity chip takes the class GitHub painted, not one off the level', () => {
@@ -724,7 +722,7 @@ test('the severity chip takes the class GitHub painted, not one off the level', 
     severityConfirmed: true,
   });
   assert.ok(
-    carried === 'Blocked on us[danger] | Critical, confirmed[Label--orange]',
+    carried === 'Blocked on us[danger] | Critical[Label--orange]',
     `the class GitHub painted: ${carried}`
   );
 
@@ -738,7 +736,7 @@ test('the severity chip takes the class GitHub painted, not one off the level', 
   // the extension paints nothing of its own in its place.
   const bare = chipsOf({ read: true, severityLabel: 'Critical', severityConfirmed: true });
   assert.ok(
-    bare === 'Blocked on us[danger] | Critical, confirmed',
+    bare === 'Blocked on us[danger] | Critical',
     `no class on GitHub's chip: ${bare}`
   );
 });

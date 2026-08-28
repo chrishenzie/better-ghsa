@@ -654,17 +654,16 @@ if (typeof require === 'function') {
 
     if (row.cve !== null) chips.push({ text: row.cve });
 
+    // A confirmed severity is the ordinary case and reads as the level alone.
+    // A row nothing has been read on says nothing either way, and its whole row
+    // is dim, so the level stands bare there too.
     if (row.severityLabel !== null) {
       const severity = sentenceCase(row.severityLabel);
       chips.push({
-        text: row.read
-          ? `${severity}, ${row.severityConfirmed ? 'confirmed' : 'unconfirmed'}`
-          : severity,
+        text: row.read && !row.severityConfirmed ? `${severity}, unconfirmed` : severity,
         severityClass: row.severityClass,
         dim: !row.severityConfirmed,
       });
-    } else if (row.severityConfirmed) {
-      chips.push({ text: 'Scoring confirmed' });
     }
 
     // A row carries no labels, so each chip names the thing it is about. The
