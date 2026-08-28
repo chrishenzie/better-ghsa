@@ -508,17 +508,81 @@ test('a next link that leaves this repository is not followed', async () => {
 
 test('a walk gives up rather than following a cycle', async () => {
   const storage = fakeStorage();
-  // Every page names itself as the next one, which is what a walk with no bound
-  // would follow forever at a request a second.
+  // Every page names itself as the next one, which is what a walk that followed
+  // a page it had already read would follow forever at a request a second.
   const queue = fakeQueue({
     [TRIAGE_URL]: listHtml({ state: 'triage', ids: [ghsa('aaaa')], next: TRIAGE_URL }),
   });
   const result = await crawls.crawl(
-    options({ queue, storage, now: () => 0, states: ['triage'], maxPages: 3 })
+    options({ queue, storage, now: () => 0, states: ['triage'] })
   );
 
-  assert.ok(queue.urls.length === 3, `${queue.urls.length} pages were read`);
+  assert.deepStrictEqual(queue.urls, [TRIAGE_URL], 'the page was read more than once');
   assert.deepStrictEqual(result.ids, [ghsa('aaaa')]);
+  assert.ok(!result.complete, 'a walk that stopped on a cycle reported itself complete');
+});
+
+/**
+ * A state of `count` pages, each linking to the next and the last linking
+ * nowhere.
+ *
+ * @param {number} count
+ * @returns {Record<string, string>}
+ */
+function pagedTriage(count) {
+  /** @type {Record<string, string>} */
+  const pages = {};
+  for (let page = 1; page <= count; page += 1) {
+    const url = page === 1 ? TRIAGE_URL : `${TRIAGE_URL}&page=${page}`;
+    pages[url] = listHtml({
+      state: 'triage',
+      ids: [ghsa(String(page).padStart(4, '0'))],
+      next: page === count ? null : `${TRIAGE_URL}&page=${page + 1}`,
+    });
+  }
+  return pages;
+}
+
+test('a walk reads every page of a state, however many there are', async () => {
+  const storage = fakeStorage();
+  // Past any bound this crawl has ever carried, so a walk that stopped at one
+  // would leave the last pages unread and say the state was done.
+  const pages = pagedTriage(60);
+  const queue = fakeQueue(pages);
+  const result = await crawls.crawl(
+    options({ queue, storage, now: () => 0, states: ['triage'] })
+  );
+
+  assert.strictEqual(queue.urls.length, 60, `${queue.urls.length} pages were read`);
+  assert.strictEqual(result.fetched, 60);
+  assert.ok(result.complete, 'the walk did not reach the last page');
+  assert.ok(
+    result.ids.includes(ghsa('0060')),
+    'the advisory on the last page is not in the crawl'
+  );
+});
+
+test('a walk that stops with a page still to read is not recorded complete', async () => {
+  const storage = fakeStorage();
+  const pages = pagedTriage(60);
+  // The queue answers the first fifty-two pages and reports the rest stopped,
+  // which is the maintainer navigating away mid-state.
+  const held = Object.fromEntries(
+    Object.entries(pages).filter(([url]) => {
+      const page = Number(url.split('page=')[1] ?? '1');
+      return page <= 52;
+    })
+  );
+  const queue = stoppedQueue(held);
+  const result = await crawls.crawl(
+    options({ queue, storage, now: () => 0, states: ['triage'] })
+  );
+
+  assert.strictEqual(result.fetched, 52, `${result.fetched} pages were read`);
+  assert.ok(!result.complete, 'a walk that stopped short reported itself complete');
+  const walk = crawls.walkOf(result.list, 'triage');
+  assert.ok(!walk.complete, 'the stored walk reported itself complete');
+  assert.strictEqual(walk.next, `${TRIAGE_URL}&page=53`, `the walk was holding ${walk.next}`);
 });
 
 test('a crawl record of another shape crawls from the start', async () => {

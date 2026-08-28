@@ -75,7 +75,6 @@ if (typeof require === 'function') {
  * @property {() => number} [now]
  * @property {readonly string[]} [states] The states to walk, and absent for the
  *   open pair.
- * @property {number} [maxPages] How many pages one state's walk may read.
  * @property {(html: string) => import('./parse-list.js').ParsedList | null} [parse]
  * @property {(list: CrawledList) => void} [onPage] Called when a page lands and
  *   when the live page's own rows are taken in, which is what repaints the
@@ -84,17 +83,6 @@ if (typeof require === 'function') {
  */
 
 (() => {
-  /**
-   * How many pages one state's walk may read.
-   *
-   * GitHub pages the advisory list, and the walk follows what the page says the
-   * next one is. A `rel="next"` that names a page already read would otherwise
-   * walk forever at a request a second. Fifty pages is far past any repository's
-   * open set: `containerd/containerd` has shown tens of open advisories, and a
-   * page holds twenty-five.
-   */
-  const MAX_PAGES = 50;
-
   /**
    * How many times in a row a walk may fail to read the page it is holding
    * before it gives that page up.
@@ -492,7 +480,6 @@ if (typeof require === 'function') {
     const storage = options.storage ?? null;
     const clock = options.now ?? (() => globalThis.bghsa.cache.now());
     const states = options.states ?? globalThis.bghsa.parseList.OPEN_STATES;
-    const maxPages = options.maxPages ?? MAX_PAGES;
     const parse =
       options.parse ??
       ((html) =>
@@ -572,10 +559,20 @@ if (typeof require === 'function') {
         await persist();
       }
 
+      // The pages this pass has asked for. REQUIREMENTS.md section 9 walks every
+      // page of a state, so nothing bounds how many are read; a `rel="next"`
+      // that names a page this pass already read is the one thing the walk will
+      // not follow, because following it is a request a second forever. The
+      // walk keeps its place, so it is not complete and it prunes nothing.
+      /** @type {Set<string>} */
+      const seen = new Set();
+
       for (;;) {
         const walk = walkOf(list, state);
         const url = walk.next;
         if (walk.complete || url === null) break;
+        if (seen.has(url)) break;
+        seen.add(url);
 
         const answer = await options.queue.page(url);
         if (answer.stopped) {
@@ -611,7 +608,7 @@ if (typeof require === 'function') {
         absorb(list, page.rows, state, at);
         const next = advisoriesPath(page.next?.href, ref);
         const pages = walk.pages + 1;
-        const complete = next === null || pages >= maxPages;
+        const complete = next === null;
         list.walks[state] = {
           next,
           started: true,
@@ -623,8 +620,8 @@ if (typeof require === 'function') {
           stalled: false,
           abandonedAt: 0,
         };
-        // A walk that gave up at the page bound has not seen the whole state, so
-        // what it did not see this time is not gone.
+        // Only the walk that reached the last page has seen the whole state, so
+        // what a walk that stopped short did not see this time is not gone.
         if (next === null) prune(list, state, walk.startedAt);
         await persist();
         report();
@@ -642,22 +639,12 @@ if (typeof require === 'function') {
   }
 
   const exported = {
-    MAX_PAGES,
-    MAX_FAILURES,
     stateKeyOf,
-    listUrl,
     advisoriesPath,
     pageOf,
-    rowFrom,
     listFrom,
     walkOf,
-    absorb,
-    prune,
-    rowsIn,
-    idsIn,
     isDue,
-    inProgress,
-    noteFailure,
     seed,
     crawl,
   };
