@@ -331,8 +331,16 @@ Timing, reconstructed from page-observable events:
   the extension did not write. Neither the state comment nor the preserved
   original report is a maintainer answering a reporter, so neither counts.
   First contact made by email is not visible and is not counted.
-- Time from report to entering Draft.
-- Time from report to close.
+- Time to accept, measured to the advisory entering draft.
+- Time to close.
+- Time to publish.
+
+Closing and publishing are two different endings and are measured separately.
+
+A timing says how many advisories it could not measure and why, as a row of its
+own beside the counts: an advisory with no response, one never accepted, one
+never closed, one never published. The reason is a label and a number, not a
+sentence.
 
 A metric is omitted when the event it needs is not observable. It is not
 estimated.
