@@ -2162,7 +2162,7 @@ test('every filter reads the fixture the cache holds', async () => {
   assert.ok(
     facetLine(read) ===
       'waiting=Blocked on the reporter severity=High owner=samuelkarp state=Triage' +
-        ' patch=In review backports=Outstanding embargo=Set',
+        ' patch= backports=Outstanding embargo=Set',
     `the facets of the cached triage read: ${facetLine(read)}`
   );
 
@@ -2182,6 +2182,40 @@ test('every filter reads the fixture the cache holds', async () => {
       `${each.key}: a filter on ${wanted} hides the row before it is read`
     );
   }
+});
+
+/**
+ * @param {Partial<import('../src/list/table.js').TableRow>} changes
+ * @returns {string} what the Patch filter reads off that row.
+ */
+function patchValueOf(changes) {
+  const facet = table.FACETS.find((each) => each.key === 'patch');
+  if (facet === undefined) throw new Error('the table offers no patch facet');
+  return facet.valuesOf(rowWith(changes)).join('+');
+}
+
+// The Patch filter and the patch chip describe the same rows. The chip stands
+// on a draft and on no other, so a triage advisory holding an open pull request
+// must not filter under a value its row never shows.
+test('the patch filter reads a draft row and no other', () => {
+  assert.strictEqual(patchValueOf({ read: true, state: 'Draft', patch: 'Patch in review' }), 'In review');
+  assert.strictEqual(patchValueOf({ read: true, state: 'Draft', patch: 'No patch yet' }), 'No patch');
+
+  // A draft whose pull request named a state this reader does not know shows
+  // `Unknown`, which is the absence of an answer and not one of the two values.
+  assert.strictEqual(patchValueOf({ read: true, state: 'Draft', patch: 'Unknown' }), '');
+
+  for (const state of ['Triage', 'Published', 'Closed', null]) {
+    assert.strictEqual(
+      patchValueOf({ read: true, state, patch: 'Patch in review' }),
+      '',
+      `a ${state} advisory with an open pull request filters under a chip it does not show`
+    );
+    assert.strictEqual(patchValueOf({ read: true, state, patch: 'No patch yet' }), '');
+  }
+
+  // A row nothing has been read on holds no patch state at all.
+  assert.strictEqual(patchValueOf({ state: 'Draft', patch: null }), '');
 });
 
 /**

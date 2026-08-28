@@ -368,6 +368,12 @@ if (typeof require === 'function') {
   /** What the patch chip reads where a pull request named a state nobody reads. */
   const PATCH_UNKNOWN = 'Unknown';
 
+  /** What the Patch filter offers for a draft whose fork holds an open pull request. */
+  const PATCH_IN_REVIEW_VALUE = 'In review';
+
+  /** What the Patch filter offers for a draft whose fork holds no open pull request. */
+  const NO_PATCH_VALUE = 'No patch';
+
   /** The state GitHub gives an advisory nobody has published or closed yet. */
   const DRAFT_STATE = 'Draft';
 
@@ -724,12 +730,20 @@ if (typeof require === 'function') {
   }
 
   /**
+   * The patch state, without the word the chip repeats, and only on the rows
+   * that show a patch chip. The chip stands on a draft and on no other, so a
+   * triage advisory holding an open pull request does not filter under a value
+   * its row never shows. A state this reader could not judge holds no value
+   * either, because `Unknown` is what the row says instead of an answer.
+   *
    * @param {TableRow} row
-   * @returns {string[]} the patch state without the word the chip repeats.
+   * @returns {string[]}
    */
   function patchValuesOf(row) {
-    if (row.patch === null) return [];
-    return [sentenceCase(row.patch.replace(/^Patch /, ''))];
+    if (row.state !== DRAFT_STATE) return [];
+    if (row.patch === PATCH_IN_REVIEW) return [PATCH_IN_REVIEW_VALUE];
+    if (row.patch === NO_PATCH) return [NO_PATCH_VALUE];
+    return [];
   }
 
   /**
@@ -774,7 +788,7 @@ if (typeof require === 'function') {
     {
       key: 'patch',
       label: 'Patch',
-      values: ['In review', 'Merged', 'Closed'],
+      values: [PATCH_IN_REVIEW_VALUE, NO_PATCH_VALUE],
       valuesOf: patchValuesOf,
     },
     {
