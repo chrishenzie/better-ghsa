@@ -70,7 +70,7 @@ if (typeof require === 'function') {
  * @property {string | null} patch What the private fork says about the patch,
  *   and null on a row nothing has been read on.
  * @property {number} backportTargets How many branches a maintainer asked for.
- * @property {number} backportsDone How many of them carry a merged pull request.
+ * @property {number} backportsDone How many of them carry an open pull request.
  * @property {string | null} cve What the CVE chip reads, and null where the
  *   advisory has no CVE state to show.
  */
@@ -373,14 +373,25 @@ if (typeof require === 'function') {
   }
 
   /**
+   * How far the backports have got: the branches a maintainer asked for that
+   * the private fork holds an open pull request against, which is how many
+   * backports have been prepared.
+   *
+   * REQUIREMENTS.md section 6 has the fork deleted when its changes merge, so a
+   * merged pull request is never visible here. The fork's pull requests all
+   * merge together, so a partial merge is not observable either.
+   *
    * @param {import('../common/derive.js').PatchState} patch
    * @param {readonly string[]} backports The branches a maintainer asked for.
-   * @returns {number} how many of them carry a merged pull request.
+   * @returns {number} how many of them carry an open pull request.
    */
   function backportsDoneIn(patch, backports) {
     /** @type {Set<string>} */
-    const merged = new Set();
-    return backports.filter((branch) => merged.has(branch)).length;
+    const prepared = new Set();
+    for (const branch of patch.branches) {
+      if (branch.open) prepared.add(branch.branch);
+    }
+    return backports.filter((branch) => prepared.has(branch)).length;
   }
 
   /**

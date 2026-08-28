@@ -129,6 +129,10 @@ test('a fork row whose state went unread marks the patch state incomplete', () =
   assert.strictEqual(state.patch.incomplete, true);
   assert.deepStrictEqual(state.patch.unknown, [2]);
   assert.deepStrictEqual(state.patch.open, [1]);
+  assert.deepStrictEqual(state.patch.branches, [
+    { branch: 'release/1.0', pullRequests: [2], open: false },
+    { branch: 'main', pullRequests: [1], open: true },
+  ]);
 });
 
 test('an advisory with no private fork has no patch prepared', () => {

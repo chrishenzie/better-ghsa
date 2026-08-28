@@ -236,7 +236,7 @@ test('a cached advisory read fills the triage row', async () => {
   assert.ok(
     chips ===
       'Blocked on the reporter[Label--secondary bghsa-tone-attention] |' +
-        ' Backports 0 of 1[Label--secondary bghsa-tone-attention] |' +
+        ' Backports 1 of 1[Label--secondary] |' +
         ' High, unconfirmed[Label--orange bghsa-dim] |' +
         ' Embargo lifts 2026-09-30[Label--secondary bghsa-tone-attention]',
     `chips from the cached read: ${chips}`
@@ -787,7 +787,7 @@ test('the CVE, patch, backport, and embargo chips read what the advisory holds',
   const complete = chipsOf({ read: true, backportTargets: 3, backportsDone: 3 });
   assert.ok(
     complete === 'Blocked on us[danger] | Backports 3 of 3',
-    `every target carries a merged pull request: ${complete}`
+    `every target carries an open pull request: ${complete}`
   );
 
   const embargo = chipsOf({ read: true, embargo: true, embargoLift: '2026-09-30' });
@@ -843,6 +843,48 @@ test('a fork with no open pull request reads as no patch yet', () => {
   assert.strictEqual(table.patchStateOf(patchOf([pull('closed')], false)), 'No patch yet');
   assert.strictEqual(table.patchStateOf(patchOf([pull('merged')], false)), 'No patch yet');
   assert.strictEqual(table.patchStateOf(patchOf([pull('open')], false)), 'Patch in review');
+});
+
+/**
+ * @param {readonly {branch: string, open: boolean}[]} branches
+ * @returns {import('../src/common/derive.js').PatchState}
+ */
+function branchesOf(branches) {
+  return {
+    hasFork: true,
+    pullRequests: [],
+    branches: branches.map((entry) => ({ branch: entry.branch, pullRequests: [], open: entry.open })),
+    open: [],
+    unknown: [],
+    incomplete: false,
+  };
+}
+
+// The fork holds four branches: one whose pull request has merged, two holding
+// an open pull request, and one whose pull request was closed. Counting merged
+// branches gives one and counting open branches gives two, so a fixture that
+// answers 2 answers only under the open rule. REQUIREMENTS.md section 6 has the
+// merged branch be unobservable in the first place, and the count measures how
+// many backports have been prepared.
+test('backport progress counts the targets holding an open pull request', () => {
+  const patch = branchesOf([
+    { branch: 'release/1.0', open: false },
+    { branch: 'release/1.1', open: true },
+    { branch: 'release/1.2', open: true },
+    { branch: 'release/1.3', open: false },
+  ]);
+  const targets = ['release/1.0', 'release/1.1', 'release/1.2', 'release/1.3'];
+  const done = table.backportsDoneIn(patch, targets);
+  assert.ok(done === 2, `two of the four targets hold an open pull request: ${done}`);
+});
+
+test('a branch the fork patches that nobody asked for is not backport progress', () => {
+  const patch = branchesOf([
+    { branch: 'main', open: true },
+    { branch: 'release/1.1', open: true },
+  ]);
+  const done = table.backportsDoneIn(patch, ['release/1.1', 'release/1.2']);
+  assert.ok(done === 1, `only the asked-for branch counts: ${done}`);
 });
 
 test('a page that is not an advisory list gets no table', async () => {
@@ -2157,7 +2199,7 @@ test('every filter reads the fixture the cache holds', async () => {
   assert.ok(
     facetLine(read) ===
       'waiting=Blocked on the reporter severity=High owner=samuelkarp state=Triage' +
-        ' patch= backports=Outstanding embargo=In force',
+        ' patch= backports=Complete embargo=In force',
     `the facets of the cached triage read: ${facetLine(read)}`
   );
 
