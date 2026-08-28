@@ -66,11 +66,8 @@ if (typeof require === 'function') {
  * @property {boolean} embargo Whether an embargo applies.
  * @property {string | null} embargoLift
  * @property {boolean} embargoOverdue
- * @property {string | null} patch The furthest state the private fork's pull
- *   requests reached, and null where there is nothing to say.
- * @property {number | null} pullRequests How many pull requests the private
- *   fork holds, and null on a row nothing has been read on. Zero is what
- *   says a draft has no patch yet, which a row nobody has read cannot say.
+ * @property {string | null} patch What the private fork says about the patch,
+ *   and null on a row nothing has been read on.
  * @property {number} backportTargets How many branches a maintainer asked for.
  * @property {number} backportsDone How many of them carry a merged pull request.
  * @property {boolean} textConfirmed Whether a maintainer confirmed both the
@@ -375,21 +372,23 @@ if (typeof require === 'function') {
   const DRAFT_STATE = 'Draft';
 
   /**
-   * The furthest state the advisory's private fork reached. A pull request whose
-   * state went unread leaves the chip reading `Unknown` where nothing else is
-   * open or merged, because a closed patch and a patch this reader could not
-   * judge are not the same thing.
+   * What the advisory's private fork says about the patch. An open pull request
+   * is the one state the page shows: REQUIREMENTS.md section 6 has merging
+   * delete the fork, so the Box that lists its pull requests goes with it, and a
+   * pull request closed without merging leaves what an advisory that never had a
+   * fork leaves. So a fork holding no
+   * open pull request reads the same as no fork at all. A pull request whose
+   * state went unread reads `Unknown`, because a patch this reader could not
+   * judge is not a patch that is not there.
    *
    * @param {import('../common/derive.js').PatchState} patch
-   * @returns {string | null}
+   * @returns {string}
    */
   function patchStateOf(patch) {
     const states = patch.pullRequests.map((pull) => pull.state);
     if (states.includes('open')) return PATCH_IN_REVIEW;
-    if (states.includes('merged')) return 'Patch merged';
     if (patch.incomplete) return PATCH_UNKNOWN;
-    if (states.length === 0) return null;
-    return 'Patch closed';
+    return NO_PATCH;
   }
 
   /**
@@ -449,7 +448,6 @@ if (typeof require === 'function') {
       embargoLift: null,
       embargoOverdue: false,
       patch: null,
-      pullRequests: null,
       backportTargets: 0,
       backportsDone: 0,
       textConfirmed: false,
@@ -509,7 +507,6 @@ if (typeof require === 'function') {
       embargoLift,
       embargoOverdue: globalThis.bghsa.derive.embargoOverdue(advisory, embargoLift, at),
       patch: patchStateOf(derived.patch),
-      pullRequests: derived.patch.pullRequests.length,
       backportTargets: tracking.backports.length,
       backportsDone: backportsDoneIn(derived.patch, tracking.backports),
       textConfirmed:
@@ -631,19 +628,15 @@ if (typeof require === 'function') {
       chips.push(waiting);
     }
 
-    // The patch chips stand on a draft and on no other. An advisory in triage
+    // The patch chip stands on a draft and on no other. An advisory in triage
     // has not been accepted, so no patch is owed for it yet and its absence
-    // says nothing. A fork holding no pull request is what says no patch yet,
-    // and a pull request whose state went unread says nothing either way.
-    if (row.state === DRAFT_STATE) {
-      if (row.patch !== null) {
-        /** @type {ChipSpec} */
-        const patch = { text: row.patch };
-        if (row.patch === PATCH_IN_REVIEW) patch.tone = 'attention';
-        chips.push(patch);
-      } else if (row.pullRequests === 0) {
-        chips.push({ text: NO_PATCH, tone: 'danger' });
-      }
+    // says nothing.
+    if (row.state === DRAFT_STATE && row.patch !== null) {
+      /** @type {ChipSpec} */
+      const patch = { text: row.patch };
+      if (row.patch === PATCH_IN_REVIEW) patch.tone = 'attention';
+      else if (row.patch === NO_PATCH) patch.tone = 'danger';
+      chips.push(patch);
     }
     if (row.backportTargets > 0) {
       /** @type {ChipSpec} */

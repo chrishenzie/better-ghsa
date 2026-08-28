@@ -26,9 +26,7 @@ if (typeof require === 'function') require('./trust.js');
  * @property {boolean} hasFork
  * @property {import('./parse-detail.js').ForkPullRequest[]} pullRequests
  * @property {BranchPatch[]} branches In the order the branches first appear.
- * @property {number[]} merged
  * @property {number[]} open
- * @property {number[]} closed
  * @property {number[]} unknown The numbers of the pull requests whose row named
  *   no state this reader knows.
  * @property {boolean} incomplete Whether any row's state went unread, which
@@ -149,8 +147,12 @@ if (typeof require === 'function') require('./trust.js');
   }
 
   /**
-   * Which pull requests the private fork holds, which branches they target, and
-   * which are merged.
+   * Which pull requests the private fork holds and which branches they target.
+   *
+   * REQUIREMENTS.md section 6 has the fork's list show open pull requests only,
+   * so `open` is the one state a row is read in and any other reading is a row
+   * this code could not place: it counts as unknown and marks the patch state
+   * incomplete.
    *
    * @param {import('./parse-detail.js').ParsedDetail} advisory
    * @returns {PatchState}
@@ -160,22 +162,16 @@ if (typeof require === 'function') require('./trust.js');
     /** @type {BranchPatch[]} */
     const branches = [];
     /** @type {number[]} */
-    const merged = [];
-    /** @type {number[]} */
     const open = [];
-    /** @type {number[]} */
-    const closed = [];
     /** @type {number[]} */
     const unknown = [];
     let incomplete = false;
 
     for (const pull of pullRequests) {
-      const known = pull.state === 'merged' || pull.state === 'open' || pull.state === 'closed';
-      if (!known) incomplete = true;
+      const isOpen = pull.state === 'open';
+      if (!isOpen) incomplete = true;
       if (pull.number !== null) {
-        if (pull.state === 'merged') merged.push(pull.number);
-        else if (pull.state === 'open') open.push(pull.number);
-        else if (pull.state === 'closed') closed.push(pull.number);
+        if (isOpen) open.push(pull.number);
         else unknown.push(pull.number);
       }
       if (pull.baseRef === null) continue;
@@ -185,16 +181,14 @@ if (typeof require === 'function') require('./trust.js');
         branches.push(branch);
       }
       if (pull.number !== null) branch.pullRequests.push(pull.number);
-      if (pull.state === 'open') branch.open = true;
+      if (isOpen) branch.open = true;
     }
 
     return {
       hasFork: advisory.fork !== null,
       pullRequests,
       branches,
-      merged,
       open,
-      closed,
       unknown,
       incomplete,
     };

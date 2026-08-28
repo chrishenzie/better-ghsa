@@ -103,8 +103,6 @@ test('a fork with one pull request per branch reports both branches prepared', (
   const state = derive.derive(advisory('triage-thread.html'));
   assert.strictEqual(state.patch.hasFork, true);
   assert.deepStrictEqual(state.patch.open, [2, 1]);
-  assert.deepStrictEqual(state.patch.merged, []);
-  assert.deepStrictEqual(state.patch.closed, []);
   assert.deepStrictEqual(state.patch.unknown, []);
   assert.strictEqual(state.patch.incomplete, false);
   assert.deepStrictEqual(state.patch.branches, [
@@ -131,8 +129,6 @@ test('a fork row whose state went unread marks the patch state incomplete', () =
   assert.strictEqual(state.patch.incomplete, true);
   assert.deepStrictEqual(state.patch.unknown, [2]);
   assert.deepStrictEqual(state.patch.open, [1]);
-  assert.deepStrictEqual(state.patch.merged, []);
-  assert.deepStrictEqual(state.patch.closed, []);
 });
 
 test('an advisory with no private fork has no patch prepared', () => {

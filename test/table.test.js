@@ -752,37 +752,30 @@ test('the CVE, patch, backport, and embargo chips read what the advisory holds',
 
   const draft = { read: true, state: 'Draft' };
 
-  const patch = chipsOf({ ...draft, patch: 'Patch merged', pullRequests: 1 });
-  assert.ok(patch === 'Blocked on us[danger] | Patch merged', `patch state: ${patch}`);
-
   // A patch nobody has written and one under review are both where the work
-  // stands, and part in how loud they are. A patch that landed and one that was
-  // closed are finished and stay dimmed.
-  const none = chipsOf({ ...draft, patch: null, pullRequests: 0 });
+  // stands, and part in how loud they are.
+  const none = chipsOf({ ...draft, patch: 'No patch yet' });
   assert.ok(
     none === 'Blocked on us[danger] | No patch yet[danger]',
     `a draft nobody has patched: ${none}`
   );
 
-  const inReview = chipsOf({ ...draft, patch: 'Patch in review', pullRequests: 1 });
+  const inReview = chipsOf({ ...draft, patch: 'Patch in review' });
   assert.ok(
     inReview === 'Blocked on us[danger] | Patch in review[attention]',
     `a patch under review: ${inReview}`
   );
 
-  const closed = chipsOf({ ...draft, patch: 'Patch closed', pullRequests: 1 });
-  assert.ok(closed === 'Blocked on us[danger] | Patch closed', `a closed patch: ${closed}`);
-
   // A pull request this reader could not judge leaves the fork holding one, so
   // the row says neither that a patch is under review nor that none exists.
-  const unjudged = chipsOf({ ...draft, patch: 'Unknown', pullRequests: 1 });
+  const unjudged = chipsOf({ ...draft, patch: 'Unknown' });
   assert.ok(unjudged === 'Blocked on us[danger] | Unknown', `a patch state nobody read: ${unjudged}`);
 
   // The same three forks on an advisory in triage, which is owed no patch.
   for (const held of [
-    { patch: null, pullRequests: 0 },
-    { patch: 'Patch in review', pullRequests: 1 },
-    { patch: 'Patch merged', pullRequests: 1 },
+    { patch: 'No patch yet' },
+    { patch: 'Patch in review' },
+    { patch: 'Unknown' },
   ]) {
     const triage = chipsOf({ read: true, state: 'Triage', ...held });
     assert.ok(
@@ -825,33 +818,37 @@ test('the CVE, patch, backport, and embargo chips read what the advisory holds',
   );
 });
 
-test('the patch chip reads Unknown over a pull request whose state went unread', () => {
-  const unread = table.patchStateOf({
-    hasFork: true,
-    pullRequests: [
-      { number: 1, url: null, title: 'p', state: null, baseRef: 'main', headRef: null, author: null, openedAt: null, assignees: [] },
-    ],
-    branches: [],
-    merged: [],
-    open: [],
-    closed: [],
-    unknown: [1],
-    incomplete: true,
-  });
-  assert.ok(unread === 'Unknown', `a patch state this reader cannot judge: ${unread}`);
+/**
+ * @param {string | null} state
+ * @returns {import('../src/common/derive.js').PatchState['pullRequests'][number]}
+ */
+function pull(state) {
+  return { number: 1, url: null, title: 'p', state, baseRef: 'main', headRef: null, author: null, openedAt: null, assignees: [] };
+}
 
-  // A fork holding nothing is not a state this reader failed to read.
-  const empty = table.patchStateOf({
-    hasFork: true,
-    pullRequests: [],
-    branches: [],
-    merged: [],
-    open: [],
-    closed: [],
-    unknown: [],
-    incomplete: false,
-  });
-  assert.ok(empty === null, `a fork holding no pull request: ${empty}`);
+/**
+ * @param {import('../src/common/derive.js').PatchState['pullRequests']} pullRequests
+ * @param {boolean} incomplete
+ * @returns {import('../src/common/derive.js').PatchState}
+ */
+function patchOf(pullRequests, incomplete) {
+  return { hasFork: true, pullRequests, branches: [], open: [], unknown: [], incomplete };
+}
+
+test('the patch chip reads Unknown over a pull request whose state went unread', () => {
+  const unread = table.patchStateOf(patchOf([pull(null)], true));
+  assert.ok(unread === 'Unknown', `a patch state this reader cannot judge: ${unread}`);
+});
+
+// Merging deletes the private fork and the Box that lists its pull requests, so
+// a merged patch is not observable from the advisory page and a pull request
+// closed without merging leaves the evidence an advisory with no fork leaves.
+// Each of these reads as the patch that is not there.
+test('a fork with no open pull request reads as no patch yet', () => {
+  assert.strictEqual(table.patchStateOf(patchOf([], false)), 'No patch yet');
+  assert.strictEqual(table.patchStateOf(patchOf([pull('closed')], false)), 'No patch yet');
+  assert.strictEqual(table.patchStateOf(patchOf([pull('merged')], false)), 'No patch yet');
+  assert.strictEqual(table.patchStateOf(patchOf([pull('open')], false)), 'Patch in review');
 });
 
 test('a page that is not an advisory list gets no table', async () => {
