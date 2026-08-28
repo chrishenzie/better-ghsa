@@ -157,6 +157,12 @@ test('the export carries one record per corpus member, under the columns', () =>
         at: '2026-05-05T14:00:00Z',
         text: 'samuelkarp closed this May 5, 2026',
       },
+      {
+        id: 'event-3',
+        actor: 'samuelkarp',
+        at: '2026-05-06T14:00:00Z',
+        text: 'samuelkarp published this May 6, 2026',
+      },
     ],
   });
   const text = csv.toCsv(
@@ -176,22 +182,26 @@ test('the export carries one record per corpus member, under the columns', () =>
   assert.strictEqual(lines.length, 3, `records: ${lines.length}`);
   assert.strictEqual(
     lines[0],
-    'ghsa_id,title,state,severity,closure_reason,reported_at,month,first_response_ms,' +
-      'report_to_draft_ms,report_to_close_ms,read,observed_at'
+    'ghsa_id,title,state,severity,closure_reason,reported_at,month,' +
+      'time_to_first_response_ms,time_to_accept_ms,time_to_close_ms,time_to_publish_ms,' +
+      'read,observed_at'
   );
-  // 21:19:34 to 21:49:34 is thirty minutes; to 22:19:34 is an hour; to the same
-  // time the next day is a day.
+  // Every duration is measured from the report at 14:00 on the 4th, and the
+  // four differ from each other, so a column carrying another one's value reads
+  // wrong here. 14:00 to 14:30 is thirty minutes; to 15:00 is an hour; to the
+  // same time the next day is a day, and to the day after that two.
   assert.strictEqual(
     lines[1],
     'GHSA-aaaa-aaaa-aaaa,Path traversal in the drawer handler,published,high,fixed,' +
-      '2026-04-07T18:05:12Z,2026-05,1800000,3600000,86400000,yes,2026-08-27T09:00:00.000Z'
+      '2026-04-07T18:05:12Z,2026-05,1800000,3600000,86400000,172800000,yes,' +
+      '2026-08-27T09:00:00.000Z'
   );
   // Nothing has read this one, so the timings and the values only an advisory
   // read carries are blank, and the line still says what the list page knew.
   assert.strictEqual(
     lines[2],
     'GHSA-bbbb-bbbb-bbbb,Only the list page has looked at this one,closed,low,,' +
-      '2026-04-05T00:00:00Z,2026-04,,,,no,'
+      '2026-04-05T00:00:00Z,2026-04,,,,,no,'
   );
 });
 

@@ -33,6 +33,9 @@ if (typeof require === 'function') {
   /**
    * The columns, in the order they are written.
    *
+   * The four durations are the four timings the statistics show, under the
+   * names the page reads them by, and each is measured from the report.
+   *
    * A duration is written in milliseconds, which is what the statistics measure
    * in. It is the value itself and not a rounding of it, so a spreadsheet
    * dividing it gets whatever unit the reader wants.
@@ -47,9 +50,10 @@ if (typeof require === 'function') {
     'closure_reason',
     'reported_at',
     'month',
-    'first_response_ms',
-    'report_to_draft_ms',
-    'report_to_close_ms',
+    'time_to_first_response_ms',
+    'time_to_accept_ms',
+    'time_to_close_ms',
+    'time_to_publish_ms',
     'read',
     'observed_at',
   ];
@@ -118,9 +122,10 @@ if (typeof require === 'function') {
       closure_reason: advisory === null ? null : stats.closureReasonOf(advisory),
       reported_at: advisory?.reportedAt ?? member.row.openedAt,
       month: stats.monthOf(advisory?.reportedAt ?? member.row.openedAt),
-      first_response_ms: stats.durationOf(advisory, stats.firstResponseAt),
-      report_to_draft_ms: stats.durationOf(advisory, stats.draftAt),
-      report_to_close_ms: stats.durationOf(advisory, stats.closeAt),
+      time_to_first_response_ms: stats.durationOf(advisory, stats.firstResponseAt),
+      time_to_accept_ms: stats.durationOf(advisory, stats.draftAt),
+      time_to_close_ms: stats.durationOf(advisory, stats.closeAt),
+      time_to_publish_ms: stats.durationOf(advisory, stats.publishAt),
       read: advisory === null ? 'no' : 'yes',
       observed_at: stampOf(member.observedAt),
     };

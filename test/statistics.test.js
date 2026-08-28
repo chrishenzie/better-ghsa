@@ -596,7 +596,7 @@ test('the export is the whole corpus, written here in the page', async () => {
   assert.strictEqual(lines[0], csv.COLUMNS.join(','));
   assert.strictEqual(
     lines[1],
-    `${openId},Title ${openId},triage,high,,2026-03-02T00:00:00Z,2026-03,,,,no,`,
+    `${openId},Title ${openId},triage,high,,2026-03-02T00:00:00Z,2026-03,,,,,no,`,
     'the open half is in the file'
   );
   assert.ok(
