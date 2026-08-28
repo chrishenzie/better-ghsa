@@ -2490,6 +2490,31 @@ test('a table holding no advisory at all says nothing about a filter', () => {
   assert.ok(textOf(doc, `#${table.ROOT_ID} .bghsa-list-count`) === '0 advisories', 'the count');
 });
 
+/**
+ * @param {Document} doc
+ * @returns {boolean} whether the reset is offered.
+ */
+function resetPressable(doc) {
+  return !one(doc, `#${table.ROOT_ID} .bghsa-list-reset`).hasAttribute('disabled');
+}
+
+test('the reset is offered only where there is something to reset', () => {
+  const { doc } = ownedTable();
+  assert.strictEqual(resetPressable(doc), false, 'the table came up filtered or sorted');
+
+  press(filterIn(doc, 'owner'), 'ada');
+  assert.strictEqual(resetPressable(doc), true, 'a filter is holding the table');
+
+  press(filterIn(doc, 'owner'), '');
+  assert.strictEqual(resetPressable(doc), false, 'the filter was put back');
+
+  press(one(doc, `#${table.ROOT_ID} .bghsa-list-sort`), 'severity');
+  assert.strictEqual(resetPressable(doc), true, 'a sort is holding the table');
+
+  press(one(doc, `#${table.ROOT_ID} .bghsa-list-sort`), table.DEFAULT_SORT);
+  assert.strictEqual(resetPressable(doc), false, 'the sort was put back');
+});
+
 test('the reset goes back to the default order and drops every filter', () => {
   const { doc } = tableOver([
     sortRow('GHSA-aaaa-aaaa-aaaa', {

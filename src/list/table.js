@@ -843,6 +843,19 @@ if (typeof require === 'function') {
   }
 
   /**
+   * Whether the table is showing what it comes up on: the default order, with
+   * every filter holding it to nothing. That is where the reset goes, so from
+   * there it has nothing to do.
+   *
+   * @param {ViewState} state
+   * @returns {boolean}
+   */
+  function isDefaultView(state) {
+    if (state.sort !== DEFAULT_SORT) return false;
+    return Object.values(state.filters).every((value) => value === '');
+  }
+
+  /**
    * Whether one row passes one filter.
    *
    * A row no advisory read backs holds less than one a read does, and a filter
@@ -1306,6 +1319,7 @@ if (typeof require === 'function') {
 
     const reset = element(doc, 'button', 'btn btn-sm mb-1 bghsa-list-reset', RESET_LABEL);
     reset.setAttribute('type', 'button');
+    if (isDefaultView(state)) reset.setAttribute('disabled', '');
     reset.addEventListener('click', () => {
       setViewState(doc, defaultViewState());
       drawControls(doc);
@@ -2278,6 +2292,7 @@ if (typeof require === 'function') {
     sentenceCase,
     formatTime,
     formatDate,
+    isDefaultView,
     patchStateOf,
     backportsDoneIn,
     cveTextOf,
