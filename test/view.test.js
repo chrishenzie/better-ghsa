@@ -11,6 +11,8 @@ const parseList = require('../src/common/parse-list.js');
 const parseDetail = require('../src/common/parse-detail.js');
 const schema = require('../src/common/schema.js');
 const write = require('../src/common/write.js');
+const members = require('../src/common/members.js');
+const branches = require('../src/common/branches.js');
 const edit = require('../src/detail/edit.js');
 const table = require('../src/list/table.js');
 const corpus = require('../src/done/corpus.js');
@@ -127,6 +129,21 @@ function listPage(name) {
       fixture(name) +
       '</div></body></html>'
   );
+}
+
+/**
+ * Lets the work a control started off a change event finish. Staging a reason
+ * reads the advisory's stored state, and reading it hashes the values the
+ * confirmations bind to, so the store catches up some turns after the pick.
+ *
+ * @returns {Promise<void>}
+ */
+async function settled() {
+  for (let turn = 0; turn < 5; turn += 1) {
+    await new Promise((resolve) => {
+      setTimeout(resolve, 1);
+    });
+  }
 }
 
 /**
@@ -799,6 +816,69 @@ test('the reason an advisory carries is the reason its row shows', async () => {
     .filter((option) => option.hasAttribute('selected'))
     .map((option) => option.getAttribute('value'));
   assert.deepStrictEqual(chosen, ['not reproducible'], 'the control shows another reason');
+});
+
+test('an advisory this view reads teaches the owner and backport pickers', async () => {
+  // The panel offers the logins it has seen carrying a member badge and the
+  // release branches it has seen on the repository. Both are read off an
+  // advisory, and the advisories here are ones the crawl read rather than ones
+  // a maintainer opened, so what this view reads is worth the same.
+  members.clear();
+  branches.clear();
+  const read = parseDetail.parseDetail(document(fixture('triage-thread.html')));
+  assert.ok(read !== null, 'the fixture reads as an advisory');
+  const held = await cachedCorpus([{ ghsaId: TRIAGE_ID, state: 'closed', record: read }]);
+  const built = view.memberOf(held, TRIAGE_ID)?.advisory ?? null;
+  assert.ok(built !== null, 'the cached entry read back as an advisory');
+  const key = edit.keyOf(built);
+  const doc = await page(held);
+  try {
+    assert.deepStrictEqual(members.known(REF), [], 'a row drawn is not an advisory read');
+
+    choose(one(doneRow(doc, TRIAGE_ID), 'select.bghsa-done-reason'), 'not a vulnerability');
+    await settled();
+    assert.deepStrictEqual(
+      members.known(REF),
+      ['samuelkarp'],
+      'the member badges on this advisory were dropped'
+    );
+    assert.deepStrictEqual(
+      branches.known(REF),
+      ['release/1.0'],
+      'the release branches this advisory names were dropped'
+    );
+  } finally {
+    edit.edits.delete(key);
+    members.clear();
+    branches.clear();
+  }
+});
+
+test('a closure reason picked here and put back leaves nothing staged', async () => {
+  const read = parseDetail.parseDetail(document(fixture('triage-thread.html')));
+  assert.ok(read !== null, 'the fixture reads as an advisory');
+  const held = await cachedCorpus([{ ghsaId: TRIAGE_ID, state: 'closed', record: read }]);
+  const built = view.memberOf(held, TRIAGE_ID)?.advisory ?? null;
+  assert.ok(built !== null, 'the cached entry read back as an advisory');
+  const key = edit.keyOf(built);
+  const doc = await page(held);
+  const control = one(doneRow(doc, TRIAGE_ID), 'select.bghsa-done-reason');
+
+  choose(control, 'not a vulnerability');
+  await settled();
+  assert.strictEqual(edit.editsFor(key).closureReason, 'not a vulnerability');
+  assert.strictEqual(edit.anyPending(), true, 'a reason picked here is not unsaved work');
+
+  // Back to the reason the advisory carries, which this fixture does not have.
+  choose(control, '');
+  await settled();
+  assert.strictEqual(
+    edit.editsFor(key).closureReason,
+    undefined,
+    'a reason put back where it started stayed staged'
+  );
+  assert.strictEqual(edit.anyPending(), false, 'a reason put back where it started warns on leaving');
+  edit.edits.delete(key);
 });
 
 test('a closure reason set here goes out through the stored write path', async () => {

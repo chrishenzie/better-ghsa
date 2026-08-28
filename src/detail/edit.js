@@ -116,13 +116,6 @@ if (typeof require === 'function') {
   const SAVED_MESSAGE = 'Saved. The advisory carries these values now.';
 
   /**
-   * What the panel says once a write has landed and the controls still hold
-   * something that write did not carry.
-   */
-  const SAVED_PENDING_MESSAGE =
-    'Saved. The panel still holds changes that write did not carry, and they are unsaved.';
-
-  /**
    * What the panel says while a write from it is on its way to GitHub. The done
    * view says the same, so one event reads the same however it was started.
    */
@@ -242,23 +235,36 @@ if (typeof require === 'function') {
   }
 
   /**
+   * Records what a control now holds, less anything a save would not carry: a
+   * value the advisory already has, and a value another control has made
+   * irrelevant. REQUIREMENTS.md section 3 stages neither, so what the panel
+   * holds and what a write carries cannot come apart. {@link differences} is
+   * the one place that decides, so a control added later inherits the rule.
+   *
+   * The value stays in the control it was typed into. Only the store drops it,
+   * so putting the gate back where it was puts the value back with it.
+   *
    * @param {string} key
+   * @param {TrackingView} tracking
    * @param {Pending} patch
-   * @returns {void} records what a control now holds.
+   * @returns {void}
    */
-  function stage(key, patch) {
-    edits.set(key, { ...editsFor(key), ...patch });
+  function stage(key, tracking, patch) {
+    const kept = differences(tracking, { ...editsFor(key), ...patch });
+    if (Object.keys(kept).length === 0) edits.delete(key);
+    else edits.set(key, kept);
     results.delete(key);
   }
 
   /**
    * @param {string} key
+   * @param {TrackingView} tracking
    * @param {ConfirmationTrack} track
    * @param {boolean} value
    * @returns {void}
    */
-  function stageConfirmation(key, track, value) {
-    stage(key, { confirm: { ...editsFor(key).confirm, [track]: value } });
+  function stageConfirmation(key, tracking, track, value) {
+    stage(key, tracking, { confirm: { ...editsFor(key).confirm, [track]: value } });
   }
 
   /**
@@ -423,14 +429,12 @@ if (typeof require === 'function') {
 
   /**
    * The values a control holds that a save leaves behind, and what the panel says
-   * about each. A maintainer who typed a date and then turned the embargo off
-   * still has the date, and is told it is not going anywhere until the embargo is
-   * back on.
+   * about each. The lift date is not among them: turning the embargo off stages
+   * no date, so there is none to leave behind.
    *
    * @type {Record<string, string>}
    */
   const HELD_NOTES = {
-    embargoLift: 'The lift date is held and is not written while the embargo is off.',
     closureDuplicateOf:
       'The duplicate advisory is held and is not written while the closure reason is not' +
       ' duplicate.',
@@ -537,13 +541,14 @@ if (typeof require === 'function') {
   }
 
   /**
-   * Drops the staged values the advisory has caught up with, so a control put
-   * back where it started, and a value another maintainer wrote in the meantime,
-   * both stop counting as unsaved work.
+   * Drops the staged values a save from this pass would not carry, so a control
+   * put back where it started, a value another maintainer wrote in the
+   * meantime, and a value the state that arrived has made irrelevant all stop
+   * counting as unsaved work.
    *
-   * A value whose gate is off is not one the advisory has caught up with, so it
-   * stays where it is: a save leaves it behind, and a pass that dropped it would
-   * take typing the maintainer can still see.
+   * A pass judges what {@link stage} judged when the value arrived, against the
+   * state the pass reads. The two agree on every value staged against this
+   * state, and the ones they disagree on are the ones the advisory moved under.
    *
    * @param {string} key
    * @param {TrackingView} tracking
@@ -552,7 +557,7 @@ if (typeof require === 'function') {
   function prune(key, tracking) {
     const pending = edits.get(key);
     if (pending === undefined) return;
-    const kept = staged(tracking, pending);
+    const kept = differences(tracking, pending);
     if (PENDING_FIELDS.every((field) => !Object.hasOwn(kept, field)) && kept.supersede !== true) {
       edits.delete(key);
     } else {
@@ -1106,8 +1111,7 @@ if (typeof require === 'function') {
     } else if (outcome.merged !== null) {
       remember(key, outcome.merged);
     }
-    const saved = edits.has(key) ? SAVED_PENDING_MESSAGE : SAVED_MESSAGE;
-    results.set(key, { ok: outcome.ok, message: outcome.ok ? saved : outcome.message });
+    results.set(key, { ok: outcome.ok, message: outcome.ok ? SAVED_MESSAGE : outcome.message });
     await repaint(context);
     return outcome;
   }
@@ -1341,7 +1345,7 @@ if (typeof require === 'function') {
       'Not set'
     );
     control.addEventListener('change', () => {
-      stage(key, { triage: orNull(valueOf(control)) });
+      stage(key, context.tracking, { triage: orNull(valueOf(control)) });
       update();
     });
     body.append(control);
@@ -1470,7 +1474,7 @@ if (typeof require === 'function') {
       unknown: 'not a known member',
       drafts,
       held: () => pick(editsFor(key).owners, context.tracking.owners),
-      put: (owners) => stage(key, { owners }),
+      put: (owners) => stage(key, context.tracking, { owners }),
     });
   }
 
@@ -1492,7 +1496,7 @@ if (typeof require === 'function') {
       unknown: null,
       drafts: branchDrafts,
       held: () => pick(editsFor(key).backports, context.tracking.backports),
-      put: (backports) => stage(key, { backports }),
+      put: (backports) => stage(key, context.tracking, { backports }),
     });
   }
 
@@ -1515,12 +1519,20 @@ if (typeof require === 'function') {
       pick(pending.embargoLift, context.tracking.embargoLift),
       'yyyy-mm-dd'
     );
+    // A snapshot with no embargo holds no lift date, so the field is off while
+    // the embargo is. Unticking the box stages no date, because the gate is
+    // read where every value is staged. The date itself stays in the box, so
+    // ticking the box again puts it back.
+    setDisabled(lift, !inForce);
     applies.box.addEventListener('change', () => {
-      stage(key, { embargo: isChecked(applies.box) });
+      const held = isChecked(applies.box);
+      setDisabled(lift, !held);
+      stage(key, context.tracking, { embargo: held });
+      if (held) stage(key, context.tracking, { embargoLift: orNull(valueOf(lift)) });
       update();
     });
     onValue(lift, () => {
-      stage(key, { embargoLift: orNull(valueOf(lift)) });
+      stage(key, context.tracking, { embargoLift: orNull(valueOf(lift)) });
       update();
     });
     body.append(applies.wrap);
@@ -1558,13 +1570,21 @@ if (typeof require === 'function') {
       setDisabled(duplicate, orNull(valueOf(control)) !== 'duplicate');
     };
     showDuplicate();
+    // A snapshot closed for another reason holds no duplicate, so the id is off
+    // while the reason is not duplicate and staging it there stages nothing.
+    // The id itself stays in the box, so moving the reason back takes it with
+    // it, the way the lift date comes back under an embargo.
     control.addEventListener('change', () => {
-      stage(key, { closureReason: orNull(valueOf(control)) });
+      const reason = orNull(valueOf(control));
+      stage(key, context.tracking, { closureReason: reason });
+      if (reason === 'duplicate') {
+        stage(key, context.tracking, { closureDuplicateOf: orNull(valueOf(duplicate)) });
+      }
       showDuplicate();
       update();
     });
     onValue(duplicate, () => {
-      stage(key, { closureDuplicateOf: orNull(valueOf(duplicate)) });
+      stage(key, context.tracking, { closureDuplicateOf: orNull(valueOf(duplicate)) });
       update();
     });
     body.append(control);
@@ -1607,7 +1627,7 @@ if (typeof require === 'function') {
         control.wrap.append(element(doc, 'span', 'ml-1 bghsa-confirmation-note', 'Unavailable'));
       }
       control.box.addEventListener('change', () => {
-        stageConfirmation(key, track.key, isChecked(control.box));
+        stageConfirmation(key, context.tracking, track.key, isChecked(control.box));
         update();
       });
       body.append(control.wrap);
@@ -1617,11 +1637,12 @@ if (typeof require === 'function') {
 
   /**
    * @param {Document} doc
+   * @param {EditorContext} context
    * @param {string} key
    * @param {() => void} update
    * @returns {Element}
    */
-  function supersedeField(doc, key, update) {
+  function supersedeField(doc, context, key, update) {
     const { field, body } = fieldRow(doc, 'Confirmation');
     const control = checkboxControl(
       doc,
@@ -1630,7 +1651,7 @@ if (typeof require === 'function') {
       SUPERSEDE_LABEL
     );
     control.box.addEventListener('change', () => {
-      stage(key, { supersede: isChecked(control.box) });
+      stage(key, context.tracking, { supersede: isChecked(control.box) });
       update();
     });
     body.append(control.wrap);
@@ -1690,7 +1711,9 @@ if (typeof require === 'function') {
     controls.append(embargoField(doc, context, key, update));
     controls.append(closureField(doc, context, key, update));
     controls.append(confirmationField(doc, context, key, update));
-    if (context.merged.confirmationRequired) controls.append(supersedeField(doc, key, update));
+    if (context.merged.confirmationRequired) {
+      controls.append(supersedeField(doc, context, key, update));
+    }
 
     const bar = element(doc, 'div', 'd-flex flex-items-center flex-wrap mt-2 bghsa-save-row');
     const saveButton = element(doc, 'button', 'btn btn-sm btn-primary bghsa-save', 'Save');
@@ -1781,7 +1804,6 @@ if (typeof require === 'function') {
     PENDING_FIELDS,
     READ_ONLY_MESSAGE,
     SAVED_MESSAGE,
-    SAVED_PENDING_MESSAGE,
     WRITING_MESSAGE,
     UNCHANGED_MESSAGE,
     UNREADABLE_MESSAGE,

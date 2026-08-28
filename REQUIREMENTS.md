@@ -93,6 +93,12 @@ Navigating away with unsaved changes produces a warning.
 While a save is in flight, the controls that fed it are disabled, on whichever
 surface the save was started from. The values written are the values on screen.
 
+A save carries every staged change or the panel refuses it. Nothing the write
+would not carry is staged: a value another control has made irrelevant, and a
+value equal to the one already stored. Turning an embargo off stages no lift
+date, and the date stays on screen so turning it back on restores it. Moving a
+control away from its stored value and back leaves nothing staged.
+
 Every snapshot carries a schema version. A reader that encounters a major
 version it does not understand goes read-only and reports that the extension
 needs an update.

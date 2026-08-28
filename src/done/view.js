@@ -347,7 +347,7 @@ if (typeof require === 'function') {
     draw(doc);
     try {
       const context = await contextFor(doc, advisory, options);
-      edit.stage(keyOf(advisory), { closureReason: reason });
+      edit.stage(edit.keyOf(advisory), context.tracking, { closureReason: reason });
       return await edit.save(context);
     } finally {
       saving.delete(ghsaId);
@@ -435,7 +435,15 @@ if (typeof require === 'function') {
       if (advisory === null) return;
       const picked = /** @type {{ value?: unknown }} */ (/** @type {unknown} */ (control)).value;
       const value = typeof picked === 'string' ? picked : '';
-      edit.stage(keyOf(advisory), { closureReason: value === '' ? null : value });
+      // The reason is staged against the advisory's stored state, which is what
+      // decides whether this pick is a change at all, and reading it hashes the
+      // values the confirmations bind to. The press that writes stages the
+      // value it reads off this control, so a pick still landing here when it
+      // comes is not a pick that press can miss.
+      void (async () => {
+        const context = await contextFor(doc, advisory);
+        edit.stage(edit.keyOf(advisory), context.tracking, { closureReason: value === '' ? null : value });
+      })();
     });
     save.addEventListener('click', () => {
       const picked = /** @type {{ value?: unknown }} */ (/** @type {unknown} */ (control)).value;

@@ -545,7 +545,7 @@ test('a page naming no advisory says so and asks for a pass', async () => {
   /** @type {import('../src/detail/edit.js').EditorContext} */
   const anonymous = { ...context, advisory: { ...context.advisory, ref: null } };
   const key = edit.keyOf(anonymous.advisory);
-  edit.stage(key, { triage: 'evaluating' });
+  edit.stage(key, anonymous.tracking, { triage: 'evaluating' });
   const outcome = await edit.save(anonymous);
 
   assert.strictEqual(outcome.reason, 'unreadable');
@@ -686,7 +686,7 @@ test('a confirmation the page cannot back is cleared and taken away', async () =
   // The write path refuses one anyway: nothing a maintainer presses stages a
   // confirmation of a value that could not be read, and the record it would
   // leave claims an approval nothing can be judged against.
-  edit.stage(key, { confirm: { title: true } });
+  edit.stage(key, second.context.tracking, { confirm: { title: true } });
   const outcome = await edit.save(second.context);
   assert.strictEqual(outcome.ok, false);
   assert.strictEqual(outcome.reason, 'unrecordable');
@@ -864,16 +864,24 @@ test('an owner taken off and put back holds no change', async () => {
   forget();
   const page = fixture('triage-thread.html');
   const base = await contextFor(page);
-  const editor = edit.buildEditor(page, {
+  const context = {
     ...base,
     tracking: { ...base.tracking, owners: ['samuelkarp', 'dmcgowan'] },
-  });
+  };
+  const key = edit.keyOf(context.advisory);
+  const editor = edit.buildEditor(page, context);
   assert.strictEqual(ownersHeld(editor).join(' '), 'samuelkarp dmcgowan');
   press(editor, 'button.bghsa-owner-remove');
   type(control(editor, 'input.bghsa-owner-input'), 'samuelkarp');
   press(editor, 'button.bghsa-owner-add');
 
-  assert.strictEqual(ownersHeld(editor).join(' '), 'dmcgowan samuelkarp');
+  assert.strictEqual(
+    edit.editsFor(key).owners,
+    undefined,
+    'a list put back where it started stayed staged'
+  );
+  assert.strictEqual(edit.anyPending(), false, 'a list put back where it started warns on leaving');
+  assert.strictEqual(ownersHeld(editor).join(' '), 'samuelkarp dmcgowan');
   assert.strictEqual(note(editor), '');
   assert.strictEqual(control(editor, 'button.bghsa-save').hasAttribute('disabled'), true);
 });
@@ -882,15 +890,15 @@ test('an owner retyped in a different case holds no change', async () => {
   forget();
   const page = fixture('triage-thread.html');
   const base = await contextFor(page);
-  const editor = edit.buildEditor(page, {
-    ...base,
-    tracking: { ...base.tracking, owners: ['samuelkarp'] },
-  });
+  const context = { ...base, tracking: { ...base.tracking, owners: ['samuelkarp'] } };
+  const key = edit.keyOf(context.advisory);
+  const editor = edit.buildEditor(page, context);
   press(editor, 'button.bghsa-owner-remove');
   type(control(editor, 'input.bghsa-owner-input'), 'SamuelKarp');
   press(editor, 'button.bghsa-owner-add');
 
-  assert.strictEqual(ownersHeld(editor).join(' '), 'SamuelKarp');
+  assert.strictEqual(edit.editsFor(key).owners, undefined, 'one login in two cases stayed staged');
+  assert.strictEqual(ownersHeld(editor).join(' '), 'samuelkarp');
   assert.strictEqual(note(editor), '');
   assert.strictEqual(control(editor, 'button.bghsa-save').hasAttribute('disabled'), true);
 });
@@ -997,16 +1005,23 @@ test('a branch taken off and put back holds no change', async () => {
   forget();
   const page = fixture('triage-thread.html');
   const base = await contextFor(page);
-  const editor = edit.buildEditor(page, {
+  const context = {
     ...base,
     tracking: { ...base.tracking, backports: ['release/1.0', 'release/2.10'] },
-  });
+  };
+  const key = edit.keyOf(context.advisory);
+  const editor = edit.buildEditor(page, context);
   assert.strictEqual(backports(editor).join(' '), 'release/1.0 release/2.10');
   press(editor, 'button.bghsa-backport-remove');
   type(control(editor, 'input.bghsa-backport-input'), 'release/1.0');
   press(editor, 'button.bghsa-backport-add');
 
-  assert.strictEqual(backports(editor).join(' '), 'release/2.10 release/1.0');
+  assert.strictEqual(
+    edit.editsFor(key).backports,
+    undefined,
+    'a list put back where it started stayed staged'
+  );
+  assert.strictEqual(backports(editor).join(' '), 'release/1.0 release/2.10');
   assert.strictEqual(note(editor), '');
   assert.strictEqual(control(editor, 'button.bghsa-save').hasAttribute('disabled'), true);
 });
@@ -1123,7 +1138,7 @@ function embargoWithUnknownField(page) {
   fence.textContent = JSON.stringify(held, null, 2);
 }
 
-test('a lift date typed with the embargo off survives a pass', async () => {
+test('turning the embargo off stages no lift date and keeps the date on screen', async () => {
   forget();
   const page = fixture('triage-thread.html');
   const advisory = parse.parseDetail(page);
@@ -1131,57 +1146,98 @@ test('a lift date typed with the embargo off survives a pass', async () => {
   const key = edit.keyOf(advisory);
   const first = await panel.render(page);
   assert.ok(first !== null, 'the fixture offered no anchor');
-  const before = /** @type {Element} */ (first);
-  tick(control(before, 'input.bghsa-embargo'), false);
-  typing(control(before, 'input.bghsa-embargo-lift'), '2026-12-01');
-  assert.ok(
-    note(before).includes('The lift date is held'),
-    `the panel said nothing of the date it holds: ${note(before)}`
+  const built = /** @type {Element} */ (first);
+  const lift = control(built, 'input.bghsa-embargo-lift');
+  const applies = control(built, 'input.bghsa-embargo');
+  assert.strictEqual(lift.hasAttribute('disabled'), false, 'the date is off under an embargo');
+  typing(lift, '2026-12-01');
+  assert.strictEqual(edit.editsFor(key).embargoLift, '2026-12-01');
+
+  tick(applies, false);
+  assert.strictEqual(lift.hasAttribute('disabled'), true, 'the date is still reachable');
+  assert.strictEqual(
+    edit.editsFor(key).embargoLift,
+    undefined,
+    'turning the embargo off staged a lift date'
+  );
+  assert.strictEqual(
+    control(built, 'input.bghsa-embargo-lift').getAttribute('value'),
+    '2026-12-01',
+    'the date left the box'
+  );
+  assert.strictEqual(
+    note(built).toLowerCase().includes('lift date'),
+    false,
+    `the panel said something about the date it does not hold: ${note(built)}`
   );
 
-  const second = await panel.render(page);
-  assert.ok(second !== null, 'the second pass placed no panel');
-  const after = /** @type {Element} */ (second);
+  tick(applies, true);
+  assert.strictEqual(lift.hasAttribute('disabled'), false, 'the date stayed off under an embargo');
   assert.strictEqual(
     edit.editsFor(key).embargoLift,
     '2026-12-01',
-    'the pass took the date the maintainer typed'
-  );
-  assert.strictEqual(
-    control(after, 'input.bghsa-embargo-lift').getAttribute('value'),
-    '2026-12-01',
-    'the control came back holding something else'
+    'ticking the embargo back on did not take the date with it'
   );
   forget();
 });
 
-test('a duplicate id survives the reason moving away and back', async () => {
+test('a save turning the embargo off leaves nothing staged', async () => {
   forget();
   const { page, talk } = pair('triage-thread.html');
-  const { editor } = await editorFor(page, {
+  const { editor, context } = await editorFor(page, {
     fetch: talk.fetch,
     parseDocument: talk.parseDocument,
   });
-  choose(control(editor, 'select.bghsa-closure'), 'duplicate');
-  typing(control(editor, 'input.bghsa-closure-duplicate'), 'GHSA-1111-2222-3333');
-  choose(control(editor, 'select.bghsa-closure'), 'out of scope');
-  assert.ok(
-    note(editor).includes('The duplicate advisory is held'),
-    `the panel said nothing of the id it holds: ${note(editor)}`
-  );
+  const key = edit.keyOf(context.advisory);
+  assert.strictEqual(context.tracking.embargoLift, '2026-09-30');
+  typing(control(editor, 'input.bghsa-embargo-lift'), '2026-12-01');
+  tick(control(editor, 'input.bghsa-embargo'), false);
 
-  // A pass, which is where the value was going missing.
-  const again = await editorFor(page, {
+  const outcome = await edit.save(context);
+  assert.ok(outcome.ok === true, `the save failed: ${outcome.message}`);
+  assert.strictEqual(sentSnapshot(talk.calls)['embargo'], undefined, 'the write carried an embargo');
+  assert.strictEqual(
+    edit.editsFor(key).embargoLift,
+    undefined,
+    'the save left a lift date the write did not carry'
+  );
+  assert.strictEqual(edit.results.get(key)?.message, edit.SAVED_MESSAGE);
+  forget();
+});
+
+test('a reason moved off duplicate stages no id, and moving it back stages one', async () => {
+  forget();
+  const { page, talk } = pair('triage-thread.html');
+  const { editor, context } = await editorFor(page, {
     fetch: talk.fetch,
     parseDocument: talk.parseDocument,
   });
-  choose(control(again.editor, 'select.bghsa-closure'), 'duplicate');
+  const key = edit.keyOf(context.advisory);
+  const box = control(editor, 'input.bghsa-closure-duplicate');
+  choose(control(editor, 'select.bghsa-closure'), 'duplicate');
+  typing(box, 'GHSA-1111-2222-3333');
+  assert.strictEqual(edit.editsFor(key).closureDuplicateOf, 'GHSA-1111-2222-3333');
+
+  choose(control(editor, 'select.bghsa-closure'), 'out of scope');
   assert.strictEqual(
-    control(again.editor, 'input.bghsa-closure-duplicate').getAttribute('value'),
-    'GHSA-1111-2222-3333',
-    'the control came back holding something else'
+    edit.editsFor(key).closureDuplicateOf,
+    undefined,
+    'a reason that is not duplicate staged an id the write would drop'
   );
-  const outcome = await edit.save(again.context);
+  assert.strictEqual(
+    box.getAttribute('value'),
+    'GHSA-1111-2222-3333',
+    'the id left the box the maintainer typed it into'
+  );
+  assert.strictEqual(box.hasAttribute('disabled'), true, 'the id is still reachable');
+
+  choose(control(editor, 'select.bghsa-closure'), 'duplicate');
+  assert.strictEqual(
+    edit.editsFor(key).closureDuplicateOf,
+    'GHSA-1111-2222-3333',
+    'moving the reason back did not take the id in the box with it'
+  );
+  const outcome = await edit.save(context);
   assert.ok(outcome.ok === true, `the save failed: ${outcome.message}`);
   const closure = /** @type {Record<string, unknown>} */ (sentSnapshot(talk.calls)['closure']);
   assert.ok(closure['reason'] === 'duplicate', 'the save wrote another closure reason');
@@ -1189,6 +1245,108 @@ test('a duplicate id survives the reason moving away and back', async () => {
     closure['duplicateOf'] === 'GHSA-1111-2222-3333',
     'the save did not write the id the maintainer typed'
   );
+  forget();
+});
+
+test('a pass drops an id the advisory moved off duplicate under', async () => {
+  forget();
+  const page = fixture('triage-thread.html');
+  const fence = page.querySelector(`#${OWN_COMMENT} .highlight-source-json pre`);
+  if (fence === null) throw new Error('the fixture carries no snapshot');
+  const seeded = JSON.parse(String(fence.textContent ?? ''));
+  seeded.closure = { reason: 'duplicate', duplicateOf: 'GHSA-oooo-oooo-oooo' };
+  fence.textContent = JSON.stringify(seeded, null, 2);
+
+  const first = await editorFor(page);
+  const key = edit.keyOf(first.context.advisory);
+  typing(control(first.editor, 'input.bghsa-closure-duplicate'), 'GHSA-1111-2222-3333');
+  assert.strictEqual(edit.editsFor(key).closureDuplicateOf, 'GHSA-1111-2222-3333');
+
+  // Another maintainer closes it as fixed, and the page carries that now.
+  const moved = JSON.parse(String(fence.textContent ?? ''));
+  moved.seq += 1;
+  moved.closure = { reason: 'fixed' };
+  fence.textContent = JSON.stringify(moved, null, 2);
+  const second = await editorFor(page);
+  assert.strictEqual(second.context.tracking.closureReason, 'fixed', 'the pass read the old state');
+
+  assert.strictEqual(
+    edit.editsFor(key).closureDuplicateOf,
+    undefined,
+    'the pass held an id no save from it would carry'
+  );
+  assert.strictEqual(edit.pendingOn(key), false, 'a value no save would carry warns on leaving');
+  assert.strictEqual(note(second.editor), '');
+  forget();
+});
+
+test('a control moved away and back beside a real edit leaves nothing staged', async () => {
+  forget();
+  const { page, talk } = pair('triage-thread.html');
+  const { editor, context } = await editorFor(page, {
+    fetch: talk.fetch,
+    parseDocument: talk.parseDocument,
+  });
+  const key = edit.keyOf(context.advisory);
+  const triage = control(editor, 'select.bghsa-triage');
+  assert.strictEqual(context.tracking.triage, 'awaiting reporter');
+  choose(triage, 'evaluating');
+  assert.strictEqual(edit.editsFor(key).triage, 'evaluating');
+  choose(triage, 'awaiting reporter');
+  assert.strictEqual(
+    edit.editsFor(key).triage,
+    undefined,
+    'a control put back where it started stayed staged'
+  );
+  assert.strictEqual(edit.anyPending(), false, 'a control put back where it started warns');
+
+  tick(control(editor, 'input.bghsa-embargo'), false);
+  assert.strictEqual(
+    edit.changedTracks(context.tracking, context.fingerprints, edit.editsFor(key)).join(' '),
+    'embargo',
+    'the panel counted a control put back where it started as a change to write'
+  );
+  const outcome = await edit.save(context);
+  assert.ok(outcome.ok === true, `the save failed: ${outcome.message}`);
+  assert.strictEqual(
+    edit.edits.has(key),
+    false,
+    'the save left staged what the write did not carry'
+  );
+  assert.strictEqual(edit.results.get(key)?.message, edit.SAVED_MESSAGE);
+  forget();
+});
+
+test('a checkbox ticked and unticked leaves nothing staged', async () => {
+  forget();
+  const page = fixture('triage-thread.html');
+  const { editor, context } = await editorFor(page);
+  const key = edit.keyOf(context.advisory);
+  assert.strictEqual(context.tracking.embargo, true);
+  const applies = control(editor, 'input.bghsa-embargo');
+  tick(applies, false);
+  assert.strictEqual(edit.editsFor(key).embargo, false);
+  tick(applies, true);
+  assert.strictEqual(
+    edit.editsFor(key).embargo,
+    undefined,
+    'a checkbox put back where it started stayed staged'
+  );
+  assert.strictEqual(edit.anyPending(), false, 'a checkbox put back where it started warns');
+
+  // The title confirmation on this fixture has drifted, so the box stands
+  // unticked and ticking it is a record the advisory does not carry.
+  assert.strictEqual(context.tracking.title.status, 'drifted');
+  const title = control(editor, 'input.bghsa-confirm-title');
+  tick(title, true);
+  assert.strictEqual(edit.anyPending(), true, 'a confirmation the maintainer changed is not work');
+  tick(title, false);
+  assert.strictEqual(
+    edit.editsFor(key).confirm,
+    undefined,
+    'a confirmation put back where it started stayed staged'
+  );
+  assert.strictEqual(edit.anyPending(), false, 'a confirmation put back where it started warns');
   forget();
 });
 
@@ -1485,7 +1643,7 @@ test('a value staged while a write is out is kept and reported', async () => {
   choose(control(editor, 'select.bghsa-triage'), 'evaluating');
   const sent = edit.save(context);
   // A control the maintainer reached before the pass held it still.
-  edit.stage(key, { closureReason: 'not a vulnerability' });
+  edit.stage(key, context.tracking, { closureReason: 'not a vulnerability' });
   land();
   const outcome = await sent;
 
@@ -1499,7 +1657,7 @@ test('a value staged while a write is out is kept and reported', async () => {
     'a value staged while the write was out was dropped'
   );
   assert.strictEqual(edit.editsFor(key).triage, undefined, 'the written value stayed staged');
-  assert.strictEqual(edit.results.get(key)?.message, edit.SAVED_PENDING_MESSAGE);
+  assert.strictEqual(edit.results.get(key)?.message, edit.SAVED_MESSAGE);
   forget();
 });
 
