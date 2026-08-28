@@ -84,10 +84,10 @@ if (typeof require === 'function') {
   const MODE = 'done';
 
   /** What the toggle reads while another view is showing. */
-  const SHOW_DONE = 'Show done advisories';
+  const SHOW_DONE = 'Show completed';
 
-  /** What it reads while this one is. */
-  const SHOW_OPEN = 'Show open advisories';
+  /** What it reads while this one is. The statistics use it for the way back. */
+  const SHOW_OPEN = 'Show open';
 
   /** What the control that writes one closure reason reads. */
   const SAVE_LABEL = 'Save';

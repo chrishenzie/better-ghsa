@@ -185,7 +185,7 @@ test('the export carries one record per corpus member, under the columns', () =>
     lines[0],
     'ghsa_id,title,state,severity,closure_reason,reported_at,month,' +
       'time_to_first_response_ms,time_to_accept_ms,time_to_close_ms,time_to_publish_ms,' +
-      'read,observed_at'
+      'detail_fetched,observed_at'
   );
   // Every duration is measured from the report at 14:00 on the 4th, and the
   // four differ from each other, so a column carrying another one's value reads

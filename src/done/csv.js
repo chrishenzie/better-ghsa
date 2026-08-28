@@ -12,8 +12,8 @@ if (typeof require === 'function') {
  * What one advisory contributes to the export.
  *
  * Every field is either read off the advisory or read off the list row that
- * named it, so a member no advisory read backs still exports a line. `read`
- * says which it was, and the timings on an unread member are blank rather than
+ * named it, so a member no advisory read backs still exports a line.
+ * `detail_fetched` says which it was, and the timings on an unread member are blank rather than
  * zero.
  *
  * @typedef {Record<string, string | number | null>} CsvRow
@@ -54,7 +54,7 @@ if (typeof require === 'function') {
     'time_to_accept_ms',
     'time_to_close_ms',
     'time_to_publish_ms',
-    'read',
+    'detail_fetched',
     'observed_at',
   ];
 
@@ -126,7 +126,7 @@ if (typeof require === 'function') {
       time_to_accept_ms: stats.durationOf(advisory, stats.draftAt),
       time_to_close_ms: stats.durationOf(advisory, stats.closeAt),
       time_to_publish_ms: stats.durationOf(advisory, stats.publishAt),
-      read: advisory === null ? 'no' : 'yes',
+      detail_fetched: advisory === null ? 'no' : 'yes',
       observed_at: stampOf(member.observedAt),
     };
   }

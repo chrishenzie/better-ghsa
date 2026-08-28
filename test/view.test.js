@@ -485,7 +485,7 @@ test('the done view is reached from a toggle beside the one for GitHub', async (
   const toggle = doneToggle(doc);
   assert.strictEqual(
     (toggle.textContent ?? '').trim(),
-    view.SHOW_DONE,
+    'Show completed',
     'the toggle offers the view'
   );
   assert.ok(
@@ -500,7 +500,7 @@ test('the done view is reached from a toggle beside the one for GitHub', async (
   assert.strictEqual(table.viewMode(doc), view.MODE, 'the page is on the done view');
   assert.strictEqual(
     (doneToggle(doc).textContent ?? '').trim(),
-    view.SHOW_OPEN,
+    'Show open',
     'and the toggle offers the way back'
   );
 
