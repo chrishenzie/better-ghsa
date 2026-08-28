@@ -70,8 +70,6 @@ if (typeof require === 'function') {
  *   and null on a row nothing has been read on.
  * @property {number} backportTargets How many branches a maintainer asked for.
  * @property {number} backportsDone How many of them carry a merged pull request.
- * @property {boolean} textConfirmed Whether a maintainer confirmed both the
- *   advisory title and the advisory description.
  * @property {string | null} cve What the CVE chip reads, and null where the
  *   advisory has no CVE state to show.
  */
@@ -456,7 +454,6 @@ if (typeof require === 'function') {
       patch: null,
       backportTargets: 0,
       backportsDone: 0,
-      textConfirmed: false,
       cve: null,
     };
   }
@@ -515,8 +512,6 @@ if (typeof require === 'function') {
       patch: patchStateOf(derived.patch),
       backportTargets: tracking.backports.length,
       backportsDone: backportsDoneIn(derived.patch, tracking.backports),
-      textConfirmed:
-        tracking.title.status === 'confirmed' && tracking.description.status === 'confirmed',
       cve: cveTextOf(derived.cve),
     };
   }
@@ -650,8 +645,6 @@ if (typeof require === 'function') {
       if (row.backportsDone < row.backportTargets) backports.tone = 'attention';
       chips.push(backports);
     }
-    if (row.textConfirmed) chips.push({ text: 'Text confirmed' });
-
     if (row.cve !== null) chips.push({ text: row.cve });
 
     // A confirmed severity is the ordinary case and reads as the level alone.

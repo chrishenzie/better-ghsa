@@ -679,12 +679,6 @@ test('a chip stands for a condition that holds and is absent when it does not', 
     `what the reporter owes is quieter: ${reporter}`
   );
 
-  const text = chipsOf({ read: true, textConfirmed: true });
-  assert.ok(text === 'Blocked on us[danger] | Text confirmed', `text confirmed: ${text}`);
-
-  // An unconfirmed track says nothing, so no chip reads `label: no`.
-  const unconfirmed = chipsOf({ read: true, textConfirmed: false });
-  assert.ok(unconfirmed === 'Blocked on us[danger]', `text unconfirmed: ${unconfirmed}`);
 });
 
 test('the severity chip marks the unconfirmed case and no other', () => {
