@@ -179,7 +179,7 @@ if (typeof require === 'function') {
    */
   function confirmationText(state) {
     if (state.status === 'confirmed') return 'Confirmed';
-    if (state.status === 'unreadable') return 'Not checked';
+    if (state.status === 'unreadable') return 'Unknown';
     return 'Not confirmed';
   }
 
@@ -202,13 +202,11 @@ if (typeof require === 'function') {
    * @param {import('./tracking.js').Confirmation} state
    * @returns {string | null} what the panel says beside the chip. A drifted
    *   track says nothing: it is unconfirmed, and who confirmed some earlier
-   *   value does not change that.
+   *   value does not change that. Neither does a track whose value went
+   *   unread, where the chip already says the state is unknown.
    */
   function confirmationNote(state) {
     if (state.status === 'confirmed') return attribution(state, 'confirmed this value');
-    if (state.status === 'unreadable') {
-      return `${attribution(state, 'confirmed a value')} The value on the page could not be read.`;
-    }
     return null;
   }
 

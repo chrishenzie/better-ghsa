@@ -406,25 +406,6 @@ test('a value changed after it was confirmed reverts to unconfirmed', async () =
   assert.deepStrictEqual(texts(built, '.bghsa-warning'), []);
 });
 
-test('a confirmation whose current value went unread is not checked', async () => {
-  const built = await buildWith(
-    { ...triage, title: null },
-    { confirmed: { title: { by: 'samuelkarp', at: '2026-08-25T18:04:11Z', fp: 'aaaaaaaaaaaa' } } }
-  );
-  const title = confirmation(built, 'Advisory title');
-  assert.ok(title.chip === 'Not checked', `the title chip reads ${title.chip}`);
-  assert.ok(
-    title.classes === 'Label Label--secondary',
-    `the unchecked chip is toned: ${title.classes}`
-  );
-  assert.ok(
-    title.note ===
-      'samuelkarp confirmed a value on 2026-08-25 18:04 UTC. The value on the page' +
-        ' could not be read.',
-    `the note reads ${title.note}`
-  );
-});
-
 test('a scoring source the form does not carry reads as unread, not as drift', async () => {
   const unread = withRenamedField('severity');
   assert.strictEqual(unread.severityFieldPresent, false);
@@ -440,17 +421,12 @@ test('a scoring source the form does not carry reads as unread, not as drift', a
     },
   });
   const scoring = confirmation(built, 'Severity and CVSS vector');
-  assert.ok(scoring.chip === 'Not checked', `the scoring chip reads ${scoring.chip}`);
+  assert.ok(scoring.chip === 'Unknown', `the scoring chip reads ${scoring.chip}`);
   assert.ok(
     scoring.classes === 'Label Label--secondary',
     `the scoring chip is toned: ${scoring.classes}`
   );
-  assert.ok(
-    scoring.note ===
-      'dmcgowan confirmed a value on 2026-08-21 14:02 UTC. The value on the page' +
-        ' could not be read.',
-    `the note reads ${scoring.note}`
-  );
+  assert.strictEqual(scoring.note, '', `the chip carries a note: ${scoring.note}`);
   assert.deepStrictEqual(texts(built, '.bghsa-banner'), [
     'Incomplete: this extension could not read severity selection.',
   ]);

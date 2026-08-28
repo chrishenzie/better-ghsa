@@ -641,7 +641,7 @@ test('a value the page did not give cannot be confirmed', async () => {
   }
 });
 
-test('a confirmation the page cannot back is not written and is named', async () => {
+test('a confirmation the page cannot back is cleared and taken away', async () => {
   forget();
   const page = fixture('triage-thread.html');
   const talk = session(fixture('triage-thread.html'));
@@ -664,17 +664,29 @@ test('a confirmation the page cannot back is not written and is named', async ()
     parseDocument: talk.parseDocument,
   });
 
+  const box = control(second.editor, 'input.bghsa-confirm-title');
+  assert.strictEqual(box.hasAttribute('disabled'), true, 'the box can still be ticked');
+  assert.strictEqual(box.hasAttribute('checked'), false, 'the box still stands ticked');
+  assert.strictEqual(
+    text(control(second.editor, '.bghsa-confirmation-note')),
+    'Unavailable'
+  );
+  assert.strictEqual(
+    edit.editsFor(key).confirm?.title,
+    undefined,
+    'the tick the page cannot back is still staged'
+  );
   assert.strictEqual(
     control(second.editor, 'button.bghsa-save').hasAttribute('disabled'),
     true,
     'Save offered a write that would carry nothing'
   );
-  assert.strictEqual(
-    note(second.editor),
-    'A confirmation of the advisory title cannot be recorded:' +
-      ' the value on the page could not be read.'
-  );
+  assert.strictEqual(note(second.editor), '');
 
+  // The write path refuses one anyway: nothing a maintainer presses stages a
+  // confirmation of a value that could not be read, and the record it would
+  // leave claims an approval nothing can be judged against.
+  edit.stage(key, { confirm: { title: true } });
   const outcome = await edit.save(second.context);
   assert.strictEqual(outcome.ok, false);
   assert.strictEqual(outcome.reason, 'unrecordable');
@@ -683,11 +695,6 @@ test('a confirmation the page cannot back is not written and is named', async ()
     outcome.message,
     'Error: the value on the page could not be read, so a confirmation of the' +
       ' advisory title cannot be recorded.'
-  );
-  assert.strictEqual(
-    edit.editsFor(key).confirm?.title,
-    true,
-    'the staged confirmation was dropped without a word'
   );
   forget();
 });
@@ -863,7 +870,7 @@ test('an owner taken off and put back holds no change', async () => {
   press(editor, 'button.bghsa-owner-add');
 
   assert.strictEqual(ownersHeld(editor).join(' '), 'dmcgowan samuelkarp');
-  assert.strictEqual(note(editor), 'No unsaved changes.');
+  assert.strictEqual(note(editor), '');
   assert.strictEqual(control(editor, 'button.bghsa-save').hasAttribute('disabled'), true);
 });
 
@@ -880,7 +887,7 @@ test('an owner retyped in a different case holds no change', async () => {
   press(editor, 'button.bghsa-owner-add');
 
   assert.strictEqual(ownersHeld(editor).join(' '), 'SamuelKarp');
-  assert.strictEqual(note(editor), 'No unsaved changes.');
+  assert.strictEqual(note(editor), '');
   assert.strictEqual(control(editor, 'button.bghsa-save').hasAttribute('disabled'), true);
 });
 
@@ -996,7 +1003,7 @@ test('a branch taken off and put back holds no change', async () => {
   press(editor, 'button.bghsa-backport-add');
 
   assert.strictEqual(backports(editor).join(' '), 'release/2.10 release/1.0');
-  assert.strictEqual(note(editor), 'No unsaved changes.');
+  assert.strictEqual(note(editor), '');
   assert.strictEqual(control(editor, 'button.bghsa-save').hasAttribute('disabled'), true);
 });
 
@@ -1261,7 +1268,7 @@ test('a duplicate advisory retyped in a different case holds no change', async (
   });
   type(control(editor, 'input.bghsa-closure-duplicate'), 'ghsa-cm76-qm8v-3j95');
 
-  assert.strictEqual(note(editor), 'No unsaved changes.');
+  assert.strictEqual(note(editor), '');
   assert.strictEqual(control(editor, 'button.bghsa-save').hasAttribute('disabled'), true);
   forget();
 });
@@ -1355,7 +1362,8 @@ test('pressing Save writes once and asks for a render pass', async () => {
   const button = control(editor, 'button.bghsa-save');
   /** @type {HTMLElement} */ (/** @type {unknown} */ (button)).click();
 
-  assert.strictEqual(note(editor), 'Writing to GitHub.');
+  assert.strictEqual(note(editor), edit.WRITING_MESSAGE);
+  assert.strictEqual(note(editor), 'Saving...');
   // The controls are held still while the request is out: a value staged
   // against it is a value that write does not carry.
   const held = Array.from(editor.querySelectorAll('.bghsa-controls input, .bghsa-controls select'));
@@ -1491,7 +1499,7 @@ test('a value staged while a write is out is kept and reported', async () => {
   forget();
 });
 
-test('a save leaves a confirmation it could not record staged', async () => {
+test('a save drops a confirmation the page stopped backing', async () => {
   forget();
   const page = fixture('triage-thread.html');
   const talk = session(fixture('triage-thread.html'));
@@ -1516,10 +1524,10 @@ test('a save leaves a confirmation it could not record staged', async () => {
   assert.strictEqual(sentSnapshot(talk.calls)['triage'], 'evaluating');
   assert.strictEqual(
     edit.editsFor(key).confirm?.title,
-    true,
-    'the confirmation the write could not record was dropped'
+    undefined,
+    'the tick the page cannot back outlived the pass that cleared it'
   );
-  assert.strictEqual(edit.results.get(key)?.message, edit.SAVED_PENDING_MESSAGE);
+  assert.strictEqual(edit.results.get(key)?.message, edit.SAVED_MESSAGE);
   forget();
 });
 

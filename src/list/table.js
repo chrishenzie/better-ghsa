@@ -244,7 +244,7 @@ if (typeof require === 'function') {
   const RESET_LABEL = 'Reset';
 
   /** What stands in the table where a filter keeps no row. */
-  const EMPTY_TEXT = 'No advisory matches the filter';
+  const EMPTY_TEXT = 'No matches';
 
   /** What the header says while the refresh is walking the list pages. */
   const WALKING_TEXT = 'Walking the list';

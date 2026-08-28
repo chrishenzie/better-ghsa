@@ -2440,7 +2440,7 @@ test('a filter that keeps nothing says so', () => {
   assert.ok(shownIds(doc) === '', `rows under a filter nothing matches: ${shownIds(doc)}`);
   const empty = textOf(doc, `#${table.ROOT_ID} .bghsa-list-empty`);
   assert.ok(empty === table.EMPTY_TEXT, `what stands in for the rows: ${empty}`);
-  assert.ok(empty === 'No advisory matches the filter', `the wording: ${empty}`);
+  assert.ok(empty === 'No matches', `the wording: ${empty}`);
   const count = textOf(doc, `#${table.ROOT_ID} .bghsa-list-count`);
   assert.ok(count === '0 of 2 advisories', `the count: ${count}`);
 });

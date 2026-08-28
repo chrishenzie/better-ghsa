@@ -121,8 +121,11 @@ if (typeof require === 'function') {
   const SAVED_PENDING_MESSAGE =
     'Saved. The panel still holds changes that write did not carry, and they are unsaved.';
 
-  /** What the panel says while a write from it is on its way to GitHub. */
-  const WRITING_MESSAGE = 'Writing to GitHub.';
+  /**
+   * What the panel says while a write from it is on its way to GitHub. The done
+   * view says the same, so one event reads the same however it was started.
+   */
+  const WRITING_MESSAGE = globalThis.bghsa.write.SAVING_MESSAGE;
 
   /** What marks a control the flight took away, so the flight can give it back. */
   const FLIGHT_MARK = 'data-bghsa-flight';
@@ -252,6 +255,28 @@ if (typeof require === 'function') {
    */
   function stageConfirmation(key, track, value) {
     stage(key, { confirm: { ...editsFor(key).confirm, [track]: value } });
+  }
+
+  /**
+   * Takes one staged confirmation back out. What a save last reported stands:
+   * this is the panel putting a control where the page says it belongs, and not
+   * a maintainer changing anything.
+   *
+   * @param {string} key
+   * @param {ConfirmationTrack} track
+   * @returns {void}
+   */
+  function unstageConfirmation(key, track) {
+    const pending = edits.get(key);
+    if (pending?.confirm?.[track] === undefined) return;
+    const confirm = { ...pending.confirm };
+    delete confirm[track];
+    /** @type {Pending} */
+    const kept = { ...pending };
+    if (Object.keys(confirm).length === 0) delete kept.confirm;
+    else kept.confirm = confirm;
+    if (Object.keys(kept).length === 0) edits.delete(key);
+    else edits.set(key, kept);
   }
 
   /**
@@ -472,17 +497,6 @@ if (typeof require === 'function') {
 
   /**
    * @param {string[]} names
-   * @returns {string} what the panel says beside a confirmation it cannot record.
-   */
-  function unrecordedNote(names) {
-    return (
-      `A confirmation of the ${names.join(', ')} cannot be recorded:` +
-      ' the value on the page could not be read.'
-    );
-  }
-
-  /**
-   * @param {string[]} names
    * @returns {string} what the panel says where that is all a save would carry.
    */
   function unrecordedMessage(names) {
@@ -523,10 +537,9 @@ if (typeof require === 'function') {
    * back where it started, and a value another maintainer wrote in the meantime,
    * both stop counting as unsaved work.
    *
-   * A confirmation the panel cannot record is not one the advisory has caught up
-   * with, so it stays where it is and the panel keeps saying so. Neither is a
-   * value whose gate is off: a save leaves it behind, and a pass that dropped it
-   * would take typing the maintainer can still see.
+   * A value whose gate is off is not one the advisory has caught up with, so it
+   * stays where it is: a save leaves it behind, and a pass that dropped it would
+   * take typing the maintainer can still see.
    *
    * @param {string} key
    * @param {TrackingView} tracking
@@ -1573,18 +1586,21 @@ if (typeof require === 'function') {
     const pending = editsFor(key);
     for (const track of globalThis.bghsa.tracking.CONFIRMATION_TRACKS) {
       const stored = context.tracking[track.key].status === 'confirmed';
-      const checked = pick(pending.confirm?.[track.key], stored);
+      // A confirmation records a fingerprint of the value approved. A value the
+      // page did not give cannot be fingerprinted, so the box is cleared and
+      // taken away rather than standing ticked over a record nothing can hold.
+      const unreadable = context.fingerprints[track.key] === null && !stored;
+      if (unreadable) unstageConfirmation(key, track.key);
+      const checked = unreadable ? false : pick(pending.confirm?.[track.key], stored);
       const control = checkboxControl(
         doc,
         `bghsa-confirm bghsa-confirm-${track.key}`,
         checked,
         track.name
       );
-      if (context.fingerprints[track.key] === null && !stored) {
+      if (unreadable) {
         setDisabled(control.box, true);
-        control.wrap.append(
-          element(doc, 'span', 'ml-1 bghsa-confirmation-note', '(the value on the page went unread)')
-        );
+        control.wrap.append(element(doc, 'span', 'ml-1 bghsa-confirmation-note', 'Unavailable'));
       }
       control.box.addEventListener('change', () => {
         stageConfirmation(key, track.key, isChecked(control.box));
@@ -1692,7 +1708,6 @@ if (typeof require === 'function') {
       /** @type {string[]} */
       const said = [];
       if (names.length > 0) said.push(`Unsaved changes: ${names.join(', ')}.`);
-      if (blocked.length > 0) said.push(unrecordedNote(blocked));
       for (const field of held) {
         const sentence = HELD_NOTES[field];
         if (sentence !== undefined) said.push(sentence);
@@ -1702,11 +1717,9 @@ if (typeof require === 'function') {
       // carries it: the pass may be the thing that failed.
       const result = results.get(key);
       if (result !== undefined && result !== shown) said.push(result.message);
-      note.textContent = flight
-        ? WRITING_MESSAGE
-        : said.length === 0
-          ? 'No unsaved changes.'
-          : said.join(' ');
+      // Nothing staged says nothing: the Save button is disabled in exactly
+      // that state.
+      note.textContent = flight ? WRITING_MESSAGE : said.join(' ');
       setDisabled(saveButton, flight || names.length === 0);
       setDisabled(
         discardButton,
@@ -1780,6 +1793,7 @@ if (typeof require === 'function') {
     editsFor,
     stage,
     stageConfirmation,
+    unstageConfirmation,
     discard,
     release,
     staged,
@@ -1788,7 +1802,6 @@ if (typeof require === 'function') {
     heldTracks,
     writable,
     blockedTracks,
-    unrecordedNote,
     unrecordedMessage,
     changedTracks,
     prune,
