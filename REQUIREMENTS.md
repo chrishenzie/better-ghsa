@@ -90,6 +90,9 @@ reapplies the change.
 Control changes accumulate in the panel and are written on an explicit save.
 Navigating away with unsaved changes produces a warning.
 
+While a save is in flight, the controls that fed it are disabled, on whichever
+surface the save was started from. The values written are the values on screen.
+
 Every snapshot carries a schema version. A reader that encounters a major
 version it does not understand goes read-only and reports that the extension
 needs an update.
@@ -232,6 +235,10 @@ The extension adds a panel that displays derived state, displays and edits
 stored state, and shows whether each confirmation stands. It offers the button
 that preserves the original report.
 
+On a repository the allowlist does not carry, the panel displays and offers
+nothing to press: no editing controls, no save, and no preserve. A control that
+cannot work is not shown and then refused.
+
 A confirmation is confirmed or it is not. A value that has changed since it was
 confirmed reads as unconfirmed, the same as one nobody has confirmed, because
 the maintainer's next act is the same either way.
@@ -310,6 +317,11 @@ The list page renders from cache immediately and refreshes in the background,
 stalest first, at a throttled rate. Rows update as data arrives. Reading an
 advisory's state costs one fetch of its detail page, which also supplies every
 derived value.
+
+Reading a repository's advisory lists walks every page. Nothing caps how many
+pages it will read; the throttled rate is the only bound. A walk that stops
+before the last page is recorded as incomplete, and the surfaces reading from
+it say so.
 
 ## 10. Done page and statistics
 
