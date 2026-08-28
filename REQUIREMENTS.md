@@ -391,7 +391,10 @@ extension's state, and their actions remain visible through derived state.
 - Review status of the pull requests in a private fork. The advisory page
   carries none, so reading it costs one fetch per pull request. A set of
   prepared patches that nobody has approved is still pending maintainer work,
-  which makes this worth revisiting.
+  which makes this worth revisiting. Reconsidered on 2026-08-27, when the patch
+  chips took color, and left out again: a patch nobody has reviewed reads the
+  same as one three maintainers approved, and that is the cost of not spending
+  a fetch per pull request.
 - Check status of those pull requests. A private fork does not run CI and still
   displays an expected check state, so the value shown does not describe
   anything that ran.

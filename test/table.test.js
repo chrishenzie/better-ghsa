@@ -234,7 +234,6 @@ test('a cached advisory read fills the triage row', async () => {
   assert.ok(
     chips ===
       'Blocked on the reporter[Label--secondary bghsa-tone-attention] |' +
-        ' Patch in review[Label--secondary bghsa-tone-information] |' +
         ' Backports 0 of 1[Label--secondary bghsa-tone-attention] |' +
         ' High, unconfirmed[Label--orange bghsa-dim] |' +
         ' Embargo lifts 2026-09-30[Label--secondary bghsa-tone-attention]',
@@ -321,35 +320,50 @@ function stateChipColor(doc) {
   return chipColor(one(row, '.bghsa-list-state span.Label'));
 }
 
+/**
+ * @param {Document} doc
+ * @returns {string} the chips under the first row's title, as `chipLine` reads
+ *   them.
+ */
+function chipsIn(doc) {
+  return chipLine(/** @type {Element} */ (tableRows(doc)[0]));
+}
+
 test('the stylesheet carries a rule for every color the chips invent', () => {
-  // Primer paints the classes GitHub's own chips carry. These four are the
+  // Primer paints the classes GitHub's own chips carry. These three are the
   // extension's own, so a chip carrying one and no rule defining it would draw
   // as though it carried no color at all.
-  for (const name of [
-    'bghsa-tone-attention',
-    'bghsa-tone-information',
-    'bghsa-tone-danger',
-    'bghsa-dim',
-  ]) {
+  for (const name of ['bghsa-tone-attention', 'bghsa-tone-danger', 'bghsa-dim']) {
     assert.ok(table.STYLE_TEXT.includes(`.${name} {`), `no rule defines .${name}`);
   }
 });
 
-test('a draft nobody has started patching is the state chip that carries color', async () => {
-  // Four rows that differ in one thing each, so the color can only be coming
-  // from the rule and not from the state, the patch, or the read on its own.
+test('the patch chips stand on a draft and the state chip stays dimmed', async () => {
+  // Five renders, each differing from another in one thing: the state, what the
+  // fork holds, and whether anything was read at all. The draft and the triage
+  // advisory are rendered over the same open pull request, so a chip that read
+  // the fork and ignored the state would show up here, and the draft is
+  // rendered both with a patch and without, so one that read the state and
+  // ignored the fork would too.
   const unread = listPage('list-page-draft.html');
   await render(unread);
+  assert.ok(chipsIn(unread) === '', `a draft nothing has been read on: ${chipsIn(unread)}`);
   assert.ok(
     stateChipColor(unread) === 'Label--secondary',
-    `a draft nothing has been read on: ${stateChipColor(unread)}`
+    `the state chip on a draft nothing has been read on: ${stateChipColor(unread)}`
   );
 
   const waiting = listPage('list-page-draft.html');
-  await render(waiting, { [keyFor('GHSA-5hg2-rfq2-8fm5')]: entryOf(DRAFT_RECORD, 'draft') });
+  await render(waiting, { [keyFor('GHSA-5hg2-rfq2-8fm5')]: entryOf(withFork(DRAFT_RECORD, null), 'draft') });
   assert.ok(
-    stateChipColor(waiting) === 'Label--secondary bghsa-tone-attention',
-    `a draft with no patch yet: ${stateChipColor(waiting)}`
+    chipsIn(waiting) ===
+      'Blocked on us[Label--secondary bghsa-tone-danger] |' +
+        ' No patch yet[Label--secondary bghsa-tone-danger]',
+    `a draft whose fork holds no pull request: ${chipsIn(waiting)}`
+  );
+  assert.ok(
+    stateChipColor(waiting) === 'Label--secondary',
+    `the state chip on a draft with no patch: ${stateChipColor(waiting)}`
   );
 
   const patched = listPage('list-page-draft.html');
@@ -357,19 +371,43 @@ test('a draft nobody has started patching is the state chip that carries color',
     [keyFor('GHSA-5hg2-rfq2-8fm5')]: entryOf(withFork(DRAFT_RECORD, OPEN_PATCH), 'draft'),
   });
   assert.ok(
+    chipsIn(patched) ===
+      'Blocked on us[Label--secondary bghsa-tone-danger] |' +
+        ' Patch in review[Label--secondary bghsa-tone-attention]',
+    `a draft whose fork holds an open pull request: ${chipsIn(patched)}`
+  );
+  assert.ok(
     stateChipColor(patched) === 'Label--secondary',
-    `a draft somebody has opened a patch on: ${stateChipColor(patched)}`
+    `the state chip on a draft under patch: ${stateChipColor(patched)}`
   );
 
-  // A triage advisory with no patch either, so what colors the draft is the
-  // state and not the missing patch.
+  // The same open pull request the draft above was painted for, on an advisory
+  // in triage. No patch is owed until the advisory is accepted, so neither the
+  // patch nor its absence puts a chip on the row.
   const triage = listPage('list-page-triage.html');
   await render(triage, {
+    [keyFor('GHSA-jmvx-2wfw-xfgj')]: entryOf(withFork(TRIAGE_RECORD, OPEN_PATCH), 'triage'),
+  });
+  assert.ok(
+    chipsIn(triage) ===
+      'Blocked on the reporter[Label--secondary bghsa-tone-attention] |' +
+        ' Backports 0 of 1[Label--secondary bghsa-tone-attention] |' +
+        ' High, unconfirmed[Label--orange bghsa-dim] |' +
+        ' Embargo lifts 2026-09-30[Label--secondary bghsa-tone-attention]',
+    `a triage advisory whose fork holds an open pull request: ${chipsIn(triage)}`
+  );
+
+  const untouched = listPage('list-page-triage.html');
+  await render(untouched, {
     [keyFor('GHSA-jmvx-2wfw-xfgj')]: entryOf(withFork(TRIAGE_RECORD, null), 'triage'),
   });
   assert.ok(
-    stateChipColor(triage) === 'Label--secondary',
-    `a triage advisory with no patch: ${stateChipColor(triage)}`
+    chipsIn(untouched) === chipsIn(triage),
+    `a triage advisory whose fork holds nothing: ${chipsIn(untouched)}`
+  );
+  assert.ok(
+    stateChipColor(untouched) === 'Label--secondary',
+    `the state chip on a triage advisory: ${stateChipColor(untouched)}`
   );
 });
 
@@ -712,19 +750,46 @@ test('the CVE, patch, backport, and embargo chips read what the advisory holds',
     `an assigned CVE: ${assigned}`
   );
 
-  const patch = chipsOf({ read: true, patch: 'Patch merged' });
+  const draft = { read: true, state: 'Draft' };
+
+  const patch = chipsOf({ ...draft, patch: 'Patch merged', pullRequests: 1 });
   assert.ok(patch === 'Blocked on us[danger] | Patch merged', `patch state: ${patch}`);
 
-  // A patch under review is where the work stands and carries color; one that
-  // landed and one that was closed are finished and stay dimmed.
-  const inReview = chipsOf({ read: true, patch: 'Patch in review' });
+  // A patch nobody has written and one under review are both where the work
+  // stands, and part in how loud they are. A patch that landed and one that was
+  // closed are finished and stay dimmed.
+  const none = chipsOf({ ...draft, patch: null, pullRequests: 0 });
   assert.ok(
-    inReview === 'Blocked on us[danger] | Patch in review[information]',
+    none === 'Blocked on us[danger] | No patch yet[danger]',
+    `a draft nobody has patched: ${none}`
+  );
+
+  const inReview = chipsOf({ ...draft, patch: 'Patch in review', pullRequests: 1 });
+  assert.ok(
+    inReview === 'Blocked on us[danger] | Patch in review[attention]',
     `a patch under review: ${inReview}`
   );
 
-  const closed = chipsOf({ read: true, patch: 'Patch closed' });
+  const closed = chipsOf({ ...draft, patch: 'Patch closed', pullRequests: 1 });
   assert.ok(closed === 'Blocked on us[danger] | Patch closed', `a closed patch: ${closed}`);
+
+  // A pull request this reader could not judge leaves the fork holding one, so
+  // the row says neither that a patch is under review nor that none exists.
+  const unjudged = chipsOf({ ...draft, patch: null, pullRequests: 1 });
+  assert.ok(unjudged === 'Blocked on us[danger]', `a patch state nobody read: ${unjudged}`);
+
+  // The same three forks on an advisory in triage, which is owed no patch.
+  for (const held of [
+    { patch: null, pullRequests: 0 },
+    { patch: 'Patch in review', pullRequests: 1 },
+    { patch: 'Patch merged', pullRequests: 1 },
+  ]) {
+    const triage = chipsOf({ read: true, state: 'Triage', ...held });
+    assert.ok(
+      triage === 'Blocked on us[danger]',
+      `a triage advisory holding ${JSON.stringify(held)}: ${triage}`
+    );
+  }
 
   const backports = chipsOf({ read: true, backportTargets: 3, backportsDone: 2 });
   assert.ok(
@@ -1242,6 +1307,7 @@ test('a refresh crawls both open states and fills every row in', async () => {
     assert.ok(
       chips.get(draft) ===
         'Blocked on us[Label--secondary bghsa-tone-danger] |' +
+          ' No patch yet[Label--secondary bghsa-tone-danger] |' +
           ' High, unconfirmed[Label--secondary bghsa-dim]',
       `the draft row after the refresh: ${chips.get(draft)}`
     );

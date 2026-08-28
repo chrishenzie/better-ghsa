@@ -24,7 +24,7 @@ if (typeof require === 'function') {
  *
  * @typedef {object} ChipSpec
  * @property {string} text
- * @property {'attention' | 'information' | 'danger'} [tone]
+ * @property {'attention' | 'danger'} [tone]
  * @property {string | null} [severityClass] The `Label--` modifiers GitHub
  *   painted this advisory's own severity chip with, which is what the severity
  *   chip takes in place of the dimmed one.
@@ -68,6 +68,9 @@ if (typeof require === 'function') {
  * @property {boolean} embargoOverdue
  * @property {string | null} patch The furthest state the private fork's pull
  *   requests reached, and null where there is nothing to say.
+ * @property {number | null} pullRequests How many pull requests the private
+ *   fork holds, and null on a row nothing has been read on. Zero is what
+ *   says a draft has no patch yet, which a row nobody has read cannot say.
  * @property {number} backportTargets How many branches a maintainer asked for.
  * @property {number} backportsDone How many of them carry a merged pull request.
  * @property {boolean} textConfirmed Whether a maintainer confirmed both the
@@ -221,9 +224,6 @@ if (typeof require === 'function') {
     '.bghsa-tone-attention { color: var(--fgColor-default);' +
       ' background-color: var(--bgColor-attention);' +
       ' border-color: var(--bgColor-attention); }',
-    '.bghsa-tone-information { color: var(--fgColor-default);' +
-      ' background-color: var(--bgColor-accent);' +
-      ' border-color: var(--bgColor-accent); }',
     '.bghsa-tone-danger { color: var(--fgColor-default);' +
       ' background-color: var(--bgColor-danger);' +
       ' border-color: var(--bgColor-danger); }',
@@ -358,6 +358,9 @@ if (typeof require === 'function') {
   /** What the patch chip reads while the fork holds an open pull request. */
   const PATCH_IN_REVIEW = 'Patch in review';
 
+  /** What the patch chip reads while the fork holds no pull request. */
+  const NO_PATCH = 'No patch yet';
+
   /** The state GitHub gives an advisory nobody has published or closed yet. */
   const DRAFT_STATE = 'Draft';
 
@@ -435,6 +438,7 @@ if (typeof require === 'function') {
       embargoLift: null,
       embargoOverdue: false,
       patch: null,
+      pullRequests: null,
       backportTargets: 0,
       backportsDone: 0,
       textConfirmed: false,
@@ -494,6 +498,7 @@ if (typeof require === 'function') {
       embargoLift,
       embargoOverdue: globalThis.bghsa.derive.embargoOverdue(advisory, embargoLift, at),
       patch: patchStateOf(derived.patch),
+      pullRequests: derived.patch.pullRequests.length,
       backportTargets: tracking.backports.length,
       backportsDone: backportsDoneIn(derived.patch, tracking.backports),
       textConfirmed:
@@ -615,11 +620,19 @@ if (typeof require === 'function') {
       chips.push(waiting);
     }
 
-    if (row.patch !== null) {
-      /** @type {ChipSpec} */
-      const patch = { text: row.patch };
-      if (row.patch === PATCH_IN_REVIEW) patch.tone = 'information';
-      chips.push(patch);
+    // The patch chips stand on a draft and on no other. An advisory in triage
+    // has not been accepted, so no patch is owed for it yet and its absence
+    // says nothing. A fork holding no pull request is what says no patch yet,
+    // and a pull request whose state went unread says nothing either way.
+    if (row.state === DRAFT_STATE) {
+      if (row.patch !== null) {
+        /** @type {ChipSpec} */
+        const patch = { text: row.patch };
+        if (row.patch === PATCH_IN_REVIEW) patch.tone = 'attention';
+        chips.push(patch);
+      } else if (row.pullRequests === 0) {
+        chips.push({ text: NO_PATCH, tone: 'danger' });
+      }
     }
     if (row.backportTargets > 0) {
       /** @type {ChipSpec} */
@@ -1067,13 +1080,11 @@ if (typeof require === 'function') {
 
     const state = element(doc, 'div', 'pl-2 flex-shrink-0 bghsa-list-state');
     if (row.state !== null) {
-      // A draft the maintainers have not started patching is the one state chip
-      // that carries color. It takes a read to say it, so a row nothing has
-      // been read on leaves the chip dimmed.
-      /** @type {ChipSpec} */
-      const spec = { text: row.state };
-      if (row.read && row.state === DRAFT_STATE && row.patch === null) spec.tone = 'attention';
-      state.append(chip(doc, spec));
+      // The state chip says what state the advisory is in and nothing else, so
+      // it is dimmed whatever else the row holds: color never carries a fact a
+      // chip's words leave out. A draft with no patch takes a chip of its own
+      // beside the title.
+      state.append(chip(doc, { text: row.state }));
     }
     item.append(state);
 
