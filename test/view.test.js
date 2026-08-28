@@ -723,6 +723,35 @@ test("the severity chip takes GitHub's own color and no other chip does", async 
   );
 });
 
+test('the observed cell reads the same words the list rows read', async () => {
+  const unread = ghsa('dddd');
+  const read = ghsa('dddf');
+  const doc = await page(
+    await corpusOf([
+      member({ ghsaId: unread, state: 'closed' }),
+      member({
+        ghsaId: read,
+        state: 'published',
+        advisory: advisory({ ref: { ...REF, ghsaId: read }, ghsaId: read, state: 'Published' }),
+      }),
+    ])
+  );
+
+  const cell = '.bghsa-done-observed';
+  assert.strictEqual(
+    textOf(doneRow(doc, unread), cell),
+    'Not read',
+    'a row no advisory read backs says so in the words the table uses'
+  );
+  const seen = textOf(doneRow(doc, read), cell);
+  assert.ok(seen.startsWith('Observed '), `the read row reads: ${seen}`);
+  assert.strictEqual(
+    seen,
+    table.observedTextOf({ read: true, observedAt: Date.parse('2026-08-27T09:00:00Z') }),
+    'and it is built by the same function the list rows are'
+  );
+});
+
 test('the header tells a list still filling from one that will stay short', async () => {
   const members = [member({ ghsaId: ghsa('eeff'), state: 'closed', severity: 'high' })];
   const header = `#${view.ROOT_ID} .bghsa-done-header span.Label`;

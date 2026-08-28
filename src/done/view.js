@@ -505,7 +505,7 @@ if (typeof require === 'function') {
         doc,
         'div',
         'pl-2 flex-shrink-0 text-small bghsa-done-observed',
-        `Observed ${globalThis.bghsa.table.formatTime(row.observedAt) ?? 'never'}`
+        globalThis.bghsa.table.observedTextOf(row)
       )
     );
     return item;

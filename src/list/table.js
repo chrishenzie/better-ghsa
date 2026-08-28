@@ -1126,7 +1126,10 @@ if (typeof require === 'function') {
   }
 
   /**
-   * @param {TableRow} row
+   * The done view draws the same cell, so it takes the fields the answer is
+   * built from rather than a table row.
+   *
+   * @param {{ read: boolean, observedAt: number | null }} row
    * @returns {string} when this row's data was read. A row no advisory read
    *   backs says so: the moment its list markup was read is when GitHub's own
    *   row was seen, not when the advisory behind it was.
