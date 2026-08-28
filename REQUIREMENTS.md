@@ -398,6 +398,14 @@ in scope at the level of a loadable build and install instructions they can
 follow. Store listings and signing are later work, and the constraints they
 impose are considerations throughout.
 
+The Firefox add-on id is `better-ghsa@sbk.wtf` and Firefox 128 is the floor. A
+Manifest V3 extension carries its own add-on id
+because signing requires one and addons.mozilla.org assigns none, and the id is
+fixed from the first signing because the update path is keyed by it. Firefox
+before 127 neither shows the `github.com` host permission at install nor grants
+it, so the content scripts would not inject and the extension would appear to
+do nothing; Firefox before 128 cannot receive updates at all.
+
 The extension never requires another maintainer to have it installed. A
 maintainer acting through GitHub's native UI must not corrupt or confuse the
 extension's state, and their actions remain visible through derived state.
