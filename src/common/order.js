@@ -33,7 +33,7 @@ if (typeof require === 'function') {
    * section 9 names them.
    */
   const GROUPS = {
-    EMBARGO_OVERDUE: 'overdue embargo',
+    EMBARGO_OVERDUE: 'embargo overdue',
     NEW_ACTIVITY: 'new activity',
     BLOCKED_ON_US: 'blocked on us',
     NEVER_REVIEWED: 'never reviewed',

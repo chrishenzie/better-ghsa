@@ -94,6 +94,24 @@ test('state comes before every group: a draft sorts above every advisory in tria
   ordersAs([urgent, quiet], ['GHSA-zzzz-zzzz-zzzz', 'GHSA-aaaa-aaaa-aaaa'], 'draft above triage');
 });
 
+test('each state orders the groups REQUIREMENTS.md section 9 names for it', () => {
+  // Every adjacency of both tables, in the two arrays the comparator ranks by.
+  // Draft carries no never reviewed: a maintainer moved the advisory there.
+  assert.deepStrictEqual(order.groupsFor('draft'), [
+    'embargo overdue',
+    'new activity',
+    'blocked on us',
+    'blocked on the reporter',
+  ]);
+  assert.deepStrictEqual(order.groupsFor('triage'), [
+    'embargo overdue',
+    'blocked on us',
+    'never reviewed',
+    'new activity',
+    'blocked on the reporter',
+  ]);
+});
+
 test('an advisory nobody has triaged is never reviewed in triage', () => {
   // Nothing has been set on it: no triage value, no member activity, no score,
   // no embargo, no waiting time.
@@ -177,7 +195,7 @@ test('the waiting state a chip carries is not the ordering group', () => {
   assert.strictEqual(order.groupOf(fresh), 'blocked on us');
   const overdue = entry('B', { embargoOverdue: true, triage: 'evaluating' });
   assert.strictEqual(order.waitingStateOf(overdue), 'blocked on us');
-  assert.strictEqual(order.groupOf(overdue), 'overdue embargo');
+  assert.strictEqual(order.groupOf(overdue), 'embargo overdue');
 });
 
 test('confirmed severities sort highest first, then unconfirmed severities', () => {

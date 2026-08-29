@@ -209,7 +209,7 @@ advisory whose triage value is set for the first time, the duration is measured
 from the most recent maintainer action on the advisory, or from the report time
 when no maintainer has acted.
 
-**Overdue embargo.** The embargo lift date has passed and the advisory is not
+**Embargo overdue.** The embargo lift date has passed and the advisory is not
 published.
 
 Every triage value is classified as blocked on us or blocked on the reporter,
@@ -295,7 +295,7 @@ needs active work, so every draft sorts above every advisory in triage.
 
 Within draft:
 
-1. Overdue embargo.
+1. Embargo overdue.
 2. New activity.
 3. Blocked on us.
 4. Blocked on the reporter.
@@ -305,7 +305,7 @@ there.
 
 Within triage:
 
-1. Overdue embargo.
+1. Embargo overdue.
 2. Blocked on us.
 3. Never reviewed.
 4. New activity.
