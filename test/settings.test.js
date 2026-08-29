@@ -97,6 +97,26 @@ test('the manifest declares the settings page and no background script', () => {
   assert.ok(!manifest.content_scripts[0].js.includes('src/settings/settings.js'));
 });
 
+test('the manifest forbids any page from framing the extension pages', () => {
+  // The settings page is in `web_accessible_resources` for `https://github.com/*`,
+  // which is what lets the button on an off-allowlist advisory page open it. That
+  // same listing lets a script on `github.com` put the page in a frame, so the
+  // policy denies framing outright. Firefox has enforced `frame-ancestors` on
+  // extension pages since 97 (CVE-2022-22761) and Chrome always has; the manifest
+  // asks for 128 or later.
+  const policy = manifest.content_security_policy.extension_pages;
+  assert.match(policy, /frame-ancestors 'none'/);
+  // Declaring the key replaces the browser's default, so the default's own
+  // protections are restated here: Chrome's `script-src 'self'; object-src 'self';`
+  // and Firefox's `script-src 'self'; upgrade-insecure-requests;`. Anything looser
+  // in `script-src` would let the page run code it did not ship with.
+  assert.match(policy, /script-src 'self';/);
+  assert.match(policy, /object-src 'self';/);
+  assert.match(policy, /upgrade-insecure-requests/);
+  for (const loose of ["'unsafe-eval'", "'unsafe-inline'", "'wasm-unsafe-eval'", 'http:', 'https:', '*'])
+    assert.ok(!policy.includes(loose), `the policy carries ${loose}`);
+});
+
 test('a fresh install shows an empty list and says the extension is doing nothing', async () => {
   allowlist.setStorage(memory());
   const { document } = page();

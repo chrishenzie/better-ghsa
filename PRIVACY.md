@@ -197,6 +197,11 @@ the button open the settings. It makes the settings page loadable by pages on
 button is drawn and is never written into the page, so a script on `github.com`
 does not read it out of the document.
 
+That listing also lets a page on `github.com` load the settings page into a
+frame, where it could sit invisibly under a click. The manifest's content
+security policy forbids every site from framing the extension's pages, so such a
+frame stays empty.
+
 ## Clearing everything
 
 Removing the extension deletes everything it stored. In Firefox, open
