@@ -91,7 +91,7 @@ function options(overrides) {
     doc: triageDoc,
     ref: REF,
     body: 'a comment',
-    contains: ['Original report preserved by Better GHSA'],
+    expected: ['Original report preserved by Better GHSA'],
     parseDocument: document,
     ...overrides,
   };
@@ -186,12 +186,12 @@ test('the strings a write put in one comment must come back in one comment', () 
       'Original report preserved by Better GHSA. The title below is the advisory title.' +
       '</div></body></html>'
   );
-  const needles = [
+  const expected = [
     'Original report preserved by Better GHSA',
     'The title below is the advisory title.',
   ];
-  assert.strictEqual(write.commentContains(scattered, needles), false);
-  assert.strictEqual(write.commentContains(together, needles), true);
+  assert.strictEqual(write.commentContains(scattered, expected), false);
+  assert.strictEqual(write.commentContains(together, expected), true);
 });
 
 test('a form action names the advisory the reference names', () => {
@@ -262,7 +262,7 @@ test('a write GitHub answered with the whole advisory page is confirmed', async 
   );
   const fake = fakeFetch(200, answer);
   const outcome = await write.createComment(
-    options({ contains: ['Better GHSA tracking state'], fetch: fake.send })
+    options({ expected: ['Better GHSA tracking state'], fetch: fake.send })
   );
   assert.strictEqual(outcome.ok, true);
   assert.strictEqual(outcome.status, 200);
@@ -360,7 +360,7 @@ test('a write this extension could not confirm is not sent', async () => {
   const empty = await write.createComment(options({ body: '  ', fetch: fake.send }));
   assert.strictEqual(empty.ok, false);
   assert.strictEqual(empty.reason, 'unverifiable');
-  const blind = await write.createComment(options({ contains: [''], fetch: fake.send }));
+  const blind = await write.createComment(options({ expected: [''], fetch: fake.send }));
   assert.strictEqual(blind.ok, false);
   assert.strictEqual(blind.reason, 'unverifiable');
   assert.strictEqual(fake.calls.length, 0);
@@ -399,7 +399,7 @@ function editOptions(overrides) {
     ref: REF,
     commentId: EDIT_ID,
     body: 'the snapshot this extension writes',
-    contains: ['better-ghsa:state:1:'],
+    expected: ['better-ghsa:state:1:'],
     parseDocument: document,
     ...overrides,
   };
@@ -636,11 +636,11 @@ function advisoryHtml(options) {
 
 /**
  * A stand-in for `fetch` answering the advisory page with `page` and the write
- * with a comment carrying `needle`.
+ * with a comment carrying `expected`.
  *
  * @param {object} [options]
  * @param {string} [options.page]
- * @param {string} [options.needle]
+ * @param {string} [options.expected]
  * @param {number} [options.status] The status the write is answered with.
  * @returns {{ send: import('../src/common/write.js').WriteFetch, calls: Array<{ url: string, init: RequestInit }> }}
  */
@@ -658,7 +658,7 @@ function exchange(options) {
       return {
         status: settings.status ?? 200,
         text: async () =>
-          `<div class="comment-body">${settings.needle ?? 'the needle'}</div>`,
+          `<div class="comment-body">${settings.expected ?? 'the expected text'}</div>`,
       };
     },
   };
@@ -711,10 +711,39 @@ test('a page that is another advisory stops the write before the body', async ()
   assert.strictEqual(fake.calls.filter((call) => call.init.method === 'POST').length, 0);
 });
 
+test('the read time is taken before the page is asked for', async () => {
+  // REQUIREMENTS.md section 2: content read before a write must never be
+  // stored under a timestamp taken after it. The stamp is what the surfaces
+  // store the fetched page under, so a stamp taken after the request would
+  // date a page to a moment later than it was read, and a change GitHub took
+  // in between would read as already seen.
+  const fake = exchange({ expected: 'the marker' });
+  let clock = 1000;
+  const { outcome, run } = await write.runWrite({
+    ref: REF,
+    // Time passes while the page is on the wire, which is the whole of what
+    // this is about: the two moments are only ever equal on a clock that
+    // does not move.
+    fetch: async (url, init) => {
+      if ((init.method ?? 'GET') === 'GET') clock += 60_000;
+      return fake.send(url, init);
+    },
+    parseDocument: document,
+    now: () => clock,
+    prepare: (context) => {
+      assert.strictEqual(context.readAt, 1000, 'the body builder was given the later moment');
+      return { body: 'the marker', expected: ['the marker'] };
+    },
+  });
+  assert.strictEqual(outcome.ok, true, outcome.message);
+  assert.strictEqual(run?.readAt, 1000, 'the read was stamped after the page came back');
+  assert.strictEqual(clock, 61_000, 'the clock did not move while the request was out');
+});
+
 test('the hold is taken, marked sent, and released with what happened', async () => {
   /** @type {string[]} */
   const events = [];
-  const fake = exchange({ needle: 'the marker' });
+  const fake = exchange({ expected: 'the marker' });
   const { outcome, run } = await write.runWrite({
     ref: REF,
     fetch: fake.send,
@@ -729,7 +758,7 @@ test('the hold is taken, marked sent, and released with what happened', async ()
     },
     prepare: (context) => {
       events.push(`prepare ${context.ref.ghsaId} at ${context.readAt}`);
-      return { body: 'the marker', contains: ['the marker'] };
+      return { body: 'the marker', expected: ['the marker'] };
     },
   });
   assert.strictEqual(outcome.ok, true, outcome.message);
@@ -763,12 +792,12 @@ test('a held advisory refuses the write in the holder words', async () => {
 });
 
 test('a prepared write that names a comment replaces its body', async () => {
-  const fake = exchange({ needle: 'replaced' });
+  const fake = exchange({ expected: 'replaced' });
   const { outcome } = await write.runWrite({
     ref: REF,
     fetch: fake.send,
     parseDocument: document,
-    prepare: () => ({ body: 'replaced', contains: ['replaced'], commentId: '77' }),
+    prepare: () => ({ body: 'replaced', expected: ['replaced'], commentId: '77' }),
   });
   assert.strictEqual(outcome.ok, true, outcome.message);
   const post = fake.calls.find((call) => call.init.method === 'POST');
@@ -777,12 +806,12 @@ test('a prepared write that names a comment replaces its body', async () => {
     '/git-utensils/Spoon-Knife/security/advisories/GHSA-jmvx-2wfw-xfgj/comments/77'
   );
 
-  const created = exchange({ needle: 'made' });
+  const created = exchange({ expected: 'made' });
   const { outcome: madeOutcome } = await write.runWrite({
     ref: REF,
     fetch: created.send,
     parseDocument: document,
-    prepare: () => ({ body: 'made', contains: ['made'] }),
+    prepare: () => ({ body: 'made', expected: ['made'] }),
   });
   assert.strictEqual(madeOutcome.ok, true, madeOutcome.message);
   assert.strictEqual(

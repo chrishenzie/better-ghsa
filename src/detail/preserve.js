@@ -398,7 +398,7 @@ if (typeof require === 'function') {
             'Error: this extension could not read what the comment would say.'
           );
         }
-        return { body, contains: [marker] };
+        return { body, expected: [marker] };
       },
     });
     return outcome;

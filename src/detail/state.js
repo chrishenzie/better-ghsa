@@ -537,7 +537,7 @@ if (typeof require === 'function') {
         read.landed = () => withWrite(fresh, writtenComment(fresh, viewer, mine, reading, at), mine);
         return {
           body: buildBody(built),
-          contains: [globalThis.bghsa.schema.STATE_COMMENT_MARKER, json],
+          expected: [globalThis.bghsa.schema.STATE_COMMENT_MARKER, json],
           ...(mine === undefined ? {} : { commentId: mine.id }),
         };
       },

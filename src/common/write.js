@@ -38,7 +38,7 @@ if (typeof require === 'function') {
  * @property {import('./parse-detail.js').AdvisoryRef} ref The advisory the
  *   comment goes on, read from that page.
  * @property {string} body The comment's markdown.
- * @property {readonly string[]} contains Text the response must render in one
+ * @property {readonly string[]} expected Text the response must render in one
  *   comment for the write to count as done.
  * @property {WriteFetch} [fetch]
  * @property {(html: string) => Document} [parseDocument]
@@ -54,7 +54,7 @@ if (typeof require === 'function') {
  * @property {string} commentId The comment this edit replaces the body of.
  *   The caller has established that this maintainer wrote it.
  * @property {string} body The comment's new markdown.
- * @property {readonly string[]} contains Text the response must render in one
+ * @property {readonly string[]} expected Text the response must render in one
  *   comment for the write to count as done.
  * @property {WriteFetch} [fetch]
  * @property {(html: string) => Document} [parseDocument]
@@ -81,7 +81,7 @@ if (typeof require === 'function') {
  *
  * @typedef {object} PreparedWrite
  * @property {string} body The comment's markdown.
- * @property {readonly string[]} contains Text the response must render in one
+ * @property {readonly string[]} expected Text the response must render in one
  *   comment for the write to count as done.
  * @property {string} [commentId] The comment this replaces the body of. A
  *   prepared write naming none creates a comment.
@@ -369,9 +369,9 @@ if (typeof require === 'function') {
   }
 
   /**
-   * Whether `doc` renders one comment holding every one of `needles`. Both roots
-   * are read: a document parsed from a fragment carries its content under the
-   * document element and leaves the body empty.
+   * Whether `doc` renders one comment holding every one of `expected`. Both
+   * roots are read: a document parsed from a fragment carries its content
+   * under the document element and leaves the body empty.
    *
    * A response that echoes a rejected body back into the comment box holds what
    * was written as the value of a control, and an advisory whose own description
@@ -379,12 +379,12 @@ if (typeof require === 'function') {
    * rendered comment carrying all of them is the write.
    *
    * @param {Document} doc
-   * @param {readonly string[]} needles
+   * @param {readonly string[]} expected
    * @returns {boolean}
    */
-  function commentContains(doc, needles) {
-    const wanted = needles.map((needle) => collapse(needle)).filter((needle) => needle !== '');
-    if (wanted.length === 0) return false;
+  function commentContains(doc, expected) {
+    const collapsed = expected.map((string) => collapse(string)).filter((string) => string !== '');
+    if (collapsed.length === 0) return false;
 
     /** @type {Set<Element>} */
     const bodies = new Set();
@@ -396,7 +396,7 @@ if (typeof require === 'function') {
 
     for (const body of bodies) {
       const text = collapse(renderedText(body));
-      if (wanted.every((needle) => text.includes(needle))) return true;
+      if (collapsed.every((string) => text.includes(string))) return true;
     }
     return false;
   }
@@ -575,10 +575,10 @@ if (typeof require === 'function') {
    *
    * @param {import('./parse-detail.js').AdvisoryRef} ref
    * @param {string} body
-   * @param {readonly string[]} contains
+   * @param {readonly string[]} expected
    * @returns {WriteResult | null} null when nothing refuses the write.
    */
-  function refuseBeforeRequest(ref, body, contains) {
+  function refuseBeforeRequest(ref, body, expected) {
     const nameWithOwner = `${ref.owner}/${ref.repo}`;
     if (!globalThis.bghsa.allowlist.isAllowed(nameWithOwner)) {
       return result(false, 'allowlist', null, allowlistMessage(nameWithOwner));
@@ -586,7 +586,7 @@ if (typeof require === 'function') {
     if (collapse(body) === '') {
       return result(false, 'unverifiable', null, 'Error: the comment is empty.');
     }
-    if (contains.every((needle) => collapse(needle) === '')) {
+    if (expected.every((string) => collapse(string) === '')) {
       return result(
         false,
         'unverifiable',
@@ -604,11 +604,11 @@ if (typeof require === 'function') {
    *
    * @param {string} action
    * @param {URLSearchParams} params
-   * @param {readonly string[]} contains
+   * @param {readonly string[]} expected
    * @param {CreateCommentOptions | EditCommentOptions} options
    * @returns {Promise<WriteResult>}
    */
-  async function postForm(action, params, contains, options) {
+  async function postForm(action, params, expected, options) {
     const send = options.fetch ?? /** @type {WriteFetch} */ (globalThis.fetch.bind(globalThis));
     /** @type {WriteResponse} */
     let response;
@@ -636,7 +636,7 @@ if (typeof require === 'function') {
       options.parseDocument ?? ((html) => new DOMParser().parseFromString(html, 'text/html'));
     let written = false;
     try {
-      written = commentContains(toDocument(await response.text()), contains);
+      written = commentContains(toDocument(await response.text()), expected);
     } catch (error) {
       log('the write could not be confirmed', error);
       return result(false, 'unwritten', status, UNCONFIRMED_MESSAGE);
@@ -657,8 +657,8 @@ if (typeof require === 'function') {
    * @returns {Promise<WriteResult>}
    */
   async function createComment(options) {
-    const { doc, ref, body, contains } = options;
-    const refused = refuseBeforeRequest(ref, body, contains);
+    const { doc, ref, body, expected } = options;
+    const refused = refuseBeforeRequest(ref, body, expected);
     if (refused !== null) return refused;
 
     const form = findCommentForm(doc);
@@ -683,7 +683,7 @@ if (typeof require === 'function') {
     const submit = form.querySelector('button[type="submit"][name="comment"]');
     if (submit !== null) params.set('comment', submit.getAttribute('value') ?? '1');
 
-    return postForm(action, params, contains, options);
+    return postForm(action, params, expected, options);
   }
 
   /**
@@ -702,8 +702,8 @@ if (typeof require === 'function') {
    * @returns {Promise<WriteResult>}
    */
   async function editComment(options) {
-    const { doc, ref, commentId, body, contains } = options;
-    const refused = refuseBeforeRequest(ref, body, contains);
+    const { doc, ref, commentId, body, expected } = options;
+    const refused = refuseBeforeRequest(ref, body, expected);
     if (refused !== null) return refused;
 
     const form = findEditForm(doc, commentId);
@@ -739,7 +739,7 @@ if (typeof require === 'function') {
     }
     params.set(EDIT_BODY_FIELD, body);
 
-    return postForm(action, params, contains, options);
+    return postForm(action, params, expected, options);
   }
 
   /**
@@ -832,7 +832,7 @@ if (typeof require === 'function') {
         doc: page,
         ref: advisory.ref,
         body: prepared.body,
-        contains: prepared.contains,
+        expected: prepared.expected,
         ...passed,
         beforeSend: () => {
           sent = true;
