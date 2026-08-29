@@ -6,6 +6,7 @@ globalThis.bghsa ??= /** @type {BghsaNamespace} */ ({});
 if (typeof require === 'function') {
   require('../common/text.js');
   require('../common/trust.js');
+  require('../common/derive.js');
   require('../common/merge.js');
   require('../detail/tracking.js');
   require('../detail/preserve.js');
@@ -76,11 +77,17 @@ if (typeof require === 'function') {
    * carries no such event, and neither does one whose page words it another
    * way. Either way the metric is omitted for that advisory.
    *
-   * The phrase is matched whole. An advisory page carries `accepted credit`
-   * as well, which is a reporter accepting the credit they were given and is
-   * not a state change.
+   * Every one of the three patterns here is a phrase pattern, read through
+   * `derive.eventIs`, which matches it against the event's wording with the
+   * actor taken off the front and refuses the phrases a reporter can cause.
+   * Two things ride on that. An advisory page carries `accepted credit` as
+   * well, which is a reporter accepting the credit they were given and is not a
+   * state change. And the advisory's title is the reporter's text, repeated
+   * into the timeline by a `changed the title` event, so a pattern matching
+   * anywhere in the event text would let a title reading `accepted this report`
+   * set the instant every timing here is measured to.
    */
-  const DRAFT_EVENT = /\baccepted this report\b/;
+  const DRAFT_EVENT = /^accepted this report\b/;
 
   /**
    * What a timeline event reads when an advisory is closed.
@@ -89,11 +96,11 @@ if (typeof require === 'function') {
    * a close one way, and REQUIREMENTS.md section 1 records that closing an
    * advisory stores no reason, so there is no wording that names why.
    *
-   * The phrase is matched whole, for the reason {@link DRAFT_EVENT} is. A
-   * timeline carries other events opening with the same verb, and a match on
-   * the verb alone would take whichever came first and read the wrong instant.
+   * It is read the way {@link DRAFT_EVENT} is. A timeline carries other events
+   * opening with the same verb, and a match on the verb alone would take
+   * whichever came first and read the wrong instant.
    */
-  const CLOSE_EVENT = /\bclosed this\b/;
+  const CLOSE_EVENT = /^closed this\b/;
 
   /**
    * What a timeline event reads when an advisory is published.
@@ -102,12 +109,11 @@ if (typeof require === 'function') {
    * section 10 measures to each of them separately. A published advisory is one
    * a maintainer released to the world; a closed one is one nobody is going to.
    *
-   * The phrase is matched whole, for the reason {@link DRAFT_EVENT} is. The same
-   * timeline carries `released this` from GitHub the day after the publication,
-   * which is the advisory reaching the global database and not a maintainer
-   * publishing it.
+   * It is read the way {@link DRAFT_EVENT} is. The same timeline carries
+   * `released this` from GitHub the day after the publication, which is the
+   * advisory reaching the global database and not a maintainer publishing it.
    */
-  const PUBLISH_EVENT = /\bpublished this\b/;
+  const PUBLISH_EVENT = /^published this\b/;
 
   /**
    * The timings this reader computes, what each is measured between, and what
@@ -206,6 +212,25 @@ if (typeof require === 'function') {
   }
 
   /**
+   * @param {import('../common/parse-detail.js').ParsedDetail} advisory
+   * @param {RegExp} phrase Which timeline event is being looked for, read the
+   *   way {@link DRAFT_EVENT} is.
+   * @returns {number | null} when that event first happened, and null where the
+   *   timeline records it no time this reader can read.
+   */
+  function earliestEvent(advisory, phrase) {
+    /** @type {number | null} */
+    let earliest = null;
+    for (const event of advisory.timeline) {
+      if (!globalThis.bghsa.derive.eventIs(event, phrase)) continue;
+      const at = instantOf(event.at);
+      if (at === null) continue;
+      if (earliest === null || at < earliest) earliest = at;
+    }
+    return earliest;
+  }
+
+  /**
    * When the advisory entered draft, which is when a maintainer accepted the
    * report.
    *
@@ -214,15 +239,7 @@ if (typeof require === 'function') {
    *   no acceptance.
    */
   function draftAt(advisory) {
-    /** @type {number | null} */
-    let earliest = null;
-    for (const event of advisory.timeline) {
-      if (!DRAFT_EVENT.test(event.text)) continue;
-      const at = instantOf(event.at);
-      if (at === null) continue;
-      if (earliest === null || at < earliest) earliest = at;
-    }
-    return earliest;
+    return earliestEvent(advisory, DRAFT_EVENT);
   }
 
   /**
@@ -238,15 +255,7 @@ if (typeof require === 'function') {
    *   duration of zero.
    */
   function closeAt(advisory) {
-    /** @type {number | null} */
-    let earliest = null;
-    for (const event of advisory.timeline) {
-      if (!CLOSE_EVENT.test(event.text)) continue;
-      const at = instantOf(event.at);
-      if (at === null) continue;
-      if (earliest === null || at < earliest) earliest = at;
-    }
-    return earliest;
+    return earliestEvent(advisory, CLOSE_EVENT);
   }
 
   /**
@@ -261,15 +270,7 @@ if (typeof require === 'function') {
    *   not a duration of zero.
    */
   function publishAt(advisory) {
-    /** @type {number | null} */
-    let earliest = null;
-    for (const event of advisory.timeline) {
-      if (!PUBLISH_EVENT.test(event.text)) continue;
-      const at = instantOf(event.at);
-      if (at === null) continue;
-      if (earliest === null || at < earliest) earliest = at;
-    }
-    return earliest;
+    return earliestEvent(advisory, PUBLISH_EVENT);
   }
 
   /**

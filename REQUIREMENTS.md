@@ -200,6 +200,25 @@ advisory in `draft` or `published` has been reviewed, because a maintainer moved
 it there. A `closed` advisory has not, on its own, been reviewed, because the
 reporter can withdraw a report.
 
+A comment counts when its author carries a member or owner badge. A timeline
+event counts when only a maintainer could have caused it, whether or not the
+extension can place its actor: accepting the report, adding another person as a
+collaborator, requesting a CVE, publishing, closing the advisory, and deleting
+the temporary private fork. The rest do not count, because the reporter or
+GitHub itself produces them: crediting a reporter, accepting credit, adding
+themselves as a collaborator, changing the title, creating the temporary
+private fork, releasing, and assigning a CVE identifier.
+
+A pull request closed inside the private fork produces no timeline event at
+all. The fork's only events are its creation and its deletion, and the fork's
+pull request list shows open pull requests only. A merged or closed pull
+request is not something the extension can ever read.
+
+These phrases are matched whole. `accepted this report` sits in the same
+timeline as `accepted credit`, and `added as a collaborator` inside `added
+themselves as a collaborator`, so a partial match reads a reporter's act as a
+maintainer's.
+
 **New activity.** The most recent comment from a non-member is newer than the
 most recent member comment or member action. It clears when a maintainer
 responds or changes anything.

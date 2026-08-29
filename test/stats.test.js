@@ -9,6 +9,7 @@ const { parseHTML } = require('linkedom');
 const parseDetail = require('../src/common/parse-detail.js');
 const schema = require('../src/common/schema.js');
 const preserve = require('../src/detail/preserve.js');
+const derive = require('../src/common/derive.js');
 const stats = require('../src/done/stats.js');
 
 /**
@@ -262,6 +263,48 @@ test('an advisory closed twice is measured to the close that first resolved it',
   assert.strictEqual(stats.durationOf(held, stats.closeAt), 10904 * 1000);
 });
 
+test('a title carrying a maintainer act sets no timing', () => {
+  // The reporter writes the advisory's title, and a `changed the title` event
+  // repeats it into the timeline, so every one of these phrases is text the
+  // reporter chose. Read against the whole event text they set all three
+  // instants, and the report-to-accept, report-to-close and report-to-publish
+  // durations with them.
+  const timeline = timelineFixture('invented-title-timeline.html');
+  const forged = timeline.filter((entry) => /changed the title/.test(entry.text));
+  assert.strictEqual(forged.length, 7, 'the fixture holds seven title changes');
+  for (const phrase of ['accepted this report', 'closed this', 'published this']) {
+    assert.ok(
+      forged.some((entry) => new RegExp(phrase).test(entry.text)),
+      `a title reads ${phrase}`
+    );
+  }
+
+  const held = advisory({ reportedAt: '2026-08-24T16:00:00Z', timeline: forged });
+  assert.strictEqual(stats.draftAt(held), null);
+  assert.strictEqual(stats.closeAt(held), null);
+  assert.strictEqual(stats.publishAt(held), null);
+  assert.strictEqual(stats.durationOf(held, stats.draftAt), null);
+  assert.strictEqual(stats.durationOf(held, stats.closeAt), null);
+  assert.strictEqual(stats.durationOf(held, stats.publishAt), null);
+});
+
+test('an event this reader does not know sets no timing', () => {
+  // The reporter list names the events this reader knows about. An event it
+  // does not know, carrying the words of an act somewhere after its own
+  // opening, is refused by the anchor alone.
+  const held = advisory({
+    reportedAt: '2026-08-24T16:00:00Z',
+    timeline: [
+      event({ at: '2026-08-24T17:00:00Z', text: 'nettleweed referenced this from accepted this report' }),
+      event({ at: '2026-08-24T18:00:00Z', text: 'nettleweed referenced this from closed this' }),
+      event({ at: '2026-08-24T19:00:00Z', text: 'nettleweed referenced this from published this' }),
+    ],
+  });
+  assert.strictEqual(stats.draftAt(held), null);
+  assert.strictEqual(stats.closeAt(held), null);
+  assert.strictEqual(stats.publishAt(held), null);
+});
+
 test('GitHub releasing an advisory is not a maintainer publishing it', () => {
   // The same timeline carries a release the day after the publication. A rule
   // taking any event that ends in "this" would read the release as one.
@@ -271,7 +314,7 @@ test('GitHub releasing an advisory is not a maintainer publishing it', () => {
   assert.strictEqual(released?.at, '2026-08-04T18:26:14Z');
   assert.strictEqual(stats.publishAt(advisory({ timeline: [released] })), null);
   assert.strictEqual(
-    published.timeline.filter((entry) => stats.PUBLISH_EVENT.test(entry.text)).length,
+    published.timeline.filter((entry) => derive.eventIs(entry, stats.PUBLISH_EVENT)).length,
     1,
     'one event on the timeline reads as the publication, and no other'
   );
@@ -366,7 +409,7 @@ test(
     const held = parseDetail.parseDetail(doc);
     assert.ok(held !== null, `${CAPTURE_VAR} names a file that does not read as an advisory`);
     assert.strictEqual(
-      held.timeline.filter((entry) => stats.CLOSE_EVENT.test(entry.text)).length,
+      held.timeline.filter((entry) => derive.eventIs(entry, stats.CLOSE_EVENT)).length,
       1,
       'one event on the real timeline reads as the close, and no other'
     );

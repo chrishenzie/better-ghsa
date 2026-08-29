@@ -37,7 +37,9 @@ if (typeof require === 'function') require('./trust.js');
  * @typedef {object} DerivedState
  * @property {string[]} members The logins the page shows to be org members.
  * @property {boolean} neverReviewed No member has commented on or acted on the
- *   advisory, and its state does not carry a review.
+ *   advisory, and its state does not carry a review. An action is a comment
+ *   from a badged author, a timeline event a visible member caused, or a
+ *   timeline event only a maintainer can cause.
  * @property {boolean} newActivity The newest comment from a non-member is newer
  *   than the newest member comment or member action.
  * @property {string | null} lastMemberActivityAt
@@ -64,7 +66,8 @@ if (typeof require === 'function') require('./trust.js');
   /**
    * The logins the page shows to be org members. A role badge is the only member
    * signal the detail page carries, and it appears on comments alone, so a member
-   * who acted without commenting is not visible here.
+   * who acted without commenting is not visible here. What that member did is
+   * read from the timeline instead, by {@link maintainerOnlyEvent}.
    *
    * @param {import('./parse-detail.js').ParsedDetail} advisory
    * @returns {string[]}
@@ -79,6 +82,101 @@ if (typeof require === 'function') require('./trust.js');
       if (!members.includes(login)) members.push(login);
     }
     return members;
+  }
+
+  /**
+   * The wording of a timeline event with its actor taken off the front.
+   *
+   * An event reads `<actor> <phrase> <time>`, and the actor is one token that
+   * holds no space. Only a person acts on an advisory, since no app and no bot
+   * takes an act on one, so the actor is that person's login, and a login holds
+   * no space. Everything a phrase is matched against therefore starts where the
+   * phrase starts.
+   *
+   * That front anchor is what keeps a title from being read as a phrase. The
+   * only text on an advisory its reporter writes and the timeline repeats is
+   * the title, and it reaches the timeline through a `changed the title` event,
+   * which puts `changed the title` in the anchored position and the title after
+   * it. A title reading `closed this` lands in the middle of the phrase, where
+   * nothing looks.
+   *
+   * @param {import('./parse-detail.js').TimelineEvent} event
+   * @returns {string} the phrase, and the empty string for text holding no
+   *   actor and phrase both.
+   */
+  function eventPhrase(event) {
+    const space = event.text.indexOf(' ');
+    return space === -1 ? '' : event.text.slice(space + 1);
+  }
+
+  /**
+   * Timeline phrases the reporter or GitHub itself produces. REQUIREMENTS.md
+   * section 6 lists them, and they are checked before the maintainer-only
+   * phrases so that no reading of a reporter's act can reach one.
+   *
+   * `added themselves as a collaborator` is the pair that needs the order: it
+   * holds `as a collaborator` and would otherwise answer to the phrase for a
+   * maintainer adding somebody else.
+   */
+  const REPORTER_EVENTS = [
+    /^was credited as a reporter\b/,
+    /^accepted credit\b/,
+    /^added themselves as a collaborator\b/,
+    /^changed the title\b/,
+    /^created the temporary private fork\b/,
+    /^released this\b/,
+    /^assigned\b/,
+  ];
+
+  /** The phrase a maintainer's CVE request writes, which nothing else writes. */
+  const CVE_REQUEST_EVENT = /^requested a CVE\b/;
+
+  /**
+   * Timeline phrases only a maintainer can cause, from REQUIREMENTS.md
+   * section 6. Each counts as a review whether or not the actor can be placed,
+   * because the detail page badges comment authors and nothing else, so a
+   * maintainer who acted without commenting is nowhere in the member list.
+   */
+  const MAINTAINER_EVENTS = [
+    /^accepted this report\b/,
+    /^added\b.+\bas a collaborator\b/,
+    CVE_REQUEST_EVENT,
+    /^published this\b/,
+    /^closed this\b/,
+    /^deleted the temporary private fork\b/,
+  ];
+
+  /**
+   * Whether a timeline event carries the act a phrase pattern names.
+   *
+   * Every reading of a timeline event goes through here, and the pattern is
+   * matched against {@link eventPhrase} anchored at its front, so it sees the
+   * wording GitHub writes and never the title the reporter writes. A pattern
+   * that matched anywhere in the text would read a title: `changed the title`
+   * repeats the new title after it, so a title reading `requested a CVE` or
+   * `closed this` would answer to a pattern for the CVE request or the close.
+   *
+   * The anchor is what covers an event neither list here names, because the
+   * reporter's phrases are only refused where this reader knows them.
+   *
+   * @param {import('./parse-detail.js').TimelineEvent} event
+   * @param {RegExp} pattern A phrase pattern, anchored with `^`.
+   * @returns {boolean}
+   */
+  function eventIs(event, pattern) {
+    const phrase = eventPhrase(event);
+    if (REPORTER_EVENTS.some((reporter) => reporter.test(phrase))) return false;
+    return pattern.test(phrase);
+  }
+
+  /**
+   * Whether only a maintainer could have caused this timeline event.
+   *
+   * @param {import('./parse-detail.js').TimelineEvent} event
+   * @returns {boolean}
+   */
+  function maintainerOnlyEvent(event) {
+    return MAINTAINER_EVENTS.some((pattern) => eventIs(event, pattern));
   }
 
   /**
@@ -136,7 +234,7 @@ if (typeof require === 'function') require('./trust.js');
   function cveState(advisory) {
     const id = advisory.cveId;
     const assigned = id !== null;
-    const requested = advisory.timeline.some((event) => /\brequested a CVE\b/.test(event.text));
+    const requested = advisory.timeline.some((event) => eventIs(event, CVE_REQUEST_EVENT));
     /** @type {CveState['state']} */
     let state;
     if (assigned) state = 'assigned';
@@ -212,7 +310,8 @@ if (typeof require === 'function') require('./trust.js');
       else nonMemberComments.push(comment.at);
     }
     for (const event of advisory.timeline) {
-      if (event.actor === null || !members.includes(event.actor)) continue;
+      const byMember = event.actor !== null && members.includes(event.actor);
+      if (!byMember && !maintainerOnlyEvent(event)) continue;
       memberActivity.push(event.at);
     }
 
@@ -232,7 +331,15 @@ if (typeof require === 'function') require('./trust.js');
     };
   }
 
-  const exported = { derive, memberLogins, cveState, patchState, embargoOverdue };
+  const exported = {
+    CVE_REQUEST_EVENT,
+    derive,
+    maintainerOnlyEvent,
+    eventIs,
+    cveState,
+    patchState,
+    embargoOverdue,
+  };
 
   globalThis.bghsa.derive = exported;
 
