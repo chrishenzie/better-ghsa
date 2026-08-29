@@ -838,6 +838,27 @@ if (typeof require === 'function') {
   }
 
   /**
+   * Whether a document shows at least the state held against it.
+   *
+   * The sequence number settles it wherever the two differ. Where they claim
+   * the same number the holder settles it, for the reason a `superseded`
+   * refusal exists: two maintainers can claim one number, the tie goes to a
+   * login, and a document showing this maintainer's own snapshot at that number
+   * shows neither the rival's snapshot nor what the extension holds. A
+   * `superseded` refusal reads the rival's state, and a document that has not
+   * caught up with it is behind at a number that looks level.
+   *
+   * @param {MergedState} fromPage The state a document's comments merge to.
+   * @param {MergedState} held
+   * @returns {boolean}
+   */
+  function caughtUp(fromPage, held) {
+    if (fromPage.observedSeq !== held.observedSeq) return fromPage.observedSeq > held.observedSeq;
+    const state = globalThis.bghsa.state;
+    return state.sameHolder(state.holderOf(fromPage), state.holderOf(held));
+  }
+
+  /**
    * Whether a write from this page holds state the document has not caught up
    * with, which is every moment between a save landing and the page being read
    * again. What that document parses to is not this advisory's state, and
@@ -849,7 +870,7 @@ if (typeof require === 'function') {
    */
   function ahead(key, fromPage) {
     const held = written.get(key);
-    return held !== undefined && fromPage.observedSeq < held.observedSeq;
+    return held !== undefined && !caughtUp(fromPage, held);
   }
 
   /**
@@ -863,7 +884,7 @@ if (typeof require === 'function') {
   function preferred(key, fromPage) {
     const held = written.get(key);
     if (held === undefined) return fromPage;
-    if (fromPage.observedSeq >= held.observedSeq) {
+    if (caughtUp(fromPage, held)) {
       written.delete(key);
       return fromPage;
     }

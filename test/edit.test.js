@@ -2130,6 +2130,82 @@ test('a refused save leaves the cache holding the page the write read', async ()
   }
 });
 
+test('a superseded refusal leaves the cache holding the page the write read', async () => {
+  // The stale case above is a refusal at a sequence number the advisory has
+  // moved past, so the document is plainly behind. A superseded refusal is the
+  // other shape: the rival claimed the same sequence number this panel loaded
+  // with, so the document and what the refusal read agree on the number and
+  // disagree on whose snapshot it is. The next pass over the document must not
+  // put the document over what the refusal read.
+  forget();
+  const readAt = Date.parse('2026-08-26T11:00:00Z');
+  cache.setStorage(fakeStorage());
+  cache.setClock(() => readAt);
+  try {
+    const page = fixture('triage-thread.html');
+    const remote = fixture('triage-thread.html');
+    const talk = session(remote);
+    const wiring = { fetch: talk.fetch, parseDocument: talk.parseDocument };
+    const { editor, context } = await editorFor(page, wiring);
+    const ref = /** @type {import('../src/common/parse-detail.js').AdvisoryRef} */ (
+      context.advisory.ref
+    );
+    const key = edit.keyOf(context.advisory);
+    assert.strictEqual(context.merged.observedSeq, 7);
+
+    // Another maintainer claimed the sequence this panel loaded with, and the
+    // tie on GitHub goes to the greater login.
+    rivalSnapshot(remote, 7, 'awaiting maintainer input');
+    choose(control(editor, 'select.bghsa-triage'), 'evaluating');
+    const refusal = await edit.save(context);
+    assert.strictEqual(refusal.ok, false);
+    assert.strictEqual(refusal.reason, 'superseded');
+    assert.strictEqual(talk.posts().length, 0, 'a refused write reached the comment');
+
+    const held = await cache.getAdvisory(ref);
+    assert.ok(held !== null, 'the refusal left the page it read nowhere');
+    const readBack = record.advisoryFrom(held.record);
+    assert.ok(readBack !== null, 'the entry holds nothing the cache can read back');
+    assert.strictEqual(
+      tracking.read(merge.mergeSnapshots(readBack.comments).state, {
+        title: null,
+        description: null,
+        scoring: null,
+      }).triage,
+      'awaiting maintainer input',
+      'the refusal stored something other than the rival state its fetch read'
+    );
+
+    // The pass the reload runs, over the document the refusal did not change.
+    // It carries this maintainer's own snapshot at the same sequence number.
+    assert.ok(
+      (await panel.remember(context.advisory)) === null,
+      'the pass stored the document over the state the refusal read'
+    );
+    assert.strictEqual(
+      edit.preferred(key, merge.mergeSnapshots(context.advisory.comments)).observedSeq,
+      7
+    );
+    const after = await cache.getAdvisory(ref);
+    assert.ok(after !== null, 'the pass emptied the entry');
+    const stillHeld = record.advisoryFrom(after.record);
+    assert.ok(stillHeld !== null, 'the entry holds nothing the cache can read back');
+    assert.strictEqual(
+      tracking.read(merge.mergeSnapshots(stillHeld.comments).state, {
+        title: null,
+        description: null,
+        scoring: null,
+      }).triage,
+      'awaiting maintainer input',
+      'the pass put the document over the state the refusal read'
+    );
+  } finally {
+    cache.setStorage(null);
+    cache.setClock(null);
+    forget();
+  }
+});
+
 test('a save that landed leaves the list building the row from what it wrote', async () => {
   forget();
   const storage = fakeStorage();
