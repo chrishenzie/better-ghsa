@@ -180,10 +180,10 @@ device except the GitHub requests described above.
   without a page load, so the script has to already be present to notice
   arriving at an advisory page.
 
-The extension requests no other permission. Its background script does one
-thing, opening the settings page the first time the extension is installed, and
-the extension has no access to tabs, history, bookmarks, downloads, cookies, or
-any other host.
+The extension requests no other permission. It declares no background script
+and no background page, so its code runs only on the `github.com` pages you have
+open and on its own settings page, and it has no access to tabs, history,
+bookmarks, downloads, cookies, or any other host.
 
 ## Clearing everything
 

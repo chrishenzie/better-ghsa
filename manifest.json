@@ -9,10 +9,6 @@
     "page": "src/settings/settings.html",
     "open_in_tab": true
   },
-  "background": {
-    "service_worker": "src/background.js",
-    "scripts": ["src/background.js"]
-  },
   "content_scripts": [
     {
       "matches": ["https://github.com/*"],

@@ -432,9 +432,13 @@ stored. The allowlist gates the extension, not just its writes.
 The list is empty on a fresh install and is edited in the extension's settings,
 so the extension touches no repository nobody chose. A page open while the list
 changes starts or stops without being reloaded, verified in Firefox on
-2026-08-31. Settings open on first
-install, because an extension that does nothing anywhere until configured has
-to say so.
+2026-08-31. Until a repository is
+listed the extension does nothing anywhere, and gives no sign of itself on a
+page, so the README says plainly that it has to be configured before it does
+anything.
+
+The extension has no background script. Every surface is a content script, and
+nothing runs outside a page.
 
 This depends on undocumented endpoints and on GitHub's DOM, and GitHub's
 changes will break it.

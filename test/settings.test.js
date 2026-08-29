@@ -79,15 +79,19 @@ test.afterEach(() => {
   allowlist.setStorage(null);
 });
 
-test('the manifest declares the settings page and the script that opens it', () => {
+test('the manifest declares the settings page and no background script', () => {
   assert.strictEqual(manifest.options_ui.page, 'src/settings/settings.html');
   // In a tab rather than a popup, because the list is edited rather than read.
   assert.strictEqual(manifest.options_ui.open_in_tab, true);
-  // Chrome runs the service worker and Firefox runs the script; each ignores
-  // the other's key, and both name the file that opens the page on install.
-  assert.strictEqual(manifest.background.service_worker, 'src/background.js');
-  assert.deepStrictEqual(manifest.background.scripts, ['src/background.js']);
-  for (const file of ['src/settings/settings.html', 'src/settings/settings.js', 'src/background.js'])
+  // Every surface is a content script, and nothing runs outside a page.
+  // REQUIREMENTS.md section 12. Both the key and the file are checked: either
+  // one alone leaves the other free to come back and sit there unnoticed.
+  assert.ok(!Object.hasOwn(manifest, 'background'), 'the manifest declares a background script');
+  assert.ok(
+    !fs.existsSync(path.join(root, 'src', 'background.js')),
+    'src/background.js is in the tree'
+  );
+  for (const file of ['src/settings/settings.html', 'src/settings/settings.js'])
     assert.ok(fs.existsSync(path.join(root, file)), `${file} is declared and missing`);
   // The settings page is not a content script and belongs in neither list.
   assert.ok(!manifest.content_scripts[0].js.includes('src/settings/settings.js'));
