@@ -146,8 +146,9 @@ request already in flight, and returning resumes it.
 The list page shows no banner when a read fails. A page GitHub refused shows up
 as rows that stay "Not read".
 
-## On a repository the allowlist does not carry
+## On a repository the settings do not list
 
-The table is drawn, the refresh runs, and everything reads the same. The
-allowlist gates writes, and this page writes nothing. What is refused is saving,
-on the detail panel and on the completed view.
+Nothing on this page is the extension's. GitHub's own advisory list is what the
+page shows, no table is drawn, no refresh runs, and nothing about the repository
+is read or stored. Adding the repository in the settings starts the extension on
+the page, and removing it stops the extension and puts GitHub's own list back.

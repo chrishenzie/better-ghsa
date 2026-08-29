@@ -731,6 +731,15 @@ if (typeof require === 'function') {
   }
 
   /**
+   * What each started document has running: the observer watching it and the
+   * call that takes the unsaved-changes warning back off. Held so that
+   * {@link stop} can let both go.
+   *
+   * @type {WeakMap<Document, { observer: MutationObserver | null, disarm: () => void }>}
+   */
+  const attached = new WeakMap();
+
+  /**
    * @returns {void} renders the panel into this page and keeps it there. The
    *   first pass and every pass the observer asks for run through one loop, so
    *   no two of them read and write the document together.
@@ -739,8 +748,31 @@ if (typeof require === 'function') {
     const doc = globalThis.document;
     const pass = passFor(doc);
     void pass();
-    observe(doc, pass);
-    globalThis.bghsa.edit.armNavigationWarning(doc);
+    const observer = observe(doc, pass);
+    const disarm = globalThis.bghsa.edit.armNavigationWarning(doc);
+    attached.set(doc, { observer, disarm });
+  }
+
+  /**
+   * Takes the panel off a document, which is what a repository leaving the
+   * allowlist does to an advisory page already showing one. The observer is let
+   * go first, so removing the panel is not itself a reason to put it back, and
+   * the stylesheet goes with it because nothing else on the page uses it.
+   *
+   * @param {Document} [doc]
+   * @returns {void}
+   */
+  function stop(doc = globalThis.document) {
+    const held = attached.get(doc);
+    if (held !== undefined) {
+      held.observer?.disconnect();
+      held.disarm();
+      attached.delete(doc);
+    }
+    // Everything the surface wrote answers to the selector a pass already uses
+    // to tell its own writing from the page's: the panel, the stylesheet, and
+    // the chips this surface put on the comments in the thread.
+    for (const node of doc.querySelectorAll(ownedSelector())) node.remove();
   }
 
   const exported = {
@@ -758,6 +790,7 @@ if (typeof require === 'function') {
     passFor,
     observe,
     start,
+    stop,
   };
 
   globalThis.bghsa.panel = exported;

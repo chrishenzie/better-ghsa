@@ -190,11 +190,11 @@ triage. Posting a comment notifies the advisory's participants.
 Nothing in the vocabulary is encoded or obfuscated. Every value it can store is
 one a maintainer should be willing to say to the reporter.
 
-## On a repository the allowlist does not carry
+## On a repository the settings do not list
 
-The panel and its editor are drawn in full. The refusal comes on the press:
-"Save" and "Preserve" both fail with
-"Error: {owner}/{repo} is not on this extension's allowlist." Nothing is written.
+There is no panel. Nothing about the advisory is read or stored, and the page is
+GitHub's own. Adding the repository in the settings puts the panel on the page,
+and removing it takes the panel off.
 
 ## What the panel never touches
 

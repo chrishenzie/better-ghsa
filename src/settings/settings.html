@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Better GHSA settings</title>
+    <link rel="stylesheet" href="settings.css" />
+  </head>
+  <body>
+    <main class="page">
+      <h1>Better GHSA</h1>
+      <p class="lede">
+        This extension acts only on the repositories listed here. On every other
+        repository it does nothing: no panel, no table, no reads, and nothing
+        stored.
+      </p>
+
+      <h2>Repositories</h2>
+
+      <form id="add-form" class="add" novalidate>
+        <label class="add-label" for="add-input">Add a repository</label>
+        <div class="add-controls">
+          <input
+            id="add-input"
+            class="add-input"
+            type="text"
+            name="repository"
+            placeholder="owner/repo"
+            autocomplete="off"
+            autocapitalize="off"
+            spellcheck="false"
+          />
+          <button id="add-button" class="button button-primary" type="submit">Add</button>
+        </div>
+        <p id="add-error" class="error" role="alert" hidden></p>
+      </form>
+
+      <p id="empty" class="empty" hidden>No repositories yet. The extension is doing nothing.</p>
+
+      <ul id="list" class="list"></ul>
+    </main>
+
+    <script src="../common/storage.js"></script>
+    <script src="../common/allowlist.js"></script>
+    <script src="settings.js"></script>
+  </body>
+</html>

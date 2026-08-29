@@ -87,12 +87,22 @@ Chrome:
 Chrome logs a warning about the Firefox-specific settings in the manifest and
 loads the extension.
 
+## Choosing the repositories it acts on
+
+The extension acts only on repositories listed in its settings. The list is
+empty when the extension is installed, so until a repository is added the
+extension does nothing on any page. The settings page opens by itself the first
+time the extension is installed, and is reached afterwards from the extension's
+entry in `about:addons` or `chrome://extensions`.
+
+An entry is `owner/repo`, for example `containerd/containerd`. Case does not
+matter. Removing a repository stops the extension on it; a page already showing
+that repository stops as soon as the entry goes.
+
 ## What it can reach
 
-- It writes only to repositories named in an allowlist compiled into its source,
-  at `src/common/allowlist.js`. A write anywhere else is refused. The shipped
-  list is `containerd/containerd` and `git-utensils/Spoon-Knife`. Changing it
-  means editing that file and reloading the extension.
+- It acts only on the repositories in its settings. On every other repository it
+  does nothing at all: no panel, no table, nothing read, and nothing stored.
 - The only things it ever writes to GitHub are its own two comment types: the
   state comment and the preserved original report. It never changes an
   advisory's title, description, severity, CVSS vector, CWEs, CVE, state, or
@@ -102,8 +112,8 @@ loads the extension.
 - It contacts `github.com` and nothing else.
 - It collects no telemetry and sends no analytics.
 
-The allowlist bounds writing. It does not bound reading: the extension reads and
-caches advisory pages on any repository whose advisory pages are opened.
+The list bounds reading as well as writing. An advisory on a repository nobody
+listed is not read, not cached, and not written to.
 [PRIVACY.md](PRIVACY.md) sets out what is stored, where, and how to clear it.
 
 ## Limitations
@@ -133,8 +143,8 @@ the design is coherent or that the implementation is trustworthy, and neither
 substitutes for reading the code. This extension writes to real security
 advisories, in front of the people who reported them, and a wrong write puts a
 permanent claim on a live vulnerability report that no other maintainer can edit
-out. Read `src/common/write.js` and `src/common/allowlist.js` before pointing it
-at a repository you care about.
+out. Read `src/common/write.js` and `src/common/allowlist.js` before listing a
+repository you care about.
 
 ## Documents
 

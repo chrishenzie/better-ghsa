@@ -20,7 +20,21 @@ const cache = require('../src/common/cache.js');
 const table = require('../src/list/table.js');
 const record = require('../src/common/record.js');
 
+const allowlist = require('../src/common/allowlist.js');
+
 const { fakeStorage } = require('../test-support/storage.js');
+
+// The list of repositories the extension acts on is stored rather than compiled
+// in, and is empty on a fresh install. The fixtures here are that repository's,
+// so the list is put in place and read before the first test, which is what the
+// extension itself does before it takes a page.
+test.before(async () => {
+  allowlist.setStorage({
+    get: async () => ({ [allowlist.STORAGE_KEY]: ['git-utensils/spoon-knife'] }),
+    set: async () => {},
+  });
+  await allowlist.load();
+});
 
 /** The write time every save below stamps, so the snapshot it writes is exact. */
 const AT = '2026-08-26T11:00:00Z';

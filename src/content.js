@@ -100,12 +100,13 @@ if (typeof require === 'function') require('./common/allowlist.js');
   const started = new WeakSet();
 
   /**
-   * @returns {{ start: () => unknown }[]} the surfaces this extension puts on an
-   *   advisory page, in the order they take it.
+   * @returns {{ start?: () => unknown, stop?: (doc: Document) => unknown }[]} the
+   *   surfaces this extension puts on an advisory page, in the order they take
+   *   it. A surface puts itself down in the reverse of that order.
    */
   function surfaces() {
     const bghsa = globalThis.bghsa;
-    return [bghsa.table, bghsa.panel].filter((surface) => typeof surface?.start === 'function');
+    return [bghsa.table, bghsa.panel].filter((surface) => surface !== undefined);
   }
 
   /**
@@ -131,13 +132,57 @@ if (typeof require === 'function') require('./common/allowlist.js');
     report();
     for (const surface of surfaces()) {
       try {
-        surface.start();
+        surface.start?.();
       } catch {
         // A surface that cannot take the page is not a reason to keep the next
         // one off it.
       }
     }
     return true;
+  }
+
+  /**
+   * Takes the surfaces off a document they are running on: what they drew comes
+   * out, what they are watching is let go, and the reads they have in flight are
+   * put down. This is what a repository leaving the allowlist does to a page
+   * that is already showing it, and it leaves GitHub's own page as it found it.
+   *
+   * @param {Document} [doc] The document to stop on.
+   * @returns {boolean} whether this call stopped the surfaces.
+   */
+  function stop(doc = globalThis.document) {
+    if (!started.has(doc)) return false;
+    started.delete(doc);
+    for (const surface of [...surfaces()].reverse()) {
+      try {
+        surface.stop?.(doc);
+      } catch {
+        // A surface that cannot put the page down is not a reason to leave the
+        // next one running on it.
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Puts the document where the allowlist says it belongs, starting the surfaces
+   * on a page they belong to and stopping them on one they no longer do.
+   *
+   * A path that names no advisory page is left alone unless `everywhere` says
+   * otherwise. The surfaces are not on such a page to begin with, and a document
+   * that keeps them across a move to one is a document they come back on without
+   * waiting for another navigation event. An allowlist edit passes `everywhere`,
+   * because a repository nobody listed has to stop being read wherever the
+   * reading is happening.
+   *
+   * @param {Document} [doc]
+   * @param {boolean} [everywhere]
+   * @returns {boolean} whether this call started or stopped the surfaces.
+   */
+  function reconsider(doc = globalThis.document, everywhere = false) {
+    if (enabled()) return apply(doc);
+    if (!everywhere && locate(globalThis.location?.pathname ?? '') === null) return false;
+    return stop(doc);
   }
 
   /**
@@ -151,34 +196,50 @@ if (typeof require === 'function') require('./common/allowlist.js');
   function watch(doc = globalThis.document) {
     const view = doc?.defaultView ?? globalThis;
     const onNavigated = () => {
-      apply(doc);
+      reconsider(doc);
     };
     for (const name of FRAME_EVENTS) doc?.addEventListener?.(name, onNavigated);
     for (const name of WINDOW_EVENTS) view?.addEventListener?.(name, onNavigated);
   }
 
   /**
-   * @returns {void} takes the page the extension loaded onto, and every page
-   *   GitHub turns it into afterwards.
+   * Takes the page the extension loaded onto, and every page GitHub turns it
+   * into afterwards.
+   *
+   * Nothing starts before the allowlist has been read. The list lives in
+   * `browser.storage.local` and the gate is synchronous, so until the read lands
+   * every repository reads as off the list and no surface takes the page. The
+   * document is reconsidered when it lands, which is what starts the surfaces on
+   * a page that was already showing when this ran.
+   *
+   * @returns {void}
    */
   function start() {
+    const allowlist = globalThis.bghsa.allowlist;
     watch();
-    apply();
+    allowlist.watch();
+    allowlist.subscribe(() => {
+      reconsider(globalThis.document, true);
+    });
+    void allowlist.load().then(() => {
+      reconsider();
+    });
   }
 
-  globalThis.bghsa.content = {
+  const exported = {
     locate,
     enabled,
     report,
     FRAME_EVENTS,
-    WINDOW_EVENTS,
-    apply,
+    stop,
     watch,
     start,
   };
 
+  globalThis.bghsa.content = exported;
+
   if (typeof module !== 'undefined') {
-    module.exports = { locate, enabled, report, FRAME_EVENTS, WINDOW_EVENTS, apply, watch, start };
+    module.exports = exported;
   } else {
     start();
   }

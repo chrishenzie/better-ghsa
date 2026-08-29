@@ -425,9 +425,16 @@ Chrome and Firefox from one codebase. The extension works from the logged-in
 store a credential. It contacts only `github.com`. It does not collect
 telemetry.
 
-The extension acts only on repositories on a list carried in its source. On any
-other repository it does nothing at all: no panel, no table, no reads, and
-nothing stored. The allowlist gates the extension, not just its writes.
+The extension acts only on repositories a maintainer has listed. On any other
+repository it does nothing at all: no panel, no table, no reads, and nothing
+stored. The allowlist gates the extension, not just its writes.
+
+The list is empty on a fresh install and is edited in the extension's settings,
+so the extension touches no repository nobody chose. A page open while the list
+changes starts or stops without being reloaded, verified in Firefox on
+2026-08-31. Settings open on first
+install, because an extension that does nothing anywhere until configured has
+to say so.
 
 This depends on undocumented endpoints and on GitHub's DOM, and GitHub's
 changes will break it.

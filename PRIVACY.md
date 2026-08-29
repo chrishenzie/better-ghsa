@@ -31,7 +31,12 @@ readable by any web page.
 Nothing is stored anywhere else. The extension does not use cookies of its own,
 `localStorage`, or IndexedDB.
 
-It holds five kinds of entry.
+It holds six kinds of entry.
+
+**The list of repositories the extension acts on**, under the key `allowlist`.
+The `owner/repo` names entered in the extension's settings, lowercased. It is
+empty until repositories are added, and nothing else here exists until it
+carries one.
 
 **Advisory reads**, one per advisory, under keys beginning `adv:`. Each is a
 parsed copy of an advisory page as it was read, together with the time it was
@@ -72,10 +77,10 @@ are used to suggest owners and to decide whose tracking state counts.
 
 ### Which repositories this covers
 
-The extension runs on `github.com` advisory pages and on no other page. It reads
-and stores the advisories of any repository whose advisory pages you open. The
-allowlist compiled into the extension's source restricts where it may write. It
-does not restrict what it reads or what it stores.
+The extension runs on the advisory pages of the repositories listed in its
+settings, and on no other page. On a repository that is not listed it reads
+nothing, stores nothing, and sends nothing. The list is empty when the extension
+is installed, so until a repository is added there is nothing stored at all.
 
 ### Retention
 
@@ -150,8 +155,9 @@ GitHub's own interface.
 ## What is never collected
 
 - No browsing history, and no data at all from pages outside
-  `github.com/{owner}/{repo}/security/advisories`. On every other page the
-  extension reads nothing, stores nothing, and sends nothing.
+  `github.com/{owner}/{repo}/security/advisories` on a repository you listed. On
+  every other page the extension reads nothing, stores nothing, and sends
+  nothing.
 - No passwords, tokens, keys, or other credentials.
 - No form contents outside its own controls.
 - No analytics, usage metrics, session recording, crash reports, or device,
@@ -169,12 +175,15 @@ device except the GitHub requests described above.
 - **`storage`**: for the local storage described above.
 - **Access to `https://github.com/*`**: the extension's script is loaded on every
   `github.com` page, and stops immediately on any page that is not an advisory
-  page, without reading it, storing anything, or sending a request. The broad
-  match exists because GitHub replaces page content without a page load, so the
-  script has to already be present to notice arriving at an advisory page.
+  page on a repository you listed, without reading it, storing anything, or
+  sending a request. The broad match exists because GitHub replaces page content
+  without a page load, so the script has to already be present to notice
+  arriving at an advisory page.
 
-The extension requests no other permission. It has no background page and no
-access to tabs, history, bookmarks, downloads, cookies, or any other host.
+The extension requests no other permission. Its background script does one
+thing, opening the settings page the first time the extension is installed, and
+the extension has no access to tabs, history, bookmarks, downloads, cookies, or
+any other host.
 
 ## Clearing everything
 

@@ -13,7 +13,21 @@ const order = require('../src/common/order.js');
 const table = require('../src/list/table.js');
 const fetchQueue = require('../src/common/fetch.js');
 
+const allowlist = require('../src/common/allowlist.js');
+
 const { fakeStorage } = require('../test-support/storage.js');
+
+// The list of repositories the extension acts on is stored rather than compiled
+// in, and is empty on a fresh install. The fixtures here are that repository's,
+// so the list is put in place and read before the first test, which is what the
+// extension itself does before it takes a page.
+test.before(async () => {
+  allowlist.setStorage({
+    get: async () => ({ [allowlist.STORAGE_KEY]: ['git-utensils/spoon-knife'] }),
+    set: async () => {},
+  });
+  await allowlist.load();
+});
 
 /** The moment every render in this file reads the page at. */
 const AT = Date.parse('2026-08-26T12:00:00Z');

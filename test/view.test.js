@@ -19,7 +19,21 @@ const corpus = require('../src/done/corpus.js');
 const view = require('../src/done/view.js');
 const statistics = require('../src/stats/statistics.js');
 
+const allowlist = require('../src/common/allowlist.js');
+
 const { fakeStorage } = require('../test-support/storage.js');
+
+// The list of repositories the extension acts on is stored rather than compiled
+// in, and is empty on a fresh install. The fixtures here are that repository's,
+// so the list is put in place and read before the first test, which is what the
+// extension itself does before it takes a page.
+test.before(async () => {
+  allowlist.setStorage({
+    get: async () => ({ [allowlist.STORAGE_KEY]: ['git-utensils/spoon-knife'] }),
+    set: async () => {},
+  });
+  await allowlist.load();
+});
 
 // The queue and the crawl turn a fetched page into a document the way a content
 // script does. Nothing in this file reaches the network: every response is a

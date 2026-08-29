@@ -120,6 +120,16 @@ test('a session that adds nothing leaves the entry as it stands', async () => {
   assert.strictEqual(await members.sync(), true);
   assert.strictEqual(storage.writes.length, 0, 'the entry was written with nothing new in it');
   assert.deepStrictEqual(members.known(UTENSILS), ['SAMUELKARP', 'dmcgowan']);
+
+  // A login the entry does not carry does write, so the zero above is a session
+  // that added nothing and not a count that cannot move.
+  members.remember(UTENSILS, ['estesp']);
+  assert.strictEqual(await members.sync(), false, 'storage held a login this session did not');
+  assert.strictEqual(storage.writes.length, 1, 'a write went unrecorded');
+  assert.ok(
+    stored(storage, 'git-utensils').includes('estesp'),
+    'the login the session added is not in the entry'
+  );
 });
 
 test('an entry holding something other than logins is read as empty', async () => {

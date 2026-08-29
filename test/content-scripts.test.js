@@ -22,6 +22,10 @@ const scripts = manifest.content_scripts[0].js;
 /** A repository on the allowlist, so the pages below are ones writes reach. */
 const REPO = '/git-utensils/Spoon-Knife';
 
+/** That repository as the allowlist stores it, and the key it is stored under. */
+const ALLOWED = 'git-utensils/spoon-knife';
+const ALLOWLIST_KEY = 'allowlist';
+
 /** A GitHub page the extension has no surface for. */
 const PULLS = `${REPO}/pulls`;
 
@@ -83,9 +87,14 @@ function memberOf(file) {
  * for, because what the extension must not do on a page it has no surface for
  * is watch it, read for it, or send for it.
  *
- * @param {{ pathname?: string, frame?: string }} [options] The page the
- *   document loaded as: the URL GitHub is showing and the markup in the frame
- *   it replaces on a soft navigation.
+ * @param {{ pathname?: string, frame?: string, allowlist?: readonly string[],
+ *   holdStorage?: boolean }} [options]
+ *   The page the document loaded as: the URL GitHub is showing and the markup in
+ *   the frame it replaces on a soft navigation. `allowlist` is what storage
+ *   holds for the extension's list of repositories, which is empty on a fresh
+ *   install and here defaults to the one the fixtures come from, and
+ *   `holdStorage` makes every read hang, which is the page as it stands before
+ *   the list has arrived.
  * @returns {Record<string, any>} the sandbox backing the context
  */
 function contentScriptScope(options = {}) {
@@ -100,9 +109,18 @@ function contentScriptScope(options = {}) {
   /** What storage holds, so a read answers with what a write put there. */
   /** @type {Record<string, unknown>} */
   const stored = {};
+  stored[ALLOWLIST_KEY] = [...(options.allowlist ?? [ALLOWED])];
   /** Every key a write has named, in the order they were written. */
   /** @type {string[]} */
   const written = [];
+  /**
+   * Whoever the extension has asked to hear about a storage change. The browser
+   * announces one page of an extension writing to the others, which is how a
+   * settings page reaches an advisory page that is already open.
+   *
+   * @type {((changes: Record<string, { newValue?: unknown }>, area: string) => void)[]}
+   */
+  const changeListeners = [];
   const Native = window.MutationObserver;
   /**
    * @param {MutationCallback} callback
@@ -145,7 +163,12 @@ function contentScriptScope(options = {}) {
            * @returns {Promise<Record<string, unknown>>}
            */
           get: async (keys) => {
-            counts.reads += 1;
+            if (options.holdStorage === true) return new Promise(() => {});
+            // The extension's own list of repositories is not something stored
+            // for a repository, and it is read on every github.com page,
+            // including the ones the extension goes on to leave alone. The
+            // count is of the reads a page costs, so that one is not in it.
+            if (keys !== ALLOWLIST_KEY) counts.reads += 1;
             if (keys === null || keys === undefined) return { ...stored };
             /** @type {Record<string, unknown>} */
             const answer = {};
@@ -171,6 +194,15 @@ function contentScriptScope(options = {}) {
            */
           remove: async (keys) => {
             for (const key of Array.isArray(keys) ? keys : [keys]) delete stored[key];
+          },
+        },
+        onChanged: {
+          /**
+           * @param {(changes: Record<string, { newValue?: unknown }>, area: string) => void} fn
+           * @returns {void}
+           */
+          addListener: (fn) => {
+            changeListeners.push(fn);
           },
         },
       },
@@ -202,6 +234,8 @@ function contentScriptScope(options = {}) {
   sandbox.globalThis = sandbox;
   sandbox.counts = counts;
   sandbox.written = written;
+  sandbox.stored = stored;
+  sandbox.changeListeners = changeListeners;
   vm.createContext(sandbox);
   return sandbox;
 }
@@ -262,6 +296,23 @@ function navigate(sandbox, to) {
   }
   const name = sandbox.bghsa.content.FRAME_EVENTS[0];
   frame.dispatchEvent(new sandbox.window.Event(name, { bubbles: true }));
+}
+
+/**
+ * A maintainer editing the list in the extension's settings, which is another
+ * page of this extension writing to the same storage. The page under test hears
+ * it the way the browser tells it: a change announcement, not a read.
+ *
+ * @param {Record<string, any>} sandbox
+ * @param {readonly string[]} entries
+ * @returns {void}
+ */
+function setAllowlist(sandbox, entries) {
+  const next = [...entries];
+  sandbox.stored[ALLOWLIST_KEY] = next;
+  for (const listener of [...sandbox.changeListeners]) {
+    listener({ [ALLOWLIST_KEY]: { newValue: next } }, 'local');
+  }
 }
 
 /**
@@ -364,6 +415,13 @@ test('a page that becomes the advisory list gets the table', async () => {
     `the table never landed; the page carries ${names(sandbox).join(', ') || 'nothing'}`
   );
   assert.ok(sandbox.counts.connected > 0, 'the surface started with nothing watching the page');
+  // The counts the tests above read zero from are counts that move, and the key
+  // list they read empty is a list that gets pushed to. A surface that has
+  // landed watches the page, reads storage, and stores what it read.
+  assert.ok(sandbox.counts.made > 0, 'the surface made no observer');
+  assert.ok(sandbox.counts.reads > 0, 'the surface read no storage');
+  assert.ok(sandbox.counts.writes > 0, 'the surface stored nothing');
+  assert.ok(sandbox.written.length > 0, 'the surface named no key it stored');
 });
 
 test('a page that becomes an advisory gets the panel', async () => {
@@ -388,6 +446,13 @@ test('a page that becomes an advisory gets the panel', async () => {
     `the panel never landed; the page carries ${names(sandbox).join(', ') || 'nothing'}`
   );
   assert.ok(sandbox.counts.connected > 0, 'the surface started with nothing watching the page');
+  // The counts the tests above read zero from are counts that move, and the key
+  // list they read empty is a list that gets pushed to. A surface that has
+  // landed watches the page, reads storage, and stores what it read.
+  assert.ok(sandbox.counts.made > 0, 'the surface made no observer');
+  assert.ok(sandbox.counts.reads > 0, 'the surface read no storage');
+  assert.ok(sandbox.counts.writes > 0, 'the surface stored nothing');
+  assert.ok(sandbox.written.length > 0, 'the surface named no key it stored');
 });
 
 test('an advisory on a repository the allowlist does not carry is left alone', async () => {
@@ -449,7 +514,10 @@ test('a page that becomes another repository advisory stores nothing for it', as
     'the table never landed on the repository the allowlist carries'
   );
 
+  // Nonzero, so the comparison below rests on a recording this test has seen
+  // work: the surface stored what it read for the repository it opened on.
   const before = sandbox.written.length;
+  assert.ok(before > 0, 'the surface stored nothing on the repository the allowlist carries');
   navigate(sandbox, { pathname: OTHER_ADVISORY, frame: fixture('triage-thread.html') });
   await settle();
 
@@ -493,7 +561,10 @@ test('a page that becomes another repository advisory list stores nothing for it
     'the table never landed on the repository the allowlist carries'
   );
 
+  // Nonzero, so the comparison below rests on a recording this test has seen
+  // work: the surface stored what it read for the repository it opened on.
   const before = sandbox.written.length;
+  assert.ok(before > 0, 'the surface stored nothing on the repository the allowlist carries');
   navigate(sandbox, { pathname: OTHER_LIST, frame: elsewhere });
   await settle();
 
@@ -504,4 +575,169 @@ test('a page that becomes another repository advisory list stores nothing for it
     `the list was stored: ${after.join(', ')}`
   );
   assert.strictEqual(sandbox.counts.requests, 0, 'a request went out for it');
+});
+
+test('a list with no repositories leaves an advisory alone', async () => {
+  // A fresh install stores no list, so this is what every page looks like until
+  // a maintainer names a repository in the settings. REQUIREMENTS.md section 12.
+  const sandbox = contentScriptScope({
+    pathname: ADVISORY,
+    frame: fixture('triage-thread.html'),
+    allowlist: [],
+  });
+  assert.deepStrictEqual(loadScripts(sandbox), []);
+  await settle();
+
+  assert.deepStrictEqual(sandbox.written, [], 'something was stored');
+  assert.strictEqual(sandbox.counts.writes, 0, 'storage was written');
+  assert.strictEqual(sandbox.counts.reads, 0, 'storage was read');
+  assert.deepStrictEqual(names(sandbox), [], 'the extension wrote on the page');
+  assert.strictEqual(sandbox.counts.made, 0, 'an observer was made');
+  assert.strictEqual(sandbox.counts.connected, 0, 'an observer was connected');
+  assert.strictEqual(sandbox.counts.requests, 0, 'a request went out');
+});
+
+test('a list with no repositories leaves an advisory list alone', async () => {
+  const sandbox = contentScriptScope({
+    pathname: ADVISORY_LIST,
+    frame: fixture('list-page-triage.html'),
+    allowlist: [],
+  });
+  assert.deepStrictEqual(loadScripts(sandbox), []);
+  await settle();
+
+  assert.deepStrictEqual(sandbox.written, [], 'something was stored');
+  assert.strictEqual(sandbox.counts.writes, 0, 'storage was written');
+  assert.strictEqual(sandbox.counts.reads, 0, 'storage was read');
+  assert.deepStrictEqual(names(sandbox), [], 'the extension wrote on the page');
+  assert.strictEqual(sandbox.counts.made, 0, 'an observer was made');
+  assert.strictEqual(sandbox.counts.connected, 0, 'an observer was connected');
+  assert.strictEqual(sandbox.counts.requests, 0, 'a request went out');
+});
+
+test('a repository is matched against the list whatever case either is in', async () => {
+  // GitHub serves the repository under the case its owner chose and the
+  // maintainer types whichever case they remember, so neither side of the
+  // comparison is the one the other was written in.
+  const sandbox = contentScriptScope({
+    pathname: ADVISORY,
+    frame: fixture('triage-thread.html'),
+    allowlist: ['GIT-Utensils/Spoon-KNIFE'],
+  });
+  assert.deepStrictEqual(loadScripts(sandbox), []);
+  await settle();
+
+  assert.ok(
+    sandbox.document.getElementById(sandbox.bghsa.panel.PANEL_ID) !== null,
+    `the panel never landed; the page carries ${names(sandbox).join(', ') || 'nothing'}`
+  );
+});
+
+test('a repository taken off the list stops the extension on a page showing it', async () => {
+  const sandbox = contentScriptScope({
+    pathname: ADVISORY,
+    frame: fixture('triage-thread.html'),
+  });
+  assert.deepStrictEqual(loadScripts(sandbox), []);
+  await settle();
+  assert.ok(
+    sandbox.document.getElementById(sandbox.bghsa.panel.PANEL_ID) !== null,
+    'the panel never landed on the repository the list carried'
+  );
+
+  // Nonzero, so the comparison below rests on a recording this test has seen
+  // work: the surface stored what it read for the repository it opened on.
+  const before = sandbox.written.length;
+  assert.ok(before > 0, 'the surface stored nothing on the repository the allowlist carries');
+  setAllowlist(sandbox, []);
+  await settle();
+
+  assert.ok(
+    sandbox.document.getElementById(sandbox.bghsa.panel.PANEL_ID) === null,
+    'the panel stayed on a repository nobody lists'
+  );
+  assert.deepStrictEqual(names(sandbox), [], 'the extension left its own writing on the page');
+  assert.deepStrictEqual(
+    /** @type {string[]} */ (sandbox.written.slice(before)),
+    [],
+    'the advisory was stored after its repository left the list'
+  );
+});
+
+test('a repository taken off the list stops the extension on an advisory list', async () => {
+  const sandbox = contentScriptScope({
+    pathname: ADVISORY_LIST,
+    frame: fixture('list-page-triage.html'),
+  });
+  assert.deepStrictEqual(loadScripts(sandbox), []);
+  await settle();
+  assert.ok(
+    sandbox.document.getElementById(sandbox.bghsa.table.ROOT_ID) !== null,
+    'the table never landed on the repository the list carried'
+  );
+
+  setAllowlist(sandbox, []);
+  await settle();
+
+  assert.ok(
+    sandbox.document.getElementById(sandbox.bghsa.table.ROOT_ID) === null,
+    'the table stayed on a repository nobody lists'
+  );
+  assert.deepStrictEqual(names(sandbox), [], 'the extension left its own writing on the page');
+  // GitHub's own view is what the page had before the table hid it, and it is
+  // what the page is left with.
+  const container = sandbox.document.querySelector('#advisories');
+  assert.ok(container !== null, 'the list page carries no container');
+  assert.strictEqual(
+    container.querySelectorAll(`.${sandbox.bghsa.table.HIDDEN_CLASS}`).length,
+    0,
+    "GitHub's own view was left hidden"
+  );
+});
+
+test('a repository added to the list starts the extension on a page already open', async () => {
+  const sandbox = contentScriptScope({
+    pathname: ADVISORY,
+    frame: fixture('triage-thread.html'),
+    allowlist: [],
+  });
+  assert.deepStrictEqual(loadScripts(sandbox), []);
+  await settle();
+  assert.deepStrictEqual(names(sandbox), [], 'a surface took a page no list carried');
+
+  setAllowlist(sandbox, [ALLOWED]);
+  await settle();
+
+  assert.ok(
+    sandbox.document.getElementById(sandbox.bghsa.panel.PANEL_ID) !== null,
+    `the panel never landed; the page carries ${names(sandbox).join(', ') || 'nothing'}`
+  );
+});
+
+test('a page whose list has not arrived yet is left alone', async () => {
+  // The gate is synchronous and storage is not, so between the content scripts
+  // loading and the read landing there is no answer. Reading no answer as yes
+  // would inject and store on a repository nobody listed, so it is read as no,
+  // and this holds the read open to prove it.
+  const sandbox = contentScriptScope({
+    pathname: ADVISORY,
+    frame: fixture('triage-thread.html'),
+    holdStorage: true,
+  });
+  assert.deepStrictEqual(loadScripts(sandbox), []);
+  await settle();
+
+  // The gate itself, asked while the read is still out. Everything below is
+  // what answering it wrongly would cost.
+  assert.strictEqual(
+    sandbox.bghsa.content.enabled(),
+    false,
+    'the gate said yes before the list had arrived'
+  );
+  assert.deepStrictEqual(sandbox.written, [], 'something was stored');
+  assert.strictEqual(sandbox.counts.writes, 0, 'storage was written');
+  assert.deepStrictEqual(names(sandbox), [], 'the extension wrote on the page');
+  assert.strictEqual(sandbox.counts.made, 0, 'an observer was made');
+  assert.strictEqual(sandbox.counts.connected, 0, 'an observer was connected');
+  assert.strictEqual(sandbox.counts.requests, 0, 'a request went out');
 });

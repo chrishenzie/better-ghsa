@@ -5,6 +5,14 @@
   "description": "Triage state for GitHub security advisories, kept in a comment on the advisory.",
   "permissions": ["storage"],
   "host_permissions": ["https://github.com/*"],
+  "options_ui": {
+    "page": "src/settings/settings.html",
+    "open_in_tab": true
+  },
+  "background": {
+    "service_worker": "src/background.js",
+    "scripts": ["src/background.js"]
+  },
   "content_scripts": [
     {
       "matches": ["https://github.com/*"],

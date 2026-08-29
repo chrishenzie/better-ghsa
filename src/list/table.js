@@ -2207,7 +2207,55 @@ if (typeof require === 'function') {
     const doc = globalThis.document;
     const pass = passFor(doc);
     void pass();
-    return observe(doc, pass);
+    const observer = observe(doc, pass);
+    attached.set(doc, observer);
+    return observer;
+  }
+
+  /**
+   * The observer watching each started document, held so that {@link stop} can
+   * let it go.
+   *
+   * @type {WeakMap<Document, MutationObserver | null>}
+   */
+  const attached = new WeakMap();
+
+  /**
+   * Takes the table off a document, which is what a repository leaving the
+   * allowlist does to a list page already showing one.
+   *
+   * The observer is let go first, so removing the table is not itself a reason
+   * to draw it again. The refresh this page had running is put down, and every
+   * surface beside the table is told the page reads for no repository, which is
+   * what stops the reads they hold of their own. GitHub's own view comes back
+   * whole, because nothing was ever taken out of the document to hide it.
+   *
+   * @param {Document} [doc]
+   * @returns {void}
+   */
+  function stop(doc = globalThis.document) {
+    attached.get(doc)?.disconnect();
+    attached.delete(doc);
+    for (const surface of [...surfaces]) {
+      if (surface.left === undefined) continue;
+      try {
+        surface.left(doc, null);
+      } catch {
+        // A surface that cannot put its work down is not a reason to leave the
+        // rest of the page running for a repository nobody listed.
+      }
+    }
+    const held = running.get(doc);
+    if (held !== undefined) leave(doc, held);
+    const container = doc.querySelector('#advisories');
+    if (container !== null) for (const node of nativeControls(container)) setHidden(node, false);
+    for (const node of doc.querySelectorAll(ownedSelector())) node.remove();
+    // The surfaces beside the table draw inside its root and go out with it.
+    // What each leaves behind is a stylesheet in the head, which the root does
+    // not carry, and every stylesheet this extension adds is named for it.
+    for (const node of doc.querySelectorAll('style[id^="bghsa-"]')) node.remove();
+    views.delete(doc);
+    modes.delete(doc);
   }
 
   const exported = {
@@ -2274,6 +2322,7 @@ if (typeof require === 'function') {
     passFor,
     observe,
     start,
+    stop,
   };
 
   globalThis.bghsa.table = exported;

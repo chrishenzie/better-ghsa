@@ -147,6 +147,16 @@ test('a session that adds nothing leaves the entry as it stands', async () => {
 
   assert.strictEqual(await branches.sync(), true);
   assert.strictEqual(storage.writes.length === 0, true, 'the entry was written with nothing new');
+
+  // A branch the entry does not carry does write, so the zero above is a session
+  // that added nothing and not a count that cannot move.
+  branches.remember(REF, ['release/2.2']);
+  assert.strictEqual(await branches.sync(), false, 'storage held a branch this session did not');
+  assert.strictEqual(storage.writes.length, 1, 'a write went unrecorded');
+  assert.ok(
+    stored(storage, 'containerd/containerd').includes('release/2.2'),
+    'the branch the session added is not in the entry'
+  );
 });
 
 test('an entry holding something other than branches is read as empty', async () => {

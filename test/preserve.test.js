@@ -11,6 +11,20 @@ const preserve = require('../src/detail/preserve.js');
 const write = require('../src/common/write.js');
 const stateWrite = require('../src/detail/state.js');
 
+const allowlist = require('../src/common/allowlist.js');
+
+// The list of repositories the extension acts on is stored rather than compiled
+// in, and is empty on a fresh install. The fixtures here are that repository's,
+// so the list is put in place and read before the first test, which is what the
+// extension itself does before it takes a page.
+test.before(async () => {
+  allowlist.setStorage({
+    get: async () => ({ [allowlist.STORAGE_KEY]: ['git-utensils/spoon-knife'] }),
+    set: async () => {},
+  });
+  await allowlist.load();
+});
+
 /**
  * @param {string} name
  * @returns {Document}

@@ -149,7 +149,11 @@ test('an entry a year old is answered and left in storage', async () => {
   assert.ok(held.observedAt === 0, `the entry was observed at ${held?.observedAt}`);
   assert.ok(cache.isStale(held, 365 * DAY), 'a year-old triage entry was not stale');
   assert.ok(Object.hasOwn(storage.entries, KEY), 'the entry was taken out of storage');
-  assert.ok(storage.removals.length === 0, `storage saw ${storage.removals.length} removals`);
+  assert.deepStrictEqual(storage.removals, [], 'a removal went out for an entry within its life');
+  // The empty list above is a removal that did not go out and not a list that
+  // cannot grow: the clear takes the same entry out through `remove`.
+  assert.ok((await cache.clear({ storage })) === 1, 'the clear took no entry');
+  assert.ok(storage.removals.length === 1, 'the removal went unrecorded');
 });
 
 test('many advisories are read in one call, however old they are', async () => {
@@ -164,7 +168,11 @@ test('many advisories are read in one call, however old they are', async () => {
   assert.ok(found.has(ids[1] ?? ''), 'the closed entry was dropped at a year old');
   assert.ok(!found.has(ids[2] ?? ''), 'an advisory nothing wrote was handed back');
   assert.ok(storage.reads.length === 1, `storage saw ${storage.reads.length} reads`);
-  assert.ok(storage.removals.length === 0, `storage saw ${storage.removals.length} removals`);
+  assert.deepStrictEqual(storage.removals, [], 'a removal went out for an entry read in a pass');
+  // The empty list above is a removal that did not go out and not a list that
+  // cannot grow: the clear takes the two entries out through `remove`.
+  assert.ok((await cache.clear({ storage })) === 2, 'the clear took neither entry');
+  assert.ok(storage.removals.length === 1, 'the removal went unrecorded');
 });
 
 test('the list entry and the progress entry round trip', async () => {
@@ -349,6 +357,12 @@ test('counting a 404 against an advisory the cache does not hold does nothing', 
   await cache.noteMissing(REF, { storage, at: 0 });
   const third = await cache.noteMissing(REF, { storage, at: 0 });
   assert.ok(!third.evicted, 'an advisory the cache does not hold was evicted');
+
+  // The empty list above is a removal that did not go out and not a count that
+  // cannot move: an entry the cache does hold is taken out through `remove`.
+  await cache.putAdvisory(REF, { state: 'triage' }, { storage, at: 0 });
+  assert.ok((await cache.clear({ storage })) === 1, 'the clear took no entry');
+  assert.ok(storage.removals.length === 1, 'the removal went unrecorded');
 });
 
 test('three 404s in a row take the advisory out of the cache', async () => {

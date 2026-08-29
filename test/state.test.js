@@ -15,6 +15,20 @@ const members = require('../src/common/members.js');
 const record = require('../src/common/record.js');
 const cache = require('../src/common/cache.js');
 
+const allowlist = require('../src/common/allowlist.js');
+
+// The list of repositories the extension acts on is stored rather than compiled
+// in, and is empty on a fresh install. The fixtures here are that repository's,
+// so the list is put in place and read before the first test, which is what the
+// extension itself does before it takes a page.
+test.before(async () => {
+  allowlist.setStorage({
+    get: async () => ({ [allowlist.STORAGE_KEY]: ['git-utensils/spoon-knife'] }),
+    set: async () => {},
+  });
+  await allowlist.load();
+});
+
 /**
  * @param {string} name
  * @returns {Document}
@@ -760,4 +774,55 @@ test('a write GitHub turned away hands back no advisory', async () => {
   assert.strictEqual(calls.length, 2, 'no comment request went out');
   assert.strictEqual(outcome.advisory, null);
   assert.strictEqual(outcome.readAt, null);
+});
+
+test('a repository taken off the list while the page is out is refused', async () => {
+  // The behavioral half of the check below, which is a call count taken on a
+  // monkeypatched allowlist. Nothing is patched here: the maintainer takes the
+  // repository off the list from the settings page while the read is in
+  // flight, which every page of this extension hears about. The check before
+  // the request had already passed, so the one on the page that came back is
+  // the only thing left that can stop the write.
+  const page = triagePage();
+  const talk = session(page);
+  try {
+    const outcome = await state.writeState({
+      ref: REF,
+      loadedSeq: OBSERVED,
+      changes: { triage: 'evaluating' },
+      at: AT,
+      fetch: async (url, init) => {
+        if ((init.method ?? 'GET') === 'GET') {
+          allowlist.setStorage({
+            get: async () => ({ [allowlist.STORAGE_KEY]: [] }),
+            set: async () => {},
+          });
+          await allowlist.load();
+        }
+        return talk.fetch(url, init);
+      },
+      parseDocument: talk.parseDocument,
+    });
+
+    assert.strictEqual(outcome.ok, false);
+    assert.strictEqual(outcome.reason, 'allowlist');
+    assert.strictEqual(
+      outcome.message,
+      write.allowlistMessage(`${REF.owner}/${REF.repo}`),
+      'the refusal names another repository'
+    );
+    assert.strictEqual(outcome.merged, null, 'the save read state it should not have reached');
+    assert.strictEqual(talk.calls.length, 1, 'the save spent more than the one read');
+    assert.deepStrictEqual(
+      talk.calls.filter((call) => (call.init.method ?? 'GET') !== 'GET'),
+      [],
+      'a comment was posted on a repository off the list'
+    );
+  } finally {
+    allowlist.setStorage({
+      get: async () => ({ [allowlist.STORAGE_KEY]: ['git-utensils/spoon-knife'] }),
+      set: async () => {},
+    });
+    await allowlist.load();
+  }
 });
