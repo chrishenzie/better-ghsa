@@ -721,9 +721,43 @@ test('a created comment whose author shows no badge is not counted as state', as
   );
 });
 
-test('a write that was refused hands back no advisory', async () => {
-  const { outcome } = await run(triagePage(), { loadedSeq: OBSERVED - 1 });
+test('a write refused by the page hands that page back', async () => {
+  cache.setClock(() => READ_AT);
+  try {
+    const { outcome, calls } = await run(triagePage(), {
+      loadedSeq: OBSERVED - 1,
+      changes: { triage: 'evaluating' },
+    });
+    assert.strictEqual(outcome.ok, false);
+    assert.strictEqual(outcome.reason, 'stale');
+    assert.strictEqual(calls.length, 1, 'a comment request went out');
+    assert.strictEqual(outcome.snapshot, null);
+    // The fetch was spent reading the advisory, so the refusal hands back what
+    // it read: the panel reloads from it and the cache is stamped at the moment
+    // it was read.
+    assert.strictEqual(outcome.readAt, READ_AT);
+    const held = stored(outcome);
+    const after = merge.mergeSnapshots(held.comments);
+    assert.strictEqual(after.observedSeq, OBSERVED);
+    // Nothing was written, so the page carries the state it already held and
+    // not the change this save was refused for.
+    assert.notStrictEqual(after.state?.['triage'], 'evaluating');
+    // The page handed back merges to the state the refusal reported.
+    assert.strictEqual(after.seq, outcome.merged?.seq);
+  } finally {
+    cache.setClock(null);
+  }
+});
+
+test('a write GitHub turned away hands back no advisory', async () => {
+  // The request went out, so what the fetch read may already be behind what the
+  // advisory says, and there is no page to hand back.
+  const { outcome, calls } = await run(triagePage(), { changes: { triage: 'evaluating' } }, () => ({
+    status: 500,
+    html: '<html><body></body></html>',
+  }));
   assert.strictEqual(outcome.ok, false);
+  assert.strictEqual(calls.length, 2, 'no comment request went out');
   assert.strictEqual(outcome.advisory, null);
   assert.strictEqual(outcome.readAt, null);
 });

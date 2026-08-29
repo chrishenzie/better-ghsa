@@ -38,12 +38,15 @@ if (typeof require === 'function') {
  * @property {MergedState | null} merged The state the fetched page carried,
  *   and null where the write never read one. A refused write hands this back
  *   so the panel reloads from what the advisory says now.
- * @property {ParsedDetail | null} advisory The advisory as it stands once this
- *   write landed: the page this write read, carrying the comment it wrote.
- *   Null where nothing was written.
+ * @property {ParsedDetail | null} advisory The advisory as this write read it.
+ *   A write that landed carries the page with the comment it wrote on it; a
+ *   write refused by what the page said carries the page as it stands, because
+ *   the fetch was spent on reading it and nothing was written to it. Null where
+ *   the write never got a page, and null once a request has gone out and not
+ *   come back as a landed write.
  * @property {number | null} readAt When that page was read, epoch
- *   milliseconds. Everything in the advisory but this write's own comment was
- *   observed then, so it is the observation time a cache entry holding it
+ *   milliseconds. Everything in the advisory but a landed write's own comment
+ *   was observed then, so it is the observation time a cache entry holding it
  *   carries.
  */
 
@@ -276,9 +279,12 @@ if (typeof require === 'function') {
    * @param {number | null} status
    * @param {string} message
    * @param {MergedState | null} merged
+   * @param {{ advisory: ParsedDetail, readAt: number } | null} read What this
+   *   write's fetch read, and when, where the refusal was decided on it and no
+   *   request went out. Null where there is no page to hand back.
    * @returns {StateWriteResult}
    */
-  function refused(reason, status, message, merged) {
+  function refused(reason, status, message, merged, read) {
     return {
       ok: false,
       reason,
@@ -286,8 +292,8 @@ if (typeof require === 'function') {
       message,
       snapshot: null,
       merged,
-      advisory: null,
-      readAt: null,
+      advisory: read === null ? null : read.advisory,
+      readAt: read === null ? null : read.readAt,
     };
   }
 
@@ -425,9 +431,10 @@ if (typeof require === 'function') {
      * What the prepare step read, which the result carries back out of it.
      *
      * @type {{ merged: MergedState | null, snapshot: Record<string, unknown> | null,
-     *   landed: (() => ParsedDetail) | null }}
+     *   landed: (() => ParsedDetail) | null,
+     *   fresh: { advisory: ParsedDetail, readAt: number } | null }}
      */
-    const read = { merged: null, snapshot: null, landed: null };
+    const read = { merged: null, snapshot: null, landed: null, fresh: null };
 
     const { outcome, run } = await write.runWrite({
       ref,
@@ -451,6 +458,12 @@ if (typeof require === 'function') {
       ...(options.beforeSend === undefined ? {} : { beforeSend: options.beforeSend }),
       prepare: (context) => {
         const fresh = context.advisory;
+        // The page this fetch spent its request on. Every refusal below is
+        // decided on it and sends nothing, so it is the advisory as it stands
+        // and the result hands it back. It is dropped again once the write is
+        // prepared, because a request that goes out can land and leave the page
+        // this read behind.
+        read.fresh = { advisory: fresh, readAt: context.readAt };
         // This write's comment is keyed to the maintainer it goes out under, so
         // an account this extension could not read is one it will not write as.
         const viewer = fresh.viewer;
@@ -523,6 +536,7 @@ if (typeof require === 'function') {
         // front of the reporter.
         const mine = own[0];
         read.landed = () => withWrite(fresh, writtenComment(fresh, viewer, mine, reading, at), mine);
+        read.fresh = null;
         return {
           body: buildBody(built),
           expected: [globalThis.bghsa.schema.STATE_COMMENT_MARKER, json],
@@ -531,9 +545,9 @@ if (typeof require === 'function') {
       },
     });
 
-    const { merged, snapshot, landed } = read;
+    const { merged, snapshot, landed, fresh } = read;
     if (!outcome.ok || run === null || landed === null || snapshot === null || merged === null) {
-      return refused(outcome.reason, outcome.status, outcome.message, merged);
+      return refused(outcome.reason, outcome.status, outcome.message, merged, fresh);
     }
     return settled(outcome, snapshot, merged, { advisory: landed(), readAt: run.readAt });
   }

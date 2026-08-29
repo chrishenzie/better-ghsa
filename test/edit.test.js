@@ -18,6 +18,7 @@ const branches = require('../src/common/branches.js');
 const panel = require('../src/detail/panel.js');
 const cache = require('../src/common/cache.js');
 const table = require('../src/list/table.js');
+const record = require('../src/common/record.js');
 
 const { fakeStorage } = require('../test-support/storage.js');
 
@@ -2092,6 +2093,42 @@ const LIST_ROW = {
   openedAt: '2026-08-01T00:00:00Z',
   reporter: 'prakleumas',
 };
+
+test('a refused save leaves the cache holding the page the write read', async () => {
+  forget();
+  const readAt = Date.parse('2026-08-26T11:00:00Z');
+  cache.setStorage(fakeStorage());
+  cache.setClock(() => readAt);
+  try {
+    const { page, talk } = pair('triage-thread.html');
+    const wiring = { fetch: talk.fetch, parseDocument: talk.parseDocument };
+    const { editor, context } = await editorFor(page, wiring);
+    choose(control(editor, 'select.bghsa-triage'), 'evaluating');
+    const ref = /** @type {import('../src/common/parse-detail.js').AdvisoryRef} */ (
+      context.advisory.ref
+    );
+    assert.strictEqual(await cache.getAdvisory(ref), null, 'the cache already held the advisory');
+
+    const stale = { ...context, merged: { ...context.merged, observedSeq: 5, nextSeq: 6 } };
+    const refusal = await edit.save(stale);
+    assert.strictEqual(refusal.ok, false);
+    assert.strictEqual(refusal.reason, 'stale');
+    assert.strictEqual(talk.posts().length, 0, 'a refused write reached the comment');
+
+    // The request was spent on reading the advisory, so what it read is held:
+    // the panel reloads from it, and so does every other surface.
+    const entry = await cache.getAdvisory(ref);
+    assert.ok(entry !== null, 'a refused write left the page it read nowhere');
+    assert.strictEqual(entry.observedAt, readAt, 'the entry carries another moment');
+    const held = record.advisoryFrom(entry.record);
+    assert.ok(held !== null, 'the entry holds nothing the cache can read back');
+    assert.strictEqual(merge.mergeSnapshots(held.comments).observedSeq, 7);
+  } finally {
+    cache.setStorage(null);
+    cache.setClock(null);
+    forget();
+  }
+});
 
 test('a save that landed leaves the list building the row from what it wrote', async () => {
   forget();

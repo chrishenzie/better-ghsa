@@ -891,12 +891,17 @@ test('a closure reason picked here and put back leaves nothing staged', async ()
   assert.ok(built !== null, 'the cached entry read back as an advisory');
   const key = edit.keyOf(built);
   const doc = await page(held);
-  const control = one(doneRow(doc, TRIAGE_ID), 'select.bghsa-done-reason');
+  const row = doneRow(doc, TRIAGE_ID);
+  const control = one(row, 'select.bghsa-done-reason');
+  const save = one(row, 'button.bghsa-done-save');
+  assert.ok(save.hasAttribute('disabled'), 'Save is offered before the select moves');
 
   choose(control, 'not a vulnerability');
   await settled();
   assert.strictEqual(edit.editsFor(key).closureReason, 'not a vulnerability');
   assert.strictEqual(edit.anyPending(), true, 'a reason picked here is not unsaved work');
+  assert.ok(!save.hasAttribute('disabled'), 'Save stayed shut after the select moved');
+  assert.strictEqual(save.getAttribute('aria-disabled'), null);
 
   // Back to the reason the advisory carries, which this fixture does not have.
   choose(control, '');
@@ -907,6 +912,11 @@ test('a closure reason picked here and put back leaves nothing staged', async ()
     'a reason put back where it started stayed staged'
   );
   assert.strictEqual(edit.anyPending(), false, 'a reason put back where it started warns on leaving');
+  assert.ok(
+    save.hasAttribute('disabled'),
+    'Save is still offered with the select back where it started'
+  );
+  assert.strictEqual(save.getAttribute('aria-disabled'), 'true');
   edit.edits.delete(key);
 });
 
@@ -925,8 +935,8 @@ test('a closure reason set here goes out through the stored write path', async (
   const control = one(row, 'select.bghsa-done-reason');
   const save = one(row, 'button.bghsa-done-save');
   assert.ok(
-    !save.hasAttribute('disabled'),
-    'a member the cache backs can be written from here'
+    save.hasAttribute('disabled'),
+    'Save is offered on a row whose reason nobody has picked'
   );
   assert.deepStrictEqual(
     Array.from(control.querySelectorAll('option')).map((node) => node.getAttribute('value')),
@@ -935,12 +945,17 @@ test('a closure reason set here goes out through the stored write path', async (
   );
 
   choose(control, 'not a vulnerability');
+  await settled();
+  assert.ok(
+    !save.hasAttribute('disabled'),
+    'a member the cache backs cannot be written from here once its reason moves'
+  );
 
   /** @type {import('../src/detail/edit.js').EditorContext[]} */
   const saved = [];
   /** @type {() => void} */
   let landed = () => {};
-  const settled = new Promise((resolve) => {
+  const asked = new Promise((resolve) => {
     landed = () => resolve(undefined);
   });
   const realSave = edit.save;
@@ -961,7 +976,7 @@ test('a closure reason set here goes out through the stored write path', async (
   try {
     /** @type {HTMLElement} */ (/** @type {unknown} */ (save)).click();
     await Promise.race([
-      settled,
+      asked,
       new Promise((_, reject) => setTimeout(() => reject(new Error('no save was asked for')), 2000)),
     ]);
   } finally {
@@ -1109,9 +1124,9 @@ test('the closure controls are held still while a save is out', async () => {
 });
 
 test('a press that changes no reason writes nothing and draws no note', async () => {
-  // The done view's Save is offered on every readable row, so a press with the
-  // select where it started reaches the refusal the panel's disabled button
-  // stands in for. It says nothing, and the row shows nothing.
+  // Save is shut with the select where it started, so no press reaches this
+  // refusal. It is still what a save carrying nothing answers with, and it says
+  // nothing, so the row shows nothing.
   const page_html = fixture('triage-thread.html');
   const read = parseDetail.parseDetail(document(page_html));
   assert.ok(read !== null, 'the fixture reads as an advisory');
@@ -1129,6 +1144,10 @@ test('a press that changes no reason writes nothing and draws no note', async ()
     parseDocument: (html) => document(html),
   });
 
+  assert.ok(
+    one(doneRow(doc, TRIAGE_ID), 'button.bghsa-done-save').hasAttribute('disabled'),
+    'Save is offered on a row whose reason nobody moved'
+  );
   assert.ok(outcome !== null && outcome.ok === false, 'a save with no change was taken');
   assert.strictEqual(outcome.reason, 'unchanged');
   assert.strictEqual(outcome.message, '');

@@ -429,11 +429,26 @@ if (typeof require === 'function') {
 
     const save = element(doc, 'button', 'btn btn-sm bghsa-done-save', SAVE_LABEL);
     save.setAttribute('type', 'button');
-    // Both controls fed the save that is out, and both are held still until it
-    // settles: what the write carries is what the row shows.
-    const flight = saving.has(row.ghsaId);
-    if (flight) control.setAttribute('disabled', '');
-    if (flight || !row.writable) save.setAttribute('disabled', '');
+
+    /**
+     * What the two controls are offered for.
+     *
+     * Both fed the save that is out, and both are held still until it settles:
+     * what the write carries is what the row shows. Save is offered only once
+     * the select has moved, which is the gate the panel's Save carries. The
+     * store prunes a pick equal to the advisory's stored reason, so a select
+     * put back where it started leaves nothing staged and nothing to press.
+     *
+     * @returns {void}
+     */
+    const update = () => {
+      const flight = saving.has(row.ghsaId);
+      const moved =
+        advisory !== null && edit.editsFor(edit.keyOf(advisory)).closureReason !== undefined;
+      edit.setDisabled(control, flight);
+      edit.setDisabled(save, flight || !row.writable || !moved);
+    };
+    update();
 
     control.addEventListener('change', () => {
       if (advisory === null) return;
@@ -447,6 +462,7 @@ if (typeof require === 'function') {
       void (async () => {
         const context = await contextFor(doc, advisory);
         edit.stage(edit.keyOf(advisory), context.tracking, { closureReason: value === '' ? null : value });
+        update();
       })();
     });
     save.addEventListener('click', () => {

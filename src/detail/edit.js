@@ -813,14 +813,16 @@ if (typeof require === 'function') {
   }
 
   /**
-   * Puts what a write left on the advisory into the cache.
+   * Puts the advisory a write read into the cache.
    *
    * REQUIREMENTS.md section 2: a write this extension makes updates the entry
    * to carry what was written. The comment went to GitHub and is in no open
    * document, so every surface reading the cache would otherwise go on showing
-   * the state this save replaced until a refetch came due. The entry is stamped
-   * with the moment the write read the advisory, which is when everything in it
-   * but this write's own comment was observed.
+   * the state this save replaced until a refetch came due. A refused write
+   * carries the page as its own fetch found it, which is state no open document
+   * holds either. The entry is stamped with the moment the write read the
+   * advisory, which is when everything in it but a landed write's own comment
+   * was observed. A result carrying no page writes nothing.
    *
    * @param {StateWriteResult} outcome
    * @returns {Promise<void>}
@@ -1033,10 +1035,14 @@ if (typeof require === 'function') {
     if (landed !== null) {
       release(key, captured);
       remember(key, landed);
-      await hold(outcome);
     } else if (outcome.merged !== null) {
       remember(key, outcome.merged);
     }
+    // The cache takes the page the write read whether the write landed on it or
+    // was refused by what it said. A refusal spent the fetch all the same, and
+    // REQUIREMENTS.md section 3 has the panel reloading with the state that
+    // fetch found, which no surface reading the cache would otherwise see.
+    await hold(outcome);
     results.set(key, { ok: outcome.ok, message: outcome.ok ? SAVED_MESSAGE : outcome.message });
     await repaint(context);
     return outcome;
@@ -1703,12 +1709,7 @@ if (typeof require === 'function') {
   }
 
   const exported = {
-    LEAVE_MESSAGE,
-    PENDING_FIELDS,
-    READ_ONLY_MESSAGE,
-    SAVED_MESSAGE,
     WRITING_MESSAGE,
-    SUPERSEDE_LABEL,
     edits,
     written,
     results,
@@ -1719,32 +1720,20 @@ if (typeof require === 'function') {
     keyOf,
     editsFor,
     stage,
-    stageConfirmation,
-    unstageConfirmation,
-    discard,
     release,
-    staged,
-    differences,
     changedTracks,
-    prune,
     pendingOn,
     anyPending,
     showing,
     panelShows,
-    leavesPage,
     armNavigationWarning,
-    optional,
+    setDisabled,
     changesOf,
-    NESTED_TRACKS,
-    unknownFields,
-    unclearable,
     remember,
     hold,
     ahead,
     preferred,
-    afterWrite,
     save,
-    ownerCandidates,
     backportCandidates,
     contextFor,
     buildEditor,
