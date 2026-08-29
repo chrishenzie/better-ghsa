@@ -620,6 +620,15 @@ test('injecting twice leaves one panel', () => {
   assert.strictEqual(doc.querySelectorAll('#bghsa-style').length, 1);
 });
 
+test('a state the panel could not read carries the unknown chip', () => {
+  const built = build({ ...triage, state: null });
+  assert.deepStrictEqual(texts(built, '.Box-header .Label'), ['Unknown']);
+  assert.strictEqual(
+    chipClass(built, 'Unknown'),
+    'Label Label--secondary bghsa-tone-attention'
+  );
+});
+
 test('a description whose provenance cannot be read is shown as unknown', () => {
   const built = build({ ...draft, descriptionOriginal: null });
   assert.strictEqual(provenance(built), 'Unknown');

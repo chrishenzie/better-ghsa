@@ -120,15 +120,20 @@ if (typeof require === 'function') {
    * something needs attention.
    *
    * The advisory page carries the state, the severity, and the CVE above the
-   * panel, so the row does not repeat them.
+   * panel, so the row does not repeat them. A state the extension could not read
+   * is the exception: it drives the patch chips, the confirmations, the
+   * never-reviewed reading and the place this advisory takes in the list, so a
+   * reader is owed the word that the panel is working without it.
    *
    * @param {Document} doc
+   * @param {import('../common/parse-detail.js').ParsedDetail} advisory
    * @param {import('../common/derive.js').DerivedState} derived
    * @returns {Element}
    */
-  function buildChips(doc, derived) {
+  function buildChips(doc, advisory, derived) {
     const header = element(doc, 'div', 'Box-header bghsa-chips');
     header.append(element(doc, 'strong', 'mr-2', 'Better GHSA'));
+    if (advisory.state === null) header.append(chip(doc, UNKNOWN, 'attention'));
     if (derived.neverReviewed) header.append(chip(doc, 'Never reviewed', 'danger'));
     if (derived.newActivity) header.append(chip(doc, 'New activity', 'attention'));
     return header;
@@ -457,7 +462,7 @@ if (typeof require === 'function') {
       advisory,
       tracking.embargo ? tracking.embargoLift : null
     );
-    panel.append(buildChips(doc, derived));
+    panel.append(buildChips(doc, advisory, derived));
 
     // A value the extension could not read is answered in the row that stands
     // for it, and a value with no row of its own goes unmentioned: the panel
