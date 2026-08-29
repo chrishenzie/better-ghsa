@@ -9,6 +9,7 @@ const { parseHTML } = require('linkedom');
 const parse = require('../src/common/parse-detail.js');
 const preserve = require('../src/detail/preserve.js');
 const write = require('../src/common/write.js');
+const stateWrite = require('../src/detail/state.js');
 
 /**
  * @param {string} name
@@ -515,11 +516,11 @@ test('a second press while the first is still reading the page sends nothing', a
 
   const state = preserve.offered(advisory);
   assert.ok(state.available === false, 'the button is offered while a press is in flight');
-  assert.strictEqual(state.reason, 'pending');
+  assert.strictEqual(state.reason, 'in-flight');
   assert.strictEqual(state.message, preserve.PENDING_MESSAGE);
 
   const second = await preserve.preserve(advisory, run(fake));
-  assert.strictEqual(second.reason, 'pending');
+  assert.strictEqual(second.reason, 'in-flight');
   assert.strictEqual(fake.calls.length, 1, 'a second press went out');
 
   release();
@@ -614,3 +615,68 @@ test('a press that never went out leaves the button offered', async () => {
   assert.strictEqual(preserve.offered(advisory).available, true);
 });
 
+test('a press and a save landing on a write already out report one reason', async () => {
+  preserve.attempts.clear();
+  /** @type {() => void} */
+  let release = () => {};
+  /** @type {Promise<void>} */
+  const holdPage = new Promise((resolve) => {
+    release = () => resolve(undefined);
+  });
+  const fake = exchange({ holdPage });
+
+  const first = preserve.preserve(advisory, run(fake));
+  await tick();
+  const pressed = await preserve.preserve(advisory, run(fake));
+
+  // The same event on the state write, which the panel's Save button reaches.
+  const key = write.holdKey(REF);
+  stateWrite.inFlight.add(key);
+  /** @type {import('../src/detail/state.js').StateWriteResult} */
+  let saved;
+  try {
+    saved = await stateWrite.writeState({
+      ref: REF,
+      loadedSeq: 0,
+      changes: {},
+      fetch: async () => {
+        throw new Error('a save landing on a write already out asked GitHub for a page');
+      },
+      parseDocument: document,
+    });
+  } finally {
+    stateWrite.inFlight.delete(key);
+  }
+
+  assert.strictEqual(
+    pressed.reason,
+    saved.reason,
+    `the press said ${String(pressed.reason)} and the save said ${String(saved.reason)}`
+  );
+  assert.strictEqual(pressed.reason, 'in-flight');
+  assert.strictEqual(pressed.message, saved.message);
+  assert.strictEqual(preserve.offered(advisory).reason, 'in-flight');
+
+  release();
+  const outcome = await first;
+  assert.strictEqual(outcome.ok, true, outcome.message);
+  preserve.attempts.clear();
+});
+
+test('a page naming no advisory refuses the press on the reference', async () => {
+  preserve.attempts.clear();
+  const fake = exchange();
+  /** @type {import('../src/common/parse-detail.js').ParsedDetail} */
+  const anonymous = { ...advisory, ref: null };
+
+  const state = preserve.offered(anonymous);
+  assert.strictEqual(state.writable, false);
+  assert.strictEqual(state.reason, 'unreadable');
+  assert.strictEqual(state.message, preserve.UNREADABLE_REF_MESSAGE);
+
+  const outcome = await preserve.preserve(anonymous, run(fake));
+  assert.strictEqual(outcome.reason, 'unreadable');
+  assert.strictEqual(outcome.message, preserve.UNREADABLE_REF_MESSAGE);
+  assert.strictEqual(fake.calls.length, 0, 'a press with no reference reached GitHub');
+  preserve.attempts.clear();
+});

@@ -739,4 +739,3 @@ test('a write that was refused hands back no advisory', async () => {
   assert.strictEqual(outcome.advisory, null);
   assert.strictEqual(outcome.readAt, null);
 });
-

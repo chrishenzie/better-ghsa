@@ -97,6 +97,9 @@ if (typeof require === 'function') {
    * What the panel says while a write on this advisory is already going out.
    * The controls that started it are held still until it settles, so this is
    * the state of a disabled control and not a refusal a press can reach.
+   *
+   * The preservation press says the same and reports the same `in-flight`
+   * reason, so one event reads the same however it was started.
    */
   const IN_FLIGHT_MESSAGE = globalThis.bghsa.write.SAVING_MESSAGE;
 

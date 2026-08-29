@@ -30,8 +30,11 @@ if (typeof require === 'function') {
  * @typedef {object} Availability
  * @property {boolean} available Whether the button is offered.
  * @property {boolean} writable Whether pressing it would write.
- * @property {string | null} reason One of `preserved`, `attempted`, `pending`,
- *   `allowlist`, `provenance`, `unreadable`, and null when the write is open.
+ * @property {string | null} reason One of `preserved`, `attempted`,
+ *   `in-flight`, `allowlist`, `provenance`, `unreadable`, and null when the
+ *   write is open. `in-flight` is the reason the state write reports for the
+ *   same event, so a press and a save landing on a write already going out read
+ *   the same to anything that branches on it.
  * @property {string} message What the panel says about it.
  * @property {string | null} href Where the comment holding the original report
  *   is, as a fragment naming it on this page, and null where this document
@@ -299,7 +302,7 @@ if (typeof require === 'function') {
       return availability(false, false, 'preserved', PRESERVED_MESSAGE);
     }
     if (attempt === 'sent') return availability(false, false, 'attempted', ATTEMPTED_MESSAGE);
-    if (attempt === 'pending') return availability(false, false, 'pending', PENDING_MESSAGE);
+    if (attempt === 'pending') return availability(false, false, 'in-flight', PENDING_MESSAGE);
     return state;
   }
 
