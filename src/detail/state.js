@@ -110,29 +110,6 @@ if (typeof require === 'function') {
   const inFlight = new Set();
 
   /**
-   * @param {AdvisoryRef} ref
-   * @returns {string} the key an advisory's write is held under.
-   */
-  function advisoryKey(ref) {
-    // Lowercased, because the allowlist and the reference check read a reference
-    // case-insensitively and two spellings of one advisory are one advisory.
-    return `${ref.owner}/${ref.repo}/${ref.ghsaId}`.toLowerCase();
-  }
-
-  /**
-   * @param {AdvisoryRef} left
-   * @param {AdvisoryRef} right
-   * @returns {boolean} whether both name the same advisory.
-   */
-  function sameRef(left, right) {
-    return (
-      left.owner.toLowerCase() === right.owner.toLowerCase() &&
-      left.repo.toLowerCase() === right.repo.toLowerCase() &&
-      left.ghsaId.toLowerCase() === right.ghsaId.toLowerCase()
-    );
-  }
-
-  /**
    * @param {string | null | undefined} left
    * @param {string | null | undefined} right
    * @returns {boolean} whether both name one GitHub account. Logins differ in
@@ -203,20 +180,11 @@ if (typeof require === 'function') {
    */
   function buildBody(snapshot) {
     const schema = globalThis.bghsa.schema;
-    return [
-      '<details>',
-      '',
-      `<summary>${schema.STATE_COMMENT_SUMMARY}</summary>`,
-      '',
-      `\`${schema.STATE_COMMENT_MARKER}\``,
-      '',
-      '```json',
-      snapshotJson(snapshot),
-      '```',
-      '',
-      '</details>',
-      '',
-    ].join('\n');
+    return globalThis.bghsa.write.detailsBody(
+      schema.STATE_COMMENT_SUMMARY,
+      schema.STATE_COMMENT_MARKER,
+      ['```json', snapshotJson(snapshot), '```']
+    );
   }
 
   /**
@@ -292,6 +260,15 @@ if (typeof require === 'function') {
   }
 
   /**
+   * @param {string} reason
+   * @param {string} message
+   * @returns {WriteResult} what stops a write before a request is built.
+   */
+  function stopped(reason, message) {
+    return { ok: false, reason, status: null, message };
+  }
+
+  /**
    * @param {string | null} reason
    * @param {number | null} status
    * @param {string} message
@@ -358,10 +335,9 @@ if (typeof require === 'function') {
     // What the collapsed block renders to: the summary, the marker in its code
     // span, and the fence. It is the text a reader of the page would collapse
     // out of the comment body.
-    const text = [schema.STATE_COMMENT_SUMMARY, schema.STATE_COMMENT_MARKER, report.raw]
-      .join(' ')
-      .replace(/\s+/g, ' ')
-      .trim();
+    const text = globalThis.bghsa.write.collapse(
+      [schema.STATE_COMMENT_SUMMARY, schema.STATE_COMMENT_MARKER, report.raw].join(' ')
+    );
     if (mine !== undefined) return { ...mine, text, stateComment: report };
     const role = roleOf(fresh, viewer);
     return {
@@ -420,17 +396,20 @@ if (typeof require === 'function') {
   /**
    * Writes this maintainer's state comment on one advisory.
    *
-   * The whole write runs against a document fetched at the moment it was asked
-   * for: the snapshots it merges, the form it clones, and the comment it edits
-   * all come from that one document. A page that has moved past the sequence
-   * number the panel loaded with refuses the write, and so does a page where
-   * that sequence belongs to another snapshot than the one the panel loaded, so
-   * a change is never applied to state the maintainer did not see.
+   * The snapshots it merges, the comment it edits, and the state it stamps all
+   * come from the one document the write reads. A page that has moved past the
+   * sequence number the panel loaded with refuses the write, and so does a page
+   * where that sequence belongs to another snapshot than the one the panel
+   * loaded, so a change is never applied to state the maintainer did not see.
    *
    * The comment this maintainer already wrote is edited, and one is created
    * where they have written none. Another maintainer's comment is never the
    * target: the edit form for it is in the page, and posting it would overwrite
    * what they wrote in front of the reporter.
+   *
+   * The advisory is held while the write is out and released once it settles,
+   * whatever it settled as: a save GitHub did not confirm is one the maintainer
+   * can make again.
    *
    * @param {StateWriteOptions} options
    * @returns {Promise<StateWriteResult>}
@@ -438,154 +417,139 @@ if (typeof require === 'function') {
   async function writeState(options) {
     const write = globalThis.bghsa.write;
     const { ref, loadedSeq } = options;
-    const nameWithOwner = `${ref.owner}/${ref.repo}`;
 
-    if (!globalThis.bghsa.allowlist.isAllowed(nameWithOwner)) {
-      return refused('allowlist', null, write.allowlistMessage(nameWithOwner), null);
-    }
+    /**
+     * What the prepare step read, which the result carries back out of it.
+     *
+     * @type {{ merged: MergedState | null, snapshot: Record<string, unknown> | null,
+     *   landed: (() => ParsedDetail) | null }}
+     */
+    const read = { merged: null, snapshot: null, landed: null };
 
-    const key = advisoryKey(ref);
-    if (inFlight.has(key)) return refused('in-flight', null, IN_FLIGHT_MESSAGE, null);
-    // Held before anything is awaited, and released once this write settles.
-    inFlight.add(key);
-    try {
-      const send = options.fetch;
-      const toDocument = options.parseDocument;
-      // Read before the request goes out, because it is when the page this
-      // write reads was read, and an entry holding that page carries it.
-      const readAt = globalThis.bghsa.cache.now();
-      const fetched = await write.fetchAdvisoryPage(ref, {
-        ...(send === undefined ? {} : { fetch: send }),
-        ...(toDocument === undefined ? {} : { parseDocument: toDocument }),
-      });
-      if (fetched.failure !== null || fetched.page === null) {
-        const failure = fetched.failure;
-        if (failure === null) {
-          return refused('fetch', null, write.REFRESH_MESSAGE, null);
+    const { outcome, run } = await write.runWrite({
+      ref,
+      // Released whatever happened: an unconfirmed save is one the maintainer
+      // can make again, and the advisory says what it says.
+      hold: {
+        held: (key) =>
+          inFlight.has(key)
+            ? { ok: false, reason: 'in-flight', status: null, message: IN_FLIGHT_MESSAGE }
+            : null,
+        take: (key) => {
+          inFlight.add(key);
+        },
+        release: (key) => {
+          inFlight.delete(key);
+        },
+      },
+      now: () => globalThis.bghsa.cache.now(),
+      ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
+      ...(options.parseDocument === undefined ? {} : { parseDocument: options.parseDocument }),
+      ...(options.beforeSend === undefined ? {} : { beforeSend: options.beforeSend }),
+      prepare: (context) => {
+        const fresh = context.advisory;
+        // This write's comment is keyed to the maintainer it goes out under, so
+        // an account this extension could not read is one it will not write as.
+        const viewer = fresh.viewer;
+        if (viewer === null) {
+          return stopped(
+            'unreadable',
+            'Error: this extension could not read which account it is signed in' +
+              ' as, and a write under the wrong account is not one it can take back.'
+          );
         }
-        return refused(failure.reason, failure.status, failure.message, null);
-      }
-      const page = fetched.page;
 
-      const fresh = globalThis.bghsa.parseDetail.parseDetail(page);
-      if (fresh === null || fresh.ref === null || !sameRef(fresh.ref, ref)) {
-        return refused('mismatch', null, write.mismatchMessage(ref), null);
-      }
+        const merged = globalThis.bghsa.merge.mergeSnapshots(fresh.comments);
+        read.merged = merged;
+        if (merged.observedSeq !== loadedSeq) {
+          return stopped('stale', 'Error: concurrent edits');
+        }
+        // Before the holder gate, because a maintainer holding two state
+        // comments is told to delete one and can act on that. Reading the
+        // advisory again would find the same two, and the write model in
+        // REQUIREMENTS.md section 3 puts one comment per maintainer on an
+        // advisory.
+        const own = ownStateComments(fresh.comments, viewer);
+        if (own.length > 1) {
+          return stopped(
+            'ambiguous',
+            `Error: ${viewer} has ${own.length} state comments on this advisory,` +
+              ' and this extension writes one. Delete the ones that do not belong.'
+          );
+        }
 
-      const viewer = fresh.viewer;
-      if (viewer === null) {
-        return refused(
-          'unreadable',
-          null,
-          'Error: this extension could not read which account it is signed in' +
-            ' as, and a write under the wrong account is not one it can take back.',
-          null
-        );
-      }
+        const expected = options.loadedHolder;
+        if (expected !== undefined && !sameHolder(expected, holderOf(merged))) {
+          const found = holderOf(merged).by;
+          return stopped(
+            'superseded',
+            `Error: this advisory's state at sequence ${merged.observedSeq} comes from` +
+              ` ${found ?? 'another maintainer'} now, and not from the snapshot the panel was` +
+              ' loaded with. Reload and apply the change again.'
+          );
+        }
+        if (merged.readOnly) return stopped('read-only', 'Error: update the extension');
+        if (merged.confirmationRequired && options.confirmed !== true) {
+          return stopped('confirmation', 'Error: unparsed tracking state');
+        }
 
-      const merged = globalThis.bghsa.merge.mergeSnapshots(fresh.comments);
-      if (merged.observedSeq !== loadedSeq) {
-        return refused(
-          'stale',
-          null,
-          'Error: concurrent edits',
-          merged
-        );
-      }
-      // Before the holder gate, because a maintainer holding two state comments
-      // is told to delete one and can act on that. Reading the advisory again
-      // would find the same two, and the write model in REQUIREMENTS.md section 3
-      // puts one comment per maintainer on an advisory.
-      const own = ownStateComments(fresh.comments, viewer);
-      if (own.length > 1) {
-        return refused(
-          'ambiguous',
-          null,
-          `Error: ${viewer} has ${own.length} state comments on this advisory,` +
-            ' and this extension writes one. Delete the ones that do not belong.',
-          merged
-        );
-      }
+        const at = options.at ?? nowStamp();
+        // The changes are asked for once the login and the time are settled, so
+        // a record inside them names the account this write goes out under.
+        const changes =
+          typeof options.changes === 'function'
+            ? options.changes({ by: viewer, at })
+            : options.changes;
+        const objection = options.guard?.(merged.state, changes) ?? null;
+        if (objection !== null) return stopped(objection.reason, objection.message);
 
-      const expected = options.loadedHolder;
-      if (expected !== undefined && !sameHolder(expected, holderOf(merged))) {
-        const found = holderOf(merged).by;
-        return refused(
-          'superseded',
-          null,
-          `Error: this advisory's state at sequence ${merged.observedSeq} comes from` +
-            ` ${found ?? 'another maintainer'} now, and not from the snapshot the panel was loaded` +
-            ' with. Reload and apply the change again.',
-          merged
-        );
-      }
-      if (merged.readOnly) {
-        return refused('read-only', null, 'Error: update the extension', merged);
-      }
-      if (merged.confirmationRequired && options.confirmed !== true) {
-        return refused('confirmation', null, 'Error: unparsed tracking state', merged);
-      }
+        const built = globalThis.bghsa.merge.nextSnapshot(merged.state, changes, {
+          by: viewer,
+          at,
+          seq: merged.nextSeq,
+        });
+        stampTriageSince(built, merged.state, changes, at, seedTriageSince(fresh));
+        read.snapshot = built;
 
-      const at = options.at ?? nowStamp();
-      // The changes are asked for once the login and the time are settled, so a
-      // record inside them names the account this write goes out under.
-      const changes =
-        typeof options.changes === 'function' ? options.changes({ by: viewer, at }) : options.changes;
-      const objection = options.guard?.(merged.state, changes) ?? null;
-      if (objection !== null) {
-        return refused(objection.reason, null, objection.message, merged);
-      }
+        // The snapshot goes through this extension's own reader before it goes
+        // out. A payload the reader would exclude is one no reader takes as
+        // state, and an advisory carrying a snapshot the extension that wrote it
+        // refuses to read is one nobody can write from until it is superseded by
+        // hand.
+        const json = snapshotJson(built);
+        const reading = globalThis.bghsa.schema.readSnapshot(json);
+        if (!reading.valid) {
+          return stopped(
+            'invalid',
+            'Error: the snapshot this extension built is one it would not read' +
+              ` back: ${reading.problems.join('; ')}.`
+          );
+        }
 
-      const snapshot = globalThis.bghsa.merge.nextSnapshot(merged.state, changes, {
-        by: viewer,
-        at,
-        seq: merged.nextSeq,
-      });
-      stampTriageSince(snapshot, merged.state, changes, at, seedTriageSince(fresh));
+        // The comment this maintainer already wrote is the one this replaces.
+        // Another maintainer's comment is never the target: the edit form for it
+        // is in the page, and posting it would overwrite what they wrote in
+        // front of the reporter.
+        const mine = own[0];
+        read.landed = () => withWrite(fresh, writtenComment(fresh, viewer, mine, reading, at), mine);
+        return {
+          body: buildBody(built),
+          contains: [globalThis.bghsa.schema.STATE_COMMENT_MARKER, json],
+          ...(mine === undefined ? {} : { commentId: mine.id }),
+        };
+      },
+    });
 
-      // The snapshot goes through this extension's own reader before it goes
-      // out. A payload the reader would exclude is one no reader takes as state,
-      // and an advisory carrying a snapshot the extension that wrote it refuses
-      // to read is one nobody can write from until it is superseded by hand.
-      const json = snapshotJson(snapshot);
-      const reading = globalThis.bghsa.schema.readSnapshot(json);
-      if (!reading.valid) {
-        return refused(
-          'invalid',
-          null,
-          'Error: the snapshot this extension built is one it would not read' +
-            ` back: ${reading.problems.join('; ')}.`,
-          merged
-        );
-      }
-
-      const body = buildBody(snapshot);
-      const contains = [globalThis.bghsa.schema.STATE_COMMENT_MARKER, json];
-      /** @type {{ doc: Document, ref: AdvisoryRef, body: string, contains: string[] }} */
-      const common = { doc: page, ref: fresh.ref, body, contains };
-      const passed = {
-        ...(send === undefined ? {} : { fetch: send }),
-        ...(toDocument === undefined ? {} : { parseDocument: toDocument }),
-        ...(options.beforeSend === undefined ? {} : { beforeSend: options.beforeSend }),
-      };
-      const mine = own[0];
-      const outcome =
-        mine === undefined
-          ? await write.createComment({ ...common, ...passed })
-          : await write.editComment({ ...common, commentId: mine.id, ...passed });
-      return settled(outcome, snapshot, merged, {
-        advisory: withWrite(fresh, writtenComment(fresh, viewer, mine, reading, at), mine),
-        readAt,
-      });
-    } finally {
-      inFlight.delete(key);
+    const { merged, snapshot, landed } = read;
+    if (!outcome.ok || run === null || landed === null || snapshot === null || merged === null) {
+      return refused(outcome.reason, outcome.status, outcome.message, merged);
     }
+    return settled(outcome, snapshot, merged, { advisory: landed(), readAt: run.readAt });
   }
 
   const exported = {
     IN_FLIGHT_MESSAGE,
     inFlight,
-    advisoryKey,
     sameLogin,
     buildBody,
     holderOf,

@@ -111,6 +111,10 @@ if (typeof require === 'function') {
    */
   const PRESERVED_MESSAGE = 'Preserved';
 
+  /** What refuses a press on a page that did not say which advisory it is. */
+  const UNREADABLE_REF_MESSAGE =
+    'Error: this extension could not read which repository this advisory is in.';
+
   /**
    * How far a press has got on each advisory, by `owner/repo/GHSA-id`. GitHub
    * does not put the new comment on the page, so the document alone does not say
@@ -120,29 +124,6 @@ if (typeof require === 'function') {
    * @type {Map<string, AttemptState>}
    */
   const attempts = new Map();
-
-  /**
-   * @param {AdvisoryRef} ref
-   * @returns {string} the key an advisory's attempt is held under.
-   */
-  function attemptKey(ref) {
-    // Lowercased, because `sameRef` and the allowlist read a reference
-    // case-insensitively and two spellings of one advisory are one advisory.
-    return `${ref.owner}/${ref.repo}/${ref.ghsaId}`.toLowerCase();
-  }
-
-  /**
-   * @param {AdvisoryRef} left
-   * @param {AdvisoryRef} right
-   * @returns {boolean} whether both name the same advisory.
-   */
-  function sameRef(left, right) {
-    return (
-      left.owner.toLowerCase() === right.owner.toLowerCase() &&
-      left.repo.toLowerCase() === right.repo.toLowerCase() &&
-      left.ghsaId.toLowerCase() === right.ghsaId.toLowerCase()
-    );
-  }
 
   /**
    * The comment holding the original report. The marker is what says so; the
@@ -216,13 +197,7 @@ if (typeof require === 'function') {
   function buildBody(advisory, marker) {
     const { title, description, descriptionOriginal } = advisory;
     if (title === null || description === null || descriptionOriginal === null) return null;
-    return [
-      '<details>',
-      '',
-      `<summary>${PRESERVE_SUMMARY}</summary>`,
-      '',
-      `\`${marker}\``,
-      '',
+    return globalThis.bghsa.write.detailsBody(PRESERVE_SUMMARY, marker, [
       TITLE_LABEL,
       '',
       balanceDetails(title),
@@ -230,10 +205,7 @@ if (typeof require === 'function') {
       DESCRIPTION_LABEL,
       '',
       balanceDetails(description),
-      '',
-      '</details>',
-      '',
-    ].join('\n');
+    ]);
   }
 
   /**
@@ -276,7 +248,7 @@ if (typeof require === 'function') {
         true,
         false,
         'unreadable',
-        'Error: this extension could not read which repository this advisory is in.'
+        UNREADABLE_REF_MESSAGE
       );
     }
     const nameWithOwner = `${ref.owner}/${ref.repo}`;
@@ -322,7 +294,7 @@ if (typeof require === 'function') {
     const state = inspect(advisory);
     const ref = advisory.ref;
     if (!state.writable || ref === null) return state;
-    const attempt = attempts.get(attemptKey(ref));
+    const attempt = attempts.get(globalThis.bghsa.write.holdKey(ref));
     if (attempt === 'written') {
       return availability(false, false, 'preserved', PRESERVED_MESSAGE);
     }
@@ -343,7 +315,7 @@ if (typeof require === 'function') {
   function ahead(advisory) {
     const ref = advisory.ref;
     if (ref === null) return false;
-    const attempt = attempts.get(attemptKey(ref));
+    const attempt = attempts.get(globalThis.bghsa.write.holdKey(ref));
     if (attempt !== 'sent' && attempt !== 'written') return false;
     return !hasPreservationComment(advisory.comments);
   }
@@ -385,11 +357,6 @@ if (typeof require === 'function') {
   async function preserve(advisory, options) {
     const state = offered(advisory);
     if (!state.writable) return refused(state);
-    const ref = /** @type {AdvisoryRef} */ (advisory.ref);
-    const key = attemptKey(ref);
-    // Held before anything is awaited: while a press is in flight the page still
-    // shows no comment, and a second press would write a second one.
-    attempts.set(key, 'pending');
 
     const send =
       options?.fetch ??
@@ -397,57 +364,45 @@ if (typeof require === 'function') {
     const toDocument =
       options?.parseDocument ?? ((html) => new DOMParser().parseFromString(html, 'text/html'));
 
-    const fetched = await globalThis.bghsa.write.fetchAdvisoryPage(ref, {
+    const { outcome } = await globalThis.bghsa.write.runWrite({
+      ref: advisory.ref,
+      unreadable: { reason: 'unreadable', message: UNREADABLE_REF_MESSAGE },
       fetch: send,
       parseDocument: toDocument,
-    });
-    if (fetched.failure !== null || fetched.page === null) {
-      attempts.delete(key);
-      return (
-        fetched.failure ??
-        failed('fetch', null, globalThis.bghsa.write.REFRESH_MESSAGE)
-      );
-    }
-    const page = fetched.page;
-
-    const fresh = globalThis.bghsa.parseDetail.parseDetail(page);
-    if (fresh === null || fresh.ref === null || !sameRef(fresh.ref, ref)) {
-      attempts.delete(key);
-      return failed('mismatch', null, globalThis.bghsa.write.mismatchMessage(ref));
-    }
-
-    const current = inspect(fresh);
-    if (!current.writable) {
-      if (current.reason === 'preserved') attempts.set(key, 'written');
-      else attempts.delete(key);
-      return refused(current);
-    }
-    const marker = newMarker();
-    const body = buildBody(fresh, marker);
-    if (body === null) {
-      attempts.delete(key);
-      return failed(
-        'unreadable',
-        null,
-        'Error: this extension could not read what the comment would say.'
-      );
-    }
-
-    let sent = false;
-    const outcome = await globalThis.bghsa.write.createComment({
-      doc: page,
-      ref: fresh.ref,
-      body,
-      contains: [marker],
-      fetch: send,
-      parseDocument: toDocument,
-      beforeSend: () => {
-        sent = true;
-        attempts.set(key, 'sent');
+      // A press that reached GitHub is never released: GitHub does not put the
+      // new comment on the page, so nothing here can say whether it landed, and
+      // a second press would put a second permanent comment on a real report.
+      hold: {
+        // Held before anything is awaited: while a press is in flight the page
+        // still shows no comment, and a second press would write a second one.
+        take: (key) => {
+          attempts.set(key, 'pending');
+        },
+        sent: (key) => {
+          attempts.set(key, 'sent');
+        },
+        release: (key, settled) => {
+          if (settled.outcome?.ok === true) attempts.set(key, 'written');
+          // The advisory carries the comment already, written from elsewhere.
+          else if (settled.outcome?.reason === 'preserved') attempts.set(key, 'written');
+          else if (!settled.sent) attempts.delete(key);
+        },
+      },
+      prepare: (run) => {
+        const current = inspect(run.advisory);
+        if (!current.writable) return refused(current);
+        const marker = newMarker();
+        const body = buildBody(run.advisory, marker);
+        if (body === null) {
+          return failed(
+            'unreadable',
+            null,
+            'Error: this extension could not read what the comment would say.'
+          );
+        }
+        return { body, contains: [marker] };
       },
     });
-    if (outcome.ok) attempts.set(key, 'written');
-    else if (!sent) attempts.delete(key);
     return outcome;
   }
 
@@ -460,6 +415,7 @@ if (typeof require === 'function') {
     PENDING_MESSAGE,
     ATTEMPTED_MESSAGE,
     PRESERVED_MESSAGE,
+    UNREADABLE_REF_MESSAGE,
     newMarker,
     balanceDetails,
     preservationComment,

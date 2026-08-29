@@ -2,9 +2,12 @@
 
 globalThis.bghsa ??= /** @type {BghsaNamespace} */ ({});
 
-// The manifest orders content scripts; under Node the dependency is named here.
-if (typeof require === 'function') require('./text.js');
-require('./allowlist.js');
+// The manifest orders content scripts; under Node the dependencies are named here.
+if (typeof require === 'function') {
+  require('./text.js');
+  require('./allowlist.js');
+  require('./parse-detail.js');
+}
 
 /**
  * The response a write reads. `globalThis.fetch` satisfies it, and so does the
@@ -57,6 +60,69 @@ require('./allowlist.js');
  * @property {(html: string) => Document} [parseDocument]
  * @property {() => void} [beforeSend] Called once the request is built and
  *   before it goes out, so the caller holds the advisory for the flight.
+ */
+
+/**
+ * What one write runs against: the advisory page it read, and when.
+ *
+ * @typedef {object} WriteRun
+ * @property {Document} page The page the form is cloned from.
+ * @property {import('./parse-detail.js').ParsedDetail} advisory That page, as
+ *   this extension reads it.
+ * @property {import('./parse-detail.js').AdvisoryRef} ref The reference that
+ *   page carries, which the caller's own reference agrees with.
+ * @property {number} readAt When the page was read, epoch milliseconds. It is
+ *   taken before the request goes out, so it is when everything the page says
+ *   was observed.
+ */
+
+/**
+ * The comment one write puts on the advisory.
+ *
+ * @typedef {object} PreparedWrite
+ * @property {string} body The comment's markdown.
+ * @property {readonly string[]} contains Text the response must render in one
+ *   comment for the write to count as done.
+ * @property {string} [commentId] The comment this replaces the body of. A
+ *   prepared write naming none creates a comment.
+ */
+
+/**
+ * How one surface holds an advisory while its write is on its way to GitHub.
+ * The lifetime is the surface's own: a write whose result GitHub does not show
+ * is not one the surface can offer again, and a write that settles is.
+ *
+ * @typedef {object} WriteHold
+ * @property {(key: string) => WriteResult | null} [held] What refuses a write
+ *   on an advisory this surface is already writing to, and null where it is
+ *   not.
+ * @property {(key: string) => void} [take] Called before anything is awaited.
+ * @property {(key: string) => void} [sent] Called once the request is built and
+ *   before it goes out.
+ * @property {(key: string, settled: { sent: boolean, outcome: WriteResult |
+ *   null }) => void} [release] Called once, whatever happened. `sent` says
+ *   whether a request left this extension.
+ */
+
+/**
+ * @typedef {object} RunWriteOptions
+ * @property {import('./parse-detail.js').AdvisoryRef | null} ref The advisory
+ *   to write on, as the surface read it.
+ * @property {{ reason: string, message: string }} [unreadable] What refuses a
+ *   write on a page that did not say which advisory it is. Each surface has its
+ *   own wording, so each supplies it; a caller whose reference cannot be null
+ *   supplies none.
+ * @property {(run: WriteRun) => PreparedWrite | WriteResult |
+ *   Promise<PreparedWrite | WriteResult>} prepare What the comment says, built
+ *   against the page this write read. Everything one surface checks that
+ *   another does not belongs here, and a refusal it returns is the write's
+ *   result.
+ * @property {WriteHold} [hold]
+ * @property {() => number} [now] The clock `readAt` is taken from.
+ * @property {WriteFetch} [fetch]
+ * @property {(html: string) => Document} [parseDocument]
+ * @property {() => void} [beforeSend] Called once the request is built and
+ *   before it goes out.
  */
 
 (() => {
@@ -200,6 +266,31 @@ require('./allowlist.js');
   }
 
   /**
+   * @param {import('./parse-detail.js').AdvisoryRef} ref
+   * @returns {string} the key one advisory's write is held under while it is on
+   *   its way to GitHub.
+   */
+  function holdKey(ref) {
+    // Lowercased, because the allowlist and the reference check read a
+    // reference case-insensitively and two spellings of one advisory are one
+    // advisory.
+    return `${ref.owner}/${ref.repo}/${ref.ghsaId}`.toLowerCase();
+  }
+
+  /**
+   * @param {import('./parse-detail.js').AdvisoryRef} left
+   * @param {import('./parse-detail.js').AdvisoryRef} right
+   * @returns {boolean} whether both name the same advisory.
+   */
+  function sameRef(left, right) {
+    return (
+      left.owner.toLowerCase() === right.owner.toLowerCase() &&
+      left.repo.toLowerCase() === right.repo.toLowerCase() &&
+      left.ghsaId.toLowerCase() === right.ghsaId.toLowerCase()
+    );
+  }
+
+  /**
    * Whether a form action posts to the advisory the reference names. The
    * allowlist gates on the reference read from the page, so the request target
    * carries the same owner, repository, and advisory id, on `github.com`, and
@@ -308,6 +399,38 @@ require('./allowlist.js');
       if (wanted.every((needle) => text.includes(needle))) return true;
     }
     return false;
+  }
+
+  /**
+   * The body of a comment this extension writes: one collapsed block holding a
+   * marker and then whatever the caller puts under it.
+   *
+   * The marker is a code span immediately under the summary, which is what says
+   * whose comment this is whatever the rest of the body holds, and no text
+   * below it can render above it.
+   *
+   * The block's own tags each stand on a line with a blank line between them
+   * and what they wrap, which is the shape the summary's link is known to
+   * render in.
+   *
+   * @param {string} summary The summary line, which is prose for the reader.
+   * @param {string} marker What says the comment is this extension's.
+   * @param {readonly string[]} lines What the block holds under the marker.
+   * @returns {string}
+   */
+  function detailsBody(summary, marker, lines) {
+    return [
+      '<details>',
+      '',
+      `<summary>${summary}</summary>`,
+      '',
+      `\`${marker}\``,
+      '',
+      ...lines,
+      '',
+      '</details>',
+      '',
+    ].join('\n');
   }
 
   /**
@@ -619,8 +742,120 @@ require('./allowlist.js');
     return postForm(action, params, contains, options);
   }
 
+  /**
+   * Writes one comment on one advisory, from the first check to the answer.
+   *
+   * The order the earliest checks run in is settled here for every surface. The
+   * reference comes first, because a page that did not say which advisory it is
+   * names no repository to test, and the allowlist comes second, so a
+   * repository this extension does not write to never reaches a request.
+   *
+   * The whole write then runs against a document fetched at the moment it was
+   * asked for: the form the request clones and everything the comment says come
+   * from that one page. The reference that page carries has to be the one the
+   * write was asked for, and it is tested against the allowlist again, so a page
+   * that turned out to be somewhere else stops the write before the body is
+   * built.
+   *
+   * What the comment says, and every check one surface makes that another does
+   * not, is `prepare`'s. So is the choice between creating a comment and
+   * replacing the body of one.
+   *
+   * @param {RunWriteOptions} options
+   * @returns {Promise<{ outcome: WriteResult, run: WriteRun | null }>} what
+   *   happened, and the page it ran against where it read one.
+   */
+  async function runWrite(options) {
+    const ref = options.ref;
+    if (ref === null) {
+      const unreadable = options.unreadable;
+      if (unreadable === undefined) {
+        throw new TypeError('a write with no advisory reference needs wording for one');
+      }
+      return { outcome: result(false, unreadable.reason, null, unreadable.message), run: null };
+    }
+    const nameWithOwner = `${ref.owner}/${ref.repo}`;
+    if (!globalThis.bghsa.allowlist.isAllowed(nameWithOwner)) {
+      return {
+        outcome: result(false, 'allowlist', null, allowlistMessage(nameWithOwner)),
+        run: null,
+      };
+    }
+
+    const hold = options.hold;
+    const key = holdKey(ref);
+    const already = hold?.held?.(key) ?? null;
+    if (already !== null) return { outcome: already, run: null };
+    // Taken before anything is awaited, so a second press has something to land
+    // on. What releasing it means is the surface's own.
+    hold?.take?.(key);
+
+    const passed = {
+      ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
+      ...(options.parseDocument === undefined ? {} : { parseDocument: options.parseDocument }),
+    };
+    let sent = false;
+    /** @type {WriteResult | null} */
+    let outcome = null;
+    /** @type {WriteRun | null} */
+    let run = null;
+    try {
+      // Read before the request goes out, because it is when the page this
+      // write reads was read.
+      const readAt = (options.now ?? Date.now)();
+      const fetched = await fetchAdvisoryPage(ref, passed);
+      if (fetched.failure !== null || fetched.page === null) {
+        outcome = fetched.failure ?? result(false, 'fetch', null, REFRESH_MESSAGE);
+        return { outcome, run: null };
+      }
+      const page = fetched.page;
+
+      const advisory = globalThis.bghsa.parseDetail.parseDetail(page);
+      if (advisory === null || advisory.ref === null || !sameRef(advisory.ref, ref)) {
+        outcome = result(false, 'mismatch', null, mismatchMessage(ref));
+        return { outcome, run: null };
+      }
+      const freshName = `${advisory.ref.owner}/${advisory.ref.repo}`;
+      if (!globalThis.bghsa.allowlist.isAllowed(freshName)) {
+        outcome = result(false, 'allowlist', null, allowlistMessage(freshName));
+        return { outcome, run: null };
+      }
+
+      run = { page, advisory, ref: advisory.ref, readAt };
+      const prepared = await options.prepare(run);
+      if ('ok' in prepared) {
+        outcome = prepared;
+        return { outcome, run };
+      }
+
+      const common = {
+        doc: page,
+        ref: advisory.ref,
+        body: prepared.body,
+        contains: prepared.contains,
+        ...passed,
+        beforeSend: () => {
+          sent = true;
+          hold?.sent?.(key);
+          options.beforeSend?.();
+        },
+      };
+      outcome =
+        prepared.commentId === undefined
+          ? await createComment(common)
+          : await editComment({ ...common, commentId: prepared.commentId });
+      return { outcome, run };
+    } finally {
+      hold?.release?.(key, { sent, outcome });
+    }
+  }
+
   const exported = {
     DETAIL_INIT,
+    collapse,
+    holdKey,
+    sameRef,
+    detailsBody,
     SAVING_MESSAGE,
     REFRESH_MESSAGE,
     FAILED_MESSAGE,
@@ -643,6 +878,7 @@ require('./allowlist.js');
     commentContains,
     createComment,
     editComment,
+    runWrite,
   };
 
   globalThis.bghsa.write = exported;

@@ -591,3 +591,297 @@ test('a page the write could not read produces a failure and no page', async () 
   assert.strictEqual(unreachable.failure?.reason, 'fetch');
   assert.strictEqual(unreachable.failure?.status, null);
 });
+
+/**
+ * An advisory detail page carrying what a write reads from one: the reference,
+ * the comment thread, and the form the request clones.
+ *
+ * @param {object} [options]
+ * @param {string} [options.owner]
+ * @param {string} [options.repo]
+ * @param {string} [options.ghsaId]
+ * @returns {string}
+ */
+function advisoryHtml(options) {
+  const settings = options ?? {};
+  const owner = settings.owner ?? REF.owner;
+  const repo = settings.repo ?? REF.repo;
+  const ghsaId = settings.ghsaId ?? REF.ghsaId;
+  const detail = `/${owner}/${repo}/security/advisories/${ghsaId}`;
+  return [
+    '<!doctype html><html><body>',
+    '<div class="gh-header-meta"><span class="State">Triage</span>',
+    `<span class="user-select-contain">${ghsaId}</span></div>`,
+    `<div class="js-socket-channel js-updatable-content" data-url="${detail}/repository_advisory/body">`,
+    '<div class="Box"><div class="js-repository-advisory-details">',
+    '<div class="Box-header timeline-comment-header"><a class="author" href="/rep">rep</a>',
+    '<relative-time datetime="2026-08-01T00:00:00Z"></relative-time>',
+    '<span class="js-comment-edit-history"></span></div>',
+    '<form><input name="repository_advisory[title]" value="A title">',
+    '<textarea name="repository_advisory[description]">A description.</textarea>',
+    '</form></div></div></div>',
+    `<form action="${detail}/comments">`,
+    '<input type="hidden" name="authenticity_token" value="a-token">',
+    '<textarea name="body"></textarea>',
+    '<button type="submit" name="comment" value="1" disabled>Comment</button>',
+    '</form>',
+    `<form id="advisory-comment-77-edit-form" action="${detail}/comments/77">`,
+    '<input type="hidden" name="authenticity_token" value="a-token">',
+    '<input type="hidden" name="repository_advisory_comment[bodyVersion]" value="v1">',
+    `<textarea name="${write.EDIT_BODY_FIELD}">held</textarea>`,
+    '</form>',
+    '</body></html>',
+  ].join('\n');
+}
+
+/**
+ * A stand-in for `fetch` answering the advisory page with `page` and the write
+ * with a comment carrying `needle`.
+ *
+ * @param {object} [options]
+ * @param {string} [options.page]
+ * @param {string} [options.needle]
+ * @param {number} [options.status] The status the write is answered with.
+ * @returns {{ send: import('../src/common/write.js').WriteFetch, calls: Array<{ url: string, init: RequestInit }> }}
+ */
+function exchange(options) {
+  const settings = options ?? {};
+  /** @type {Array<{ url: string, init: RequestInit }>} */
+  const calls = [];
+  return {
+    calls,
+    send: async (url, init) => {
+      calls.push({ url, init });
+      if (init.method === 'GET') {
+        return { status: 200, text: async () => settings.page ?? advisoryHtml() };
+      }
+      return {
+        status: settings.status ?? 200,
+        text: async () =>
+          `<div class="comment-body">${settings.needle ?? 'the needle'}</div>`,
+      };
+    },
+  };
+}
+
+test('one write runs the reference check before the allowlist check', async () => {
+  const fake = exchange();
+  const { outcome, run } = await write.runWrite({
+    ref: null,
+    unreadable: { reason: 'unreadable', message: 'Error: no advisory here.' },
+    fetch: fake.send,
+    parseDocument: document,
+    prepare: () => {
+      throw new Error('a write with no reference reached its body');
+    },
+  });
+  assert.strictEqual(outcome.reason, 'unreadable');
+  assert.strictEqual(outcome.message, 'Error: no advisory here.');
+  assert.strictEqual(run, null);
+  assert.strictEqual(fake.calls.length, 0, 'a write with no reference asked GitHub for a page');
+});
+
+test('a repository off the allowlist never reaches a request', async () => {
+  const fake = exchange();
+  const { outcome } = await write.runWrite({
+    ref: { owner: 'other', repo: 'elsewhere', ghsaId: REF.ghsaId },
+    fetch: fake.send,
+    parseDocument: document,
+    prepare: () => {
+      throw new Error('a repository off the allowlist reached its body');
+    },
+  });
+  assert.strictEqual(outcome.reason, 'allowlist');
+  assert.strictEqual(outcome.message, write.allowlistMessage('other/elsewhere'));
+  assert.strictEqual(fake.calls.length, 0, 'a repository off the allowlist was fetched');
+});
+
+test('a page that is another advisory stops the write before the body', async () => {
+  const fake = exchange({ page: advisoryHtml({ ghsaId: 'GHSA-0000-0000-0000' }) });
+  const { outcome } = await write.runWrite({
+    ref: REF,
+    fetch: fake.send,
+    parseDocument: document,
+    prepare: () => {
+      throw new Error('another advisory reached the body builder');
+    },
+  });
+  assert.strictEqual(outcome.reason, 'mismatch');
+  assert.strictEqual(outcome.message, write.mismatchMessage(REF));
+  assert.strictEqual(fake.calls.filter((call) => call.init.method === 'POST').length, 0);
+});
+
+test('the hold is taken, marked sent, and released with what happened', async () => {
+  /** @type {string[]} */
+  const events = [];
+  const fake = exchange({ needle: 'the marker' });
+  const { outcome, run } = await write.runWrite({
+    ref: REF,
+    fetch: fake.send,
+    parseDocument: document,
+    now: () => 1234,
+    hold: {
+      held: () => null,
+      take: (key) => events.push(`take ${key}`),
+      sent: (key) => events.push(`sent ${key}`),
+      release: (key, settled) =>
+        events.push(`release ${key} sent=${settled.sent} ok=${String(settled.outcome?.ok)}`),
+    },
+    prepare: (context) => {
+      events.push(`prepare ${context.ref.ghsaId} at ${context.readAt}`);
+      return { body: 'the marker', contains: ['the marker'] };
+    },
+  });
+  assert.strictEqual(outcome.ok, true, outcome.message);
+  assert.strictEqual(run?.readAt, 1234);
+  assert.deepStrictEqual(events, [
+    'take git-utensils/spoon-knife/ghsa-jmvx-2wfw-xfgj',
+    'prepare GHSA-jmvx-2wfw-xfgj at 1234',
+    'sent git-utensils/spoon-knife/ghsa-jmvx-2wfw-xfgj',
+    'release git-utensils/spoon-knife/ghsa-jmvx-2wfw-xfgj sent=true ok=true',
+  ]);
+});
+
+test('a held advisory refuses the write in the holder words', async () => {
+  const fake = exchange();
+  const { outcome } = await write.runWrite({
+    ref: REF,
+    fetch: fake.send,
+    parseDocument: document,
+    hold: {
+      held: () => ({ ok: false, reason: 'in-flight', status: null, message: 'Saving...' }),
+      take: () => {
+        throw new Error('a held advisory was taken again');
+      },
+    },
+    prepare: () => {
+      throw new Error('a held advisory reached its body');
+    },
+  });
+  assert.strictEqual(outcome.reason, 'in-flight');
+  assert.strictEqual(fake.calls.length, 0);
+});
+
+test('a prepared write that names a comment replaces its body', async () => {
+  const fake = exchange({ needle: 'replaced' });
+  const { outcome } = await write.runWrite({
+    ref: REF,
+    fetch: fake.send,
+    parseDocument: document,
+    prepare: () => ({ body: 'replaced', contains: ['replaced'], commentId: '77' }),
+  });
+  assert.strictEqual(outcome.ok, true, outcome.message);
+  const post = fake.calls.find((call) => call.init.method === 'POST');
+  assert.strictEqual(
+    post?.url,
+    '/git-utensils/Spoon-Knife/security/advisories/GHSA-jmvx-2wfw-xfgj/comments/77'
+  );
+
+  const created = exchange({ needle: 'made' });
+  const { outcome: madeOutcome } = await write.runWrite({
+    ref: REF,
+    fetch: created.send,
+    parseDocument: document,
+    prepare: () => ({ body: 'made', contains: ['made'] }),
+  });
+  assert.strictEqual(madeOutcome.ok, true, madeOutcome.message);
+  assert.strictEqual(
+    created.calls.find((call) => call.init.method === 'POST')?.url,
+    '/git-utensils/Spoon-Knife/security/advisories/GHSA-jmvx-2wfw-xfgj/comments'
+  );
+});
+
+test('a refusal from the body builder is the write result', async () => {
+  const fake = exchange();
+  const { outcome, run } = await write.runWrite({
+    ref: REF,
+    fetch: fake.send,
+    parseDocument: document,
+    prepare: () => ({ ok: false, reason: 'stale', status: null, message: 'Error: concurrent edits' }),
+  });
+  assert.strictEqual(outcome.reason, 'stale');
+  assert.strictEqual(outcome.message, 'Error: concurrent edits');
+  assert.ok(run !== null, 'the write read no page');
+  assert.strictEqual(fake.calls.filter((call) => call.init.method === 'POST').length, 0);
+});
+
+test('the hold is released on every path that sends nothing', async () => {
+  // A hold that outlives the write it was taken for makes that advisory
+  // unwritable for the life of the page, and the maintainer's only recovery is
+  // a reload they have no reason to try. The write settles in four ways
+  // without a request going out, and each of them has to hand the hold back
+  // saying nothing was sent.
+  /**
+   * @param {object} settings
+   * @param {import('../src/common/write.js').WriteFetch} settings.fetch
+   * @param {import('../src/common/write.js').RunWriteOptions['prepare']} settings.prepare
+   * @returns {Promise<{ events: string[], outcome: import('../src/common/write.js').WriteResult | null }>}
+   */
+  async function held(settings) {
+    /** @type {string[]} */
+    const events = [];
+    /** @type {import('../src/common/write.js').WriteResult | null} */
+    let settled = null;
+    const run = write.runWrite({
+      ref: REF,
+      fetch: settings.fetch,
+      parseDocument: document,
+      hold: {
+        held: () => null,
+        take: (key) => events.push(`take ${key}`),
+        sent: (key) => events.push(`sent ${key}`),
+        release: (key, done) => {
+          settled = done.outcome;
+          events.push(`release ${key} sent=${done.sent}`);
+        },
+      },
+      prepare: settings.prepare,
+    });
+    try {
+      await run;
+    } catch {
+      events.push('threw');
+    }
+    return { events, outcome: settled };
+  }
+
+  const key = write.holdKey(REF);
+
+  const unreachable = await held({
+    fetch: async () => {
+      throw new Error('the network is down');
+    },
+    prepare: () => {
+      throw new Error('a page that never arrived reached the body builder');
+    },
+  });
+  assert.deepStrictEqual(unreachable.events, [`take ${key}`, `release ${key} sent=false`]);
+  assert.strictEqual(unreachable.outcome?.reason, 'fetch');
+
+  const elsewhere = await held({
+    fetch: exchange({ page: advisoryHtml({ ghsaId: 'GHSA-0000-0000-0000' }) }).send,
+    prepare: () => {
+      throw new Error('another advisory reached the body builder');
+    },
+  });
+  assert.deepStrictEqual(elsewhere.events, [`take ${key}`, `release ${key} sent=false`]);
+  assert.strictEqual(elsewhere.outcome?.reason, 'mismatch');
+
+  const refused = await held({
+    fetch: exchange().send,
+    prepare: () => ({ ok: false, reason: 'stale', status: null, message: 'Error: concurrent edits' }),
+  });
+  assert.deepStrictEqual(refused.events, [`take ${key}`, `release ${key} sent=false`]);
+  assert.strictEqual(refused.outcome?.reason, 'stale');
+
+  // A body builder that throws is a defect in this extension, and it still
+  // leaves the advisory writable.
+  const threw = await held({
+    fetch: exchange().send,
+    prepare: () => {
+      throw new Error('the body builder is broken');
+    },
+  });
+  assert.deepStrictEqual(threw.events, [`take ${key}`, `release ${key} sent=false`, 'threw']);
+  assert.strictEqual(threw.outcome, null);
+});
