@@ -3,6 +3,13 @@
 A Firefox and Chrome extension that adds triage tracking to GitHub Security
 Advisories, for the maintainers who work them.
 
+**It does nothing until you configure it.** The list of repositories it acts on
+is empty when the extension is installed, and until you add one in its settings
+the extension reads nothing, stores nothing, and shows nothing but a
+`Better GHSA settings` button on advisory pages, which opens the page where the
+list is edited. See [choosing the repositories it acts
+on](#choosing-the-repositories-it-acts-on).
+
 ## What it is for
 
 A repository's security advisories arrive as private reports and stay private
@@ -87,13 +94,26 @@ Chrome:
 Chrome logs a warning about the Firefox-specific settings in the manifest and
 loads the extension.
 
+A loaded extension is inert. It acts on nothing until a repository is listed in
+its settings.
+
 ## Choosing the repositories it acts on
 
 The extension acts only on repositories listed in its settings. The list is
 empty when the extension is installed, so until a repository is added the
-extension does nothing on any page. The settings page opens by itself the first
-time the extension is installed, and is reached afterwards from the extension's
-entry in `about:addons` or `chrome://extensions`.
+extension does nothing on any page: no panel, no table, nothing read, nothing
+stored.
+
+Every advisory list and every advisory page carries one control, a
+`Better GHSA settings` button, which opens the settings in a new tab. On a
+repository that is not listed that button is the whole of what the extension
+does there.
+
+The settings page is also reached from the browser's own add-on manager. In
+Firefox, open `about:addons`, select Extensions, press the `...` button on the
+Better GHSA entry, and choose Preferences (Options on Windows); the page opens
+in a new tab. In Chrome, open `chrome://extensions`, press Details on the Better
+GHSA card, and choose "Extension options".
 
 An entry is `owner/repo`, for example `containerd/containerd`. Case does not
 matter. Removing a repository stops the extension on it; a page already showing

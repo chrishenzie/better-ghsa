@@ -82,6 +82,10 @@ settings, and on no other page. On a repository that is not listed it reads
 nothing, stores nothing, and sends nothing. The list is empty when the extension
 is installed, so until a repository is added there is nothing stored at all.
 
+On every advisory page, listed repository or not, the extension draws a
+`Better GHSA settings` button that opens its settings page. Drawing it and
+pressing it read no advisory, store nothing, and send no request.
+
 ### Retention
 
 Entries persist until they are removed. Advisory and list reads are refreshed in
@@ -184,6 +188,14 @@ The extension requests no other permission. It declares no background script
 and no background page, so its code runs only on the `github.com` pages you have
 open and on its own settings page, and it has no access to tabs, history,
 bookmarks, downloads, cookies, or any other host.
+
+The manifest lists the settings page under `web_accessible_resources`, matched
+to `https://github.com/*`. A browser blocks a `github.com` page from opening an
+extension page unless the page is listed there, and that listing is what lets
+the button open the settings. It makes the settings page loadable by pages on
+`github.com` and by no other site. The address of the page is asked for when the
+button is drawn and is never written into the page, so a script on `github.com`
+does not read it out of the document.
 
 ## Clearing everything
 

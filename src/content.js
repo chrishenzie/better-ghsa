@@ -2,8 +2,11 @@
 
 globalThis.bghsa ??= /** @type {BghsaNamespace} */ ({});
 
-// The manifest orders content scripts; under Node the dependency is named here.
-if (typeof require === 'function') require('./common/allowlist.js');
+// The manifest orders content scripts; under Node the dependencies are named here.
+if (typeof require === 'function') {
+  require('./common/allowlist.js');
+  require('./common/settings-control.js');
+}
 
 /**
  * @typedef {object} AdvisoryLocation
@@ -175,14 +178,28 @@ if (typeof require === 'function') require('./common/allowlist.js');
    * because a repository nobody listed has to stop being read wherever the
    * reading is happening.
    *
+   * Every advisory page carries a control that opens the extension's settings,
+   * listed repository or not, which is how a maintainer reaches the list from
+   * the page they expected the extension to work on. REQUIREMENTS.md section 12.
+   * It is shown after the surfaces have been asked to start, so a page that has
+   * already drawn one puts the control above it. On a repository the allowlist
+   * does not carry the control is the whole of what happens, because the
+   * surfaces are what read, fetch and store and none of them starts.
+   *
    * @param {Document} [doc]
    * @param {boolean} [everywhere]
    * @returns {boolean} whether this call started or stopped the surfaces.
    */
   function reconsider(doc = globalThis.document, everywhere = false) {
-    if (enabled()) return apply(doc);
-    if (!everywhere && locate(globalThis.location?.pathname ?? '') === null) return false;
-    return stop(doc);
+    const control = globalThis.bghsa.settingsControl;
+    if (locate(globalThis.location?.pathname ?? '') === null) {
+      control?.hide(doc);
+      if (!everywhere) return false;
+      return stop(doc);
+    }
+    const changed = enabled() ? apply(doc) : stop(doc);
+    control?.show(doc);
+    return changed;
   }
 
   /**

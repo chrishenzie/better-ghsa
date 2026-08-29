@@ -17,6 +17,7 @@
         "src/common/text.js",
         "src/common/storage.js",
         "src/common/allowlist.js",
+        "src/common/settings-control.js",
         "src/common/trust.js",
         "src/common/schema.js",
         "src/common/merge.js",
@@ -47,6 +48,12 @@
         "src/content.js"
       ],
       "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["src/settings/settings.html"],
+      "matches": ["https://github.com/*"]
     }
   ],
   "browser_specific_settings": {

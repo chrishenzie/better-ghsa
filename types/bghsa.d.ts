@@ -8,6 +8,7 @@ interface BghsaNamespace {
   text: typeof import('../src/common/text.js');
   storage: typeof import('../src/common/storage.js');
   allowlist: typeof import('../src/common/allowlist.js');
+  settingsControl: typeof import('../src/common/settings-control.js');
   trust: typeof import('../src/common/trust.js');
   schema: typeof import('../src/common/schema.js');
   merge: typeof import('../src/common/merge.js');

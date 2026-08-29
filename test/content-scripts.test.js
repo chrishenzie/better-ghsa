@@ -29,6 +29,13 @@ const ALLOWLIST_KEY = 'allowlist';
 /** A GitHub page the extension has no surface for. */
 const PULLS = `${REPO}/pulls`;
 
+/**
+ * What this browser's `runtime.getURL` prefixes a path with. Firefox builds it
+ * from a UUID it generates for the installation, so the shape is Firefox's and
+ * the digits are this test's.
+ */
+const EXTENSION_ORIGIN = 'moz-extension://11111111-2222-3333-4444-555555555555';
+
 /** A repository the allowlist does not carry. */
 const OTHER = '/another-owner/another-repo';
 
@@ -78,14 +85,41 @@ function memberOf(file) {
 }
 
 /**
+ * @param {unknown} target What a request asked for.
+ * @returns {string | null} the repository on `github.com` the URL names,
+ *   lowercased, and null where it names none. A URL somewhere other than
+ *   `github.com` names no repository here: the extension contacts that one host,
+ *   so a request anywhere else is one no list ever permitted.
+ */
+function repositoryOf(target) {
+  /** @type {URL} */
+  let url;
+  try {
+    url = new URL(String(target ?? ''), 'https://github.com');
+  } catch {
+    return null;
+  }
+  if (url.origin !== 'https://github.com') return null;
+  const [owner, repo] = url.pathname.split('/').filter((part) => part !== '');
+  if (owner === undefined || repo === undefined) return null;
+  return `${owner}/${repo}`.toLowerCase();
+}
+
+/**
  * A stand-in for the one isolated-world global a page's content scripts share.
  * `require` and `module` are absent, which is what a content script gets, so
  * every file takes its browser branch and reaches the others only through
  * `bghsa`.
  *
- * The observer constructor, storage and `fetch` all count what they are asked
- * for, because what the extension must not do on a page it has no surface for
- * is watch it, read for it, or send for it.
+ * The observer constructor and storage count what they are asked for, because
+ * what the extension must not do on a page it has no surface for is watch it or
+ * read for it.
+ *
+ * A request is recorded, not counted. `fetch` answers one that names a
+ * repository this page has been told to act on and refuses every other, and a
+ * refusal fails the test it was sent from, whatever path sent it. What it
+ * recorded is `asked`, so a test can say what went out and not only what did
+ * not.
  *
  * @param {{ pathname?: string, frame?: string, allowlist?: readonly string[],
  *   holdStorage?: boolean }} [options]
@@ -105,11 +139,32 @@ function contentScriptScope(options = {}) {
       '</div></body></html>'
   );
 
-  const counts = { made: 0, connected: 0, reads: 0, requests: 0, writes: 0 };
+  const counts = { made: 0, connected: 0, reads: 0, writes: 0 };
+  /**
+   * Everything the extension asked GitHub for, in the order it asked. The
+   * refusal below fails the test that sent a request no list permitted; this
+   * is the other half, and it is what tells a page that asked for the right
+   * repository from a page that asked for nothing at all.
+   *
+   * @type {string[]}
+   */
+  const asked = [];
   /** What storage holds, so a read answers with what a write put there. */
   /** @type {Record<string, unknown>} */
   const stored = {};
   stored[ALLOWLIST_KEY] = [...(options.allowlist ?? [ALLOWED])];
+  /**
+   * @returns {string[]} the repositories this page has been told to act on,
+   *   lowercased, which is the list as the extension has been able to read it. A
+   *   page whose read is still out has been told none, and the settings page
+   *   editing the list changes what this answers from the same moment the page
+   *   under test hears about it.
+   */
+  function listed() {
+    if (options.holdStorage === true) return [];
+    const held = stored[ALLOWLIST_KEY];
+    return (Array.isArray(held) ? held : []).map((entry) => String(entry).toLowerCase());
+  }
   /** Every key a write has named, in the order they were written. */
   /** @type {string[]} */
   const written = [];
@@ -145,6 +200,28 @@ function contentScriptScope(options = {}) {
   }
 
   const quiet = () => {};
+  /**
+   * Every tab the page has asked the browser to open, which is how the one
+   * control the extension shows off the allowlist reaches the settings page.
+   *
+   * @type {{ url: unknown, target: unknown }[]}
+   */
+  const opened = [];
+  // linkedom's window carries no `open`, and a control that opened a real one
+  // would take the test process to a page.
+  Object.defineProperty(window, 'open', {
+    configurable: true,
+    writable: true,
+    /**
+     * @param {unknown} url
+     * @param {unknown} target
+     * @returns {null}
+     */
+    value: (url, target) => {
+      opened.push({ url, target });
+      return null;
+    },
+  });
   /** @type {Record<string, any>} */
   const sandbox = {
     document,
@@ -156,6 +233,13 @@ function contentScriptScope(options = {}) {
     // assertion that nothing was stored would then hold however much the
     // extension tried to store.
     browser: {
+      runtime: {
+        /**
+         * @param {string} path
+         * @returns {string} the extension's own address for one of its files.
+         */
+        getURL: (path) => `${EXTENSION_ORIGIN}/${path}`,
+      },
       storage: {
         local: {
           /**
@@ -225,14 +309,44 @@ function contentScriptScope(options = {}) {
     crypto,
     TextEncoder,
     TextDecoder,
-    // Never settles, so a page-load fetch neither succeeds nor rejects.
-    fetch: () => {
-      counts.requests += 1;
-      return new Promise(() => {});
+    // The bound every request runs inside is built on one of these. Without it
+    // the request path throws before it reaches `fetch`, and a page that asked
+    // GitHub for nothing at all reads here exactly like a page that asked for
+    // the right repository and is waiting on the answer.
+    AbortController,
+    /**
+     * The privacy boundary REQUIREMENTS.md section 12 draws, enforced where a
+     * request would leave: the extension asks GitHub for the repositories on the
+     * list and for nothing else, on any page and through any path.
+     *
+     * A request for a listed repository never settles, so a page-load fetch
+     * neither succeeds nor rejects.
+     *
+     * A request for anything else throws, and is thrown again outside this
+     * promise chain. The surfaces catch a request that failed and carry on, so
+     * the error handed to the caller is answered by whatever asked and reaches
+     * no further; the rethrow is what fails the test, carrying the stack of the
+     * code that sent it.
+     *
+     * @param {unknown} target What the caller asked GitHub for, absolute or as
+     *   the path the extension builds.
+     * @returns {Promise<never>}
+     */
+    fetch: (target) => {
+      asked.push(String(target));
+      const wanted = repositoryOf(target);
+      if (wanted !== null && listed().includes(wanted)) return new Promise(() => {});
+      const refused = new Error(`the extension asked GitHub for ${String(target)}`);
+      setTimeout(() => {
+        throw refused;
+      });
+      throw refused;
     },
   };
   sandbox.globalThis = sandbox;
+  sandbox.opened = opened;
   sandbox.counts = counts;
+  sandbox.asked = asked;
   sandbox.written = written;
   sandbox.stored = stored;
   sandbox.changeListeners = changeListeners;
@@ -279,6 +393,59 @@ function names(sandbox) {
 }
 
 /**
+ * @param {Record<string, any>} sandbox
+ * @returns {Element | null} the one control the extension shows on an advisory
+ *   page of a repository the allowlist does not carry.
+ */
+function control(sandbox) {
+  return sandbox.document.getElementById(sandbox.bghsa.settingsControl.CONTROL_ID);
+}
+
+/**
+ * @param {Record<string, any>} sandbox
+ * @returns {number} how many controls the page carries. Counted by selector and
+ *   not by id, because a second control carries the id the first one does and
+ *   `getElementById` answers with one of them however many are there.
+ */
+function controls(sandbox) {
+  return sandbox.document.querySelectorAll(`#${sandbox.bghsa.settingsControl.CONTROL_ID}`).length;
+}
+
+/**
+ * @param {Record<string, any>} sandbox
+ * @param {string} pathname
+ * @returns {string} the sentinel of the surface that page belongs to, which is
+ *   the block the control sits above once the surface has drawn it.
+ */
+function blockId(sandbox, pathname) {
+  return pathname.split('/').length > 5
+    ? sandbox.bghsa.panel.PANEL_ID
+    : sandbox.bghsa.table.ROOT_ID;
+}
+
+/**
+ * The surfaces, asserted absent by their own sentinels. The control is drawn on
+ * a page neither of them may take, so a check that the page carries the control
+ * says nothing about whether a surface came with it.
+ *
+ * @param {Record<string, any>} sandbox
+ * @param {string} why
+ * @returns {void}
+ */
+function noSurface(sandbox, why) {
+  // Compared as booleans: a failure carrying a node makes the runner serialize
+  // the subtree to report it, which exhausts the heap instead of printing.
+  assert.ok(
+    sandbox.document.getElementById(sandbox.bghsa.panel.PANEL_ID) === null,
+    `the panel ${why}`
+  );
+  assert.ok(
+    sandbox.document.getElementById(sandbox.bghsa.table.ROOT_ID) === null,
+    `the table ${why}`
+  );
+}
+
+/**
  * GitHub replacing the frame: new markup inside it, a new URL, and the event
  * its framework fires inside the frame once the page is there.
  *
@@ -312,6 +479,23 @@ function setAllowlist(sandbox, entries) {
   sandbox.stored[ALLOWLIST_KEY] = next;
   for (const listener of [...sandbox.changeListeners]) {
     listener({ [ALLOWLIST_KEY]: { newValue: next } }, 'local');
+  }
+}
+
+/**
+ * Waits for the page to reach GitHub. The work a page load starts runs on the
+ * clock, not on a fixed number of turns: the queue holds its requests to one a
+ * second, so how many turns pass before the first one goes out is not fixed.
+ *
+ * @param {Record<string, any>} sandbox
+ * @param {number} [limitMs] How long to wait before giving up on one.
+ * @returns {Promise<void>} settled once a request has gone out, or once the
+ *   bound has passed with none.
+ */
+async function asksGitHub(sandbox, limitMs = 20_000) {
+  const until = Date.now() + limitMs;
+  while (sandbox.asked.length === 0 && Date.now() < until) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
   }
 }
 
@@ -375,6 +559,33 @@ test('every content script is declared under a name of its own', () => {
   );
 });
 
+test('the settings page the control opens is the one the manifest exposes', () => {
+  const settingsControl = require('../src/common/settings-control.js');
+
+  // A navigation a github.com page starts to an extension page is blocked
+  // unless the page is listed here, and a content script cannot open the
+  // settings any other way: `runtime.openOptionsPage` is not among the APIs a
+  // content script has, and this extension has no background script to ask.
+  /** @type {{ resources: string[], matches: string[] }[]} */
+  const exposed = manifest.web_accessible_resources;
+  assert.deepStrictEqual(exposed, [
+    { resources: ['src/settings/settings.html'], matches: ['https://github.com/*'] },
+  ]);
+
+  // Listing a resource makes it reachable by every page on the matched origins,
+  // so the origins are the ones the extension already runs on and no others.
+  // Without `matches` it would be reachable from every site.
+  const [entry] = exposed;
+  assert.ok(entry !== undefined, 'the manifest exposes nothing');
+  assert.deepStrictEqual(entry.matches, manifest.content_scripts[0].matches);
+
+  // One page is exposed, and it is the page the control opens and the page the
+  // browser's own add-on settings open. A path that got out of step here would
+  // leave the control opening an address the browser blocks.
+  assert.deepStrictEqual(entry.resources, [settingsControl.SETTINGS_PAGE]);
+  assert.strictEqual(manifest.options_ui.page, settingsControl.SETTINGS_PAGE);
+});
+
 test('a GitHub page the extension has no surface for is left alone', async () => {
   const sandbox = contentScriptScope({
     pathname: PULLS,
@@ -387,7 +598,6 @@ test('a GitHub page the extension has no surface for is left alone', async () =>
   assert.strictEqual(sandbox.counts.connected, 0, 'an observer was connected');
   assert.strictEqual(sandbox.counts.made, 0, 'an observer was made');
   assert.strictEqual(sandbox.counts.reads, 0, 'storage was read');
-  assert.strictEqual(sandbox.counts.requests, 0, 'a request went out');
 });
 
 test('a page that becomes the advisory list gets the table', async () => {
@@ -455,7 +665,34 @@ test('a page that becomes an advisory gets the panel', async () => {
   assert.ok(sandbox.written.length > 0, 'the surface named no key it stored');
 });
 
-test('an advisory on a repository the allowlist does not carry is left alone', async () => {
+test('a page on a listed repository asks GitHub for that repository', async () => {
+  // Every gate test above reads a request that did not go out. Nothing read
+  // one that did, so a change that left the extension asking for nothing would
+  // satisfy all of them: silence and correctness look alike from there.
+  const sandbox = contentScriptScope({
+    pathname: ADVISORY_LIST,
+    frame: fixture('list-page-triage.html'),
+  });
+  assert.deepStrictEqual(loadScripts(sandbox), []);
+  await asksGitHub(sandbox);
+
+  assert.ok(
+    sandbox.asked.length > 0,
+    `the extension asked GitHub for nothing; the page carries ${
+      names(sandbox).join(', ') || 'nothing'
+    }`
+  );
+  // Every one of them named the repository on the list. The double throws on a
+  // request naming anything else, so this says what the throw cannot: the
+  // requests that were permitted were for the repository the page is showing.
+  assert.deepStrictEqual(
+    [...new Set(sandbox.asked.map((/** @type {string} */ target) => repositoryOf(target)))],
+    [ALLOWED],
+    `the extension asked for ${sandbox.asked.join(', ')}`
+  );
+});
+
+test('an advisory on a repository the allowlist does not carry gets the control alone', async () => {
   const sandbox = contentScriptScope({
     pathname: OTHER_ADVISORY,
     frame: fixture('triage-thread.html'),
@@ -474,13 +711,29 @@ test('an advisory on a repository the allowlist does not carry is left alone', a
   // The page is an advisory and the extension has a surface for it; the
   // repository is the only thing keeping the surface off. REQUIREMENTS.md
   // section 8.
-  assert.deepStrictEqual(names(sandbox), [], 'the extension wrote on the page');
+  noSurface(sandbox, 'took an advisory on a repository the allowlist does not carry');
   assert.strictEqual(sandbox.counts.made, 0, 'an observer was made');
   assert.strictEqual(sandbox.counts.connected, 0, 'an observer was connected');
-  assert.strictEqual(sandbox.counts.requests, 0, 'a request went out');
+
+  // The one thing the extension does show here. The names are checked against
+  // the whole list rather than the control alone, so a surface that wrote
+  // anything else under the extension's own name fails this too.
+  assert.deepStrictEqual(
+    names(sandbox),
+    [sandbox.bghsa.settingsControl.CONTROL_ID],
+    'the extension wrote something beside the control'
+  );
+  const shown = control(sandbox);
+  assert.ok(shown !== null, 'the control never landed');
+  assert.strictEqual(shown.textContent?.trim(), 'Better GHSA settings');
+  // Primer's own button, so the control reads as part of the page it sits on.
+  assert.ok(
+    shown.querySelector('button')?.classList.contains('btn'),
+    'the control is not drawn as a button of the page'
+  );
 });
 
-test('an advisory list on a repository the allowlist does not carry is left alone', async () => {
+test('an advisory list on a repository the allowlist does not carry gets the control alone', async () => {
   const sandbox = contentScriptScope({
     pathname: OTHER_LIST,
     frame: fixture('list-page-triage.html'),
@@ -493,10 +746,209 @@ test('an advisory list on a repository the allowlist does not carry is left alon
   assert.deepStrictEqual(sandbox.written, [], 'something was stored');
   assert.strictEqual(sandbox.counts.writes, 0, 'storage was written');
   assert.strictEqual(sandbox.counts.reads, 0, 'storage was read');
-  assert.deepStrictEqual(names(sandbox), [], 'the extension wrote on the page');
+  noSurface(sandbox, 'took an advisory list on a repository the allowlist does not carry');
   assert.strictEqual(sandbox.counts.made, 0, 'an observer was made');
   assert.strictEqual(sandbox.counts.connected, 0, 'an observer was connected');
-  assert.strictEqual(sandbox.counts.requests, 0, 'a request went out');
+
+  assert.deepStrictEqual(
+    names(sandbox),
+    [sandbox.bghsa.settingsControl.CONTROL_ID],
+    'the extension wrote something beside the control'
+  );
+  const shown = control(sandbox);
+  assert.ok(shown !== null, 'the control never landed');
+  assert.strictEqual(shown.textContent?.trim(), 'Better GHSA settings');
+  // Primer's own button, so the control reads as part of the page it sits on.
+  assert.ok(
+    shown.querySelector('button')?.classList.contains('btn'),
+    'the control is not drawn as a button of the page'
+  );
+});
+
+test('the control opens the extension settings in a tab of their own', async () => {
+  const sandbox = contentScriptScope({
+    pathname: OTHER_ADVISORY,
+    frame: fixture('triage-thread.html'),
+  });
+  assert.deepStrictEqual(loadScripts(sandbox), []);
+  await settle();
+
+  const shown = control(sandbox);
+  assert.ok(shown !== null, 'the control never landed');
+  const button = shown.querySelector('button');
+  assert.ok(button !== null, 'the control carries nothing to press');
+  assert.deepStrictEqual(sandbox.opened, [], 'a tab was opened before anything was pressed');
+
+  button.dispatchEvent(new sandbox.window.Event('click', { bubbles: true }));
+  await settle(2);
+
+  assert.deepStrictEqual(sandbox.opened, [
+    { url: `${EXTENSION_ORIGIN}/src/settings/settings.html`, target: '_blank' },
+  ]);
+
+  // The address is the browser's own for this installation, and on Firefox it
+  // is a UUID no page may learn. It stays out of the page: an attribute
+  // carrying it would hand it to every script on github.com.
+  assert.ok(
+    !sandbox.document.documentElement.outerHTML.includes(EXTENSION_ORIGIN),
+    'the extension address was written into the page'
+  );
+
+  // Pressing it is not a read or a write either.
+  assert.deepStrictEqual(sandbox.written, [], 'something was stored');
+  assert.strictEqual(sandbox.counts.reads, 0, 'storage was read');
+});
+
+test('the pages the extension runs on carry one control, above its own block', async () => {
+  /** @type {[string, string][]} */
+  const pages = [
+    [ADVISORY, 'triage-thread.html'],
+    [ADVISORY_LIST, 'list-page-triage.html'],
+  ];
+  for (const [pathname, frame] of pages) {
+    const sandbox = contentScriptScope({ pathname, frame: fixture(frame) });
+    assert.deepStrictEqual(loadScripts(sandbox), []);
+    await settle();
+
+    // The surface having started is what makes this page the running case, so
+    // it is asserted before where the control sits is read as saying anything.
+    const sentinel = blockId(sandbox, pathname);
+    assert.ok(
+      sandbox.document.getElementById(sentinel) !== null,
+      `the surface never took ${pathname}`
+    );
+
+    // One control, on the surface's own page as on every other advisory page.
+    // REQUIREMENTS.md section 12.
+    assert.strictEqual(controls(sandbox), 1, `${pathname} carries ${controls(sandbox)} controls`);
+    const shown = control(sandbox);
+    assert.ok(shown !== null, `the control never landed on ${pathname}`);
+    assert.strictEqual(shown.textContent?.trim(), 'Better GHSA settings');
+    // Primer's own button, so the control reads as part of the page it sits on.
+    assert.ok(
+      shown.querySelector('button')?.classList.contains('btn'),
+      `the control on ${pathname} is not drawn as a button of the page`
+    );
+
+    // Directly above the extension's own block, which is what makes it read as
+    // the extension's control and not one more of GitHub's. Compared by name,
+    // because a failure carrying the node makes the runner serialize the
+    // subtree to report it.
+    assert.strictEqual(
+      shown.nextElementSibling?.id ?? null,
+      sentinel,
+      `the control on ${pathname} does not sit above the extension's own block`
+    );
+  }
+});
+
+test('a move between the advisory pages leaves one control', async () => {
+  // Each half of the area has a surface of its own and each puts the control
+  // above its own block, so a move between them is where a second control would
+  // come from.
+  const sandbox = contentScriptScope({
+    pathname: ADVISORY_LIST,
+    frame: fixture('list-page-triage.html'),
+  });
+  assert.deepStrictEqual(loadScripts(sandbox), []);
+  await settle();
+  assert.strictEqual(controls(sandbox), 1, 'the advisory list carries no one control');
+
+  navigate(sandbox, { pathname: ADVISORY, frame: fixture('triage-thread.html') });
+  await settle();
+  assert.ok(
+    sandbox.document.getElementById(sandbox.bghsa.panel.PANEL_ID) !== null,
+    `the panel never landed; the page carries ${names(sandbox).join(', ') || 'nothing'}`
+  );
+  assert.strictEqual(controls(sandbox), 1, `the advisory carries ${controls(sandbox)} controls`);
+  assert.strictEqual(
+    control(sandbox)?.nextElementSibling?.id ?? null,
+    sandbox.bghsa.panel.PANEL_ID,
+    'the control does not sit above the panel'
+  );
+
+  navigate(sandbox, { pathname: ADVISORY_LIST, frame: fixture('list-page-triage.html') });
+  await settle();
+  assert.ok(
+    sandbox.document.getElementById(sandbox.bghsa.table.ROOT_ID) !== null,
+    `the table never landed; the page carries ${names(sandbox).join(', ') || 'nothing'}`
+  );
+  assert.strictEqual(
+    controls(sandbox),
+    1,
+    `the advisory list carries ${controls(sandbox)} controls after the move back`
+  );
+  assert.strictEqual(
+    control(sandbox)?.nextElementSibling?.id ?? null,
+    sandbox.bghsa.table.ROOT_ID,
+    'the control does not sit above the table'
+  );
+});
+
+test('the control stays off a GitHub page that is not an advisory page', async () => {
+  // The markup on its own is not the signal. GitHub renders an advisory list
+  // into the frame on other pages than the advisory list, so the page here
+  // carries an anchor the control would take and a URL that names no advisory
+  // page, and the URL is the only thing keeping it off.
+  const sandbox = contentScriptScope({
+    pathname: PULLS,
+    frame: fixture('list-page-triage.html'),
+  });
+  assert.deepStrictEqual(loadScripts(sandbox), []);
+  await settle();
+
+  assert.ok(control(sandbox) === null, 'the control took a pull requests page');
+
+  // The same markup under a URL that does name one carries it, so an anchor
+  // the page never offered is not what kept the control off above.
+  navigate(sandbox, { pathname: OTHER_LIST });
+  await settle();
+  assert.ok(control(sandbox) !== null, 'the control never landed on the advisory list');
+});
+
+test('a repository leaving the list and rejoining it leaves one control', async () => {
+  const sandbox = contentScriptScope({
+    pathname: ADVISORY,
+    frame: fixture('triage-thread.html'),
+  });
+  assert.deepStrictEqual(loadScripts(sandbox), []);
+  await settle();
+  assert.ok(
+    sandbox.document.getElementById(sandbox.bghsa.panel.PANEL_ID) !== null,
+    'the panel never landed on the repository the list carried'
+  );
+  assert.strictEqual(controls(sandbox), 1, 'the page the extension runs on carries no one control');
+
+  setAllowlist(sandbox, []);
+  await settle();
+
+  // The surfaces come off and the control stays. It is what the page is left
+  // with, and it is what the maintainer puts the repository back with.
+  noSurface(sandbox, 'stayed on a repository nobody lists');
+  assert.strictEqual(controls(sandbox), 1, `the page carries ${controls(sandbox)} controls`);
+  assert.deepStrictEqual(
+    names(sandbox),
+    [sandbox.bghsa.settingsControl.CONTROL_ID],
+    'the extension left its own writing on the page'
+  );
+
+  // And putting the repository back leaves the one control where the panel is.
+  setAllowlist(sandbox, [ALLOWED]);
+  await settle();
+  assert.ok(
+    sandbox.document.getElementById(sandbox.bghsa.panel.PANEL_ID) !== null,
+    `the panel never came back; the page carries ${names(sandbox).join(', ') || 'nothing'}`
+  );
+  assert.strictEqual(
+    controls(sandbox),
+    1,
+    `a second control came with the panel: ${controls(sandbox)} are on the page`
+  );
+  assert.strictEqual(
+    control(sandbox)?.nextElementSibling?.id ?? null,
+    sandbox.bghsa.panel.PANEL_ID,
+    'the control does not sit above the panel'
+  );
 });
 
 test('a page that becomes another repository advisory stores nothing for it', async () => {
@@ -574,45 +1026,6 @@ test('a page that becomes another repository advisory list stores nothing for it
     [],
     `the list was stored: ${after.join(', ')}`
   );
-  assert.strictEqual(sandbox.counts.requests, 0, 'a request went out for it');
-});
-
-test('a list with no repositories leaves an advisory alone', async () => {
-  // A fresh install stores no list, so this is what every page looks like until
-  // a maintainer names a repository in the settings. REQUIREMENTS.md section 12.
-  const sandbox = contentScriptScope({
-    pathname: ADVISORY,
-    frame: fixture('triage-thread.html'),
-    allowlist: [],
-  });
-  assert.deepStrictEqual(loadScripts(sandbox), []);
-  await settle();
-
-  assert.deepStrictEqual(sandbox.written, [], 'something was stored');
-  assert.strictEqual(sandbox.counts.writes, 0, 'storage was written');
-  assert.strictEqual(sandbox.counts.reads, 0, 'storage was read');
-  assert.deepStrictEqual(names(sandbox), [], 'the extension wrote on the page');
-  assert.strictEqual(sandbox.counts.made, 0, 'an observer was made');
-  assert.strictEqual(sandbox.counts.connected, 0, 'an observer was connected');
-  assert.strictEqual(sandbox.counts.requests, 0, 'a request went out');
-});
-
-test('a list with no repositories leaves an advisory list alone', async () => {
-  const sandbox = contentScriptScope({
-    pathname: ADVISORY_LIST,
-    frame: fixture('list-page-triage.html'),
-    allowlist: [],
-  });
-  assert.deepStrictEqual(loadScripts(sandbox), []);
-  await settle();
-
-  assert.deepStrictEqual(sandbox.written, [], 'something was stored');
-  assert.strictEqual(sandbox.counts.writes, 0, 'storage was written');
-  assert.strictEqual(sandbox.counts.reads, 0, 'storage was read');
-  assert.deepStrictEqual(names(sandbox), [], 'the extension wrote on the page');
-  assert.strictEqual(sandbox.counts.made, 0, 'an observer was made');
-  assert.strictEqual(sandbox.counts.connected, 0, 'an observer was connected');
-  assert.strictEqual(sandbox.counts.requests, 0, 'a request went out');
 });
 
 test('a repository is matched against the list whatever case either is in', async () => {
@@ -656,7 +1069,11 @@ test('a repository taken off the list stops the extension on a page showing it',
     sandbox.document.getElementById(sandbox.bghsa.panel.PANEL_ID) === null,
     'the panel stayed on a repository nobody lists'
   );
-  assert.deepStrictEqual(names(sandbox), [], 'the extension left its own writing on the page');
+  assert.deepStrictEqual(
+    names(sandbox),
+    [sandbox.bghsa.settingsControl.CONTROL_ID],
+    'the extension left its own writing on the page'
+  );
   assert.deepStrictEqual(
     /** @type {string[]} */ (sandbox.written.slice(before)),
     [],
@@ -683,7 +1100,11 @@ test('a repository taken off the list stops the extension on an advisory list', 
     sandbox.document.getElementById(sandbox.bghsa.table.ROOT_ID) === null,
     'the table stayed on a repository nobody lists'
   );
-  assert.deepStrictEqual(names(sandbox), [], 'the extension left its own writing on the page');
+  assert.deepStrictEqual(
+    names(sandbox),
+    [sandbox.bghsa.settingsControl.CONTROL_ID],
+    'the extension left its own writing on the page'
+  );
   // GitHub's own view is what the page had before the table hid it, and it is
   // what the page is left with.
   const container = sandbox.document.querySelector('#advisories');
@@ -703,7 +1124,11 @@ test('a repository added to the list starts the extension on a page already open
   });
   assert.deepStrictEqual(loadScripts(sandbox), []);
   await settle();
-  assert.deepStrictEqual(names(sandbox), [], 'a surface took a page no list carried');
+  assert.deepStrictEqual(
+    names(sandbox),
+    [sandbox.bghsa.settingsControl.CONTROL_ID],
+    'a surface took a page no list carried'
+  );
 
   setAllowlist(sandbox, [ALLOWED]);
   await settle();
@@ -711,6 +1136,14 @@ test('a repository added to the list starts the extension on a page already open
   assert.ok(
     sandbox.document.getElementById(sandbox.bghsa.panel.PANEL_ID) !== null,
     `the panel never landed; the page carries ${names(sandbox).join(', ') || 'nothing'}`
+  );
+  // The control was placed before the panel had drawn, and the panel lands
+  // under it rather than over it.
+  assert.strictEqual(controls(sandbox), 1, `the page carries ${controls(sandbox)} controls`);
+  assert.strictEqual(
+    control(sandbox)?.nextElementSibling?.id ?? null,
+    sandbox.bghsa.panel.PANEL_ID,
+    'the control does not sit above the panel that arrived under it'
   );
 });
 
@@ -739,5 +1172,4 @@ test('a page whose list has not arrived yet is left alone', async () => {
   assert.deepStrictEqual(names(sandbox), [], 'the extension wrote on the page');
   assert.strictEqual(sandbox.counts.made, 0, 'an observer was made');
   assert.strictEqual(sandbox.counts.connected, 0, 'an observer was connected');
-  assert.strictEqual(sandbox.counts.requests, 0, 'a request went out');
 });

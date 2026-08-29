@@ -432,10 +432,11 @@ stored. The allowlist gates the extension, not just its writes.
 The list is empty on a fresh install and is edited in the extension's settings,
 so the extension touches no repository nobody chose. A page open while the list
 changes starts or stops without being reloaded, verified in Firefox on
-2026-08-31. Until a repository is
-listed the extension does nothing anywhere, and gives no sign of itself on a
-page, so the README says plainly that it has to be configured before it does
-anything.
+2026-08-31. Every advisory list and
+advisory detail page carries one control that opens those settings, whether or
+not the repository is listed. On a repository that is not listed that control
+is the only thing the extension does: it reads no advisory, fetches nothing,
+and stores nothing.
 
 The extension has no background script. Every surface is a content script, and
 nothing runs outside a page.
