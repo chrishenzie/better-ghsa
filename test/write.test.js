@@ -232,11 +232,7 @@ test('a comment form posting to another advisory is not written to', async () =>
   assert.ok(outcome.ok === false, 'the write went to a form naming another advisory');
   assert.strictEqual(outcome.reason, 'mismatch');
   assert.strictEqual(fake.calls.length, 0, 'a request went out');
-  assert.strictEqual(
-    outcome.message,
-    'Error: the comment form on this page posts somewhere other than' +
-      ' git-utensils/Spoon-Knife GHSA-jmvx-2wfw-xfgj.'
-  );
+  assert.strictEqual(outcome.message, 'Error: unexpected comment form destination');
 });
 
 test('the caller is told the request is going out before the answer is awaited', async () => {
@@ -293,6 +289,7 @@ test('a write posts the cloned form, with the body replaced, to the form action'
   assert.strictEqual(outcome.ok, true);
   assert.strictEqual(outcome.reason, null);
   assert.strictEqual(outcome.status, 200);
+  assert.strictEqual(outcome.message, '', 'a landed write carried words of its own');
   assert.strictEqual(fake.calls.length, 1);
 
   const call = /** @type {{ url: string, init: RequestInit }} */ (fake.calls[0]);
@@ -360,9 +357,11 @@ test('a write this extension could not confirm is not sent', async () => {
   const empty = await write.createComment(options({ body: '  ', fetch: fake.send }));
   assert.strictEqual(empty.ok, false);
   assert.strictEqual(empty.reason, 'unverifiable');
+  assert.strictEqual(empty.message, 'Error: cannot save invalid state');
   const blind = await write.createComment(options({ expected: [''], fetch: fake.send }));
   assert.strictEqual(blind.ok, false);
   assert.strictEqual(blind.reason, 'unverifiable');
+  assert.strictEqual(blind.message, 'Error: cannot save invalid state');
   assert.strictEqual(fake.calls.length, 0);
 });
 
@@ -502,11 +501,7 @@ test('an edit form posting to another comment is not written to', async () => {
   assert.strictEqual(outcome.ok, false);
   assert.strictEqual(outcome.reason, 'mismatch');
   assert.strictEqual(fake.calls.length, 0, 'a request went out');
-  assert.strictEqual(
-    outcome.message,
-    'Error: the edit form on this page posts somewhere other than' +
-      ` git-utensils/Spoon-Knife GHSA-jmvx-2wfw-xfgj comment ${EDIT_ID}.`
-  );
+  assert.strictEqual(outcome.message, 'Error: unexpected edit form destination');
 });
 
 test('a page carrying no edit form for that comment is not edited', async () => {
@@ -535,11 +530,7 @@ test('an edit form carrying no concurrency token is not sent', async () => {
   assert.strictEqual(outcome.ok, false);
   assert.strictEqual(outcome.reason, 'no-token');
   assert.strictEqual(fake.calls.length, 0, 'a request went out');
-  assert.strictEqual(
-    outcome.message,
-    `Error: the edit form for comment ${EDIT_ID} carries no` +
-      ' repository_advisory_comment[bodyVersion].'
-  );
+  assert.strictEqual(outcome.message, 'Error: unexpected edit form fields');
   const whole = editPage(action, EDIT_TOKENS);
   const second = await write.editComment(editOptions({ doc: whole, fetch: fake.send }));
   assert.strictEqual(second.ok, true);
@@ -707,7 +698,7 @@ test('a page that is another advisory stops the write before the body', async ()
     },
   });
   assert.strictEqual(outcome.reason, 'mismatch');
-  assert.strictEqual(outcome.message, write.mismatchMessage(REF));
+  assert.strictEqual(outcome.message, 'Error: unexpected response');
   assert.strictEqual(fake.calls.filter((call) => call.init.method === 'POST').length, 0);
 });
 

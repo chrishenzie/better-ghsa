@@ -1108,6 +1108,39 @@ test('the closure controls are held still while a save is out', async () => {
   edit.results.delete(edit.keyOf(/** @type {NonNullable<typeof read>} */ (read)));
 });
 
+test('a press that changes no reason writes nothing and draws no note', async () => {
+  // The done view's Save is offered on every readable row, so a press with the
+  // select where it started reaches the refusal the panel's disabled button
+  // stands in for. It says nothing, and the row shows nothing.
+  const page_html = fixture('triage-thread.html');
+  const read = parseDetail.parseDetail(document(page_html));
+  assert.ok(read !== null, 'the fixture reads as an advisory');
+  const held = await cachedCorpus([{ ghsaId: TRIAGE_ID, state: 'closed', record: read }]);
+  const doc = await page(held);
+  const stored = view.rowsOf(held).find((row) => row.ghsaId === TRIAGE_ID)?.closureReason ?? null;
+
+  /** @type {string[]} */
+  const calls = [];
+  const outcome = await view.setReason(doc, TRIAGE_ID, stored, {
+    fetch: async (url, init) => {
+      calls.push(init.method ?? 'GET');
+      return { status: 200, text: async () => page_html };
+    },
+    parseDocument: (html) => document(html),
+  });
+
+  assert.ok(outcome !== null && outcome.ok === false, 'a save with no change was taken');
+  assert.strictEqual(outcome.reason, 'unchanged');
+  assert.strictEqual(outcome.message, '');
+  assert.strictEqual(calls.length, 0, 'a save with no change reached GitHub');
+  assert.strictEqual(
+    doneRow(doc, TRIAGE_ID).querySelector('.bghsa-done-note'),
+    null,
+    'the row drew a note with nothing in it'
+  );
+  edit.results.delete(edit.keyOf(read));
+});
+
 test('an advisory nothing has read takes no reason and says why', async () => {
   const doc = await page(await cachedCorpus([{ ghsaId: ghsa('iiii'), state: 'closed' }]));
   const row = doneRow(doc, ghsa('iiii'));

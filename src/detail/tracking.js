@@ -74,15 +74,15 @@ if (typeof require === 'function') {
 (() => {
   /**
    * The confirmation tracks, in the order the panel shows them. `name` is what
-   * the panel calls the track beside its chip, and `short` names the track
-   * inside a sentence the editor writes.
+   * the panel calls the track beside its chip, and what the editor's list of
+   * unsaved changes calls it.
    *
-   * @type {readonly { key: ConfirmationTrack, name: string, short: string }[]}
+   * @type {readonly { key: ConfirmationTrack, name: string }[]}
    */
   const CONFIRMATION_TRACKS = [
-    { key: 'title', name: 'Title', short: 'advisory title' },
-    { key: 'description', name: 'Description', short: 'advisory description' },
-    { key: 'scoring', name: 'Severity', short: 'severity and CVSS vector' },
+    { key: 'title', name: 'Title' },
+    { key: 'description', name: 'Description' },
+    { key: 'scoring', name: 'Severity' },
   ];
 
   /**

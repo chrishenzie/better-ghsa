@@ -27,7 +27,8 @@ if (typeof require === 'function') require('./schema.js');
  * @property {string} commentId
  * @property {string} elementId
  * @property {string | null} author
- * @property {string} message
+ * @property {string} message What the chip carries as a tooltip, and empty
+ *   where the chip's own words are the whole of it.
  */
 
 /**
@@ -51,15 +52,6 @@ if (typeof require === 'function') require('./schema.js');
  */
 
 (() => {
-  /**
-   * @param {SnapshotSource} source
-   * @returns {string}
-   */
-  function label(source) {
-    const comment = `comment ${source.id}`;
-    return source.author === null ? comment : `${source.author}'s ${comment}`;
-  }
-
   /**
    * The login a tie is resolved on. Trust is decided on the comment's author, so
    * that login ranks the snapshot, and the login the payload names stands in when
@@ -115,7 +107,8 @@ if (typeof require === 'function') require('./schema.js');
    * @param {MergeWarning[]} warnings
    * @param {WarningKind} kind
    * @param {SnapshotSource} source
-   * @param {string} message
+   * @param {string} message What the chip's tooltip reads, or empty for no
+   *   tooltip at all.
    * @returns {void}
    */
   function warn(warnings, kind, source, message) {
@@ -154,24 +147,16 @@ if (typeof require === 'function') require('./schema.js');
       if (report === null) continue;
 
       if (!report.ordered) {
-        warn(
-          warnings,
-          'not a snapshot',
-          source,
-          `${label(source)} carries no snapshot: ${report.problems.join('; ')}`
-        );
+        warn(warnings, 'not a snapshot', source, report.problems.join('; '));
         continue;
       }
 
       observedSeq = Math.max(observedSeq, report.seq ?? 0);
 
       if (!source.trusted) {
-        warn(
-          warnings,
-          'untrusted',
-          source,
-          `${label(source)} carries a snapshot from an author who is not an organization member`
-        );
+        // The chip is the whole of it: what it says the reader can act on, and
+        // nothing about the comment it sits on is a fact a tooltip would add.
+        warn(warnings, 'untrusted', source, '');
         continue;
       }
 
@@ -195,12 +180,7 @@ if (typeof require === 'function') require('./schema.js');
 
       if (!report.valid) {
         confirmationRequired = true;
-        warn(
-          warnings,
-          'invalid payload',
-          source,
-          `the snapshot in ${label(source)} is excluded from state: ${report.problems.join('; ')}`
-        );
+        warn(warnings, 'invalid payload', source, report.problems.join('; '));
         continue;
       }
 

@@ -114,9 +114,6 @@ if (typeof require === 'function') {
    */
   const PRESERVED_MESSAGE = 'Preserved';
 
-  /** What refuses a press on a page that did not say which advisory it is. */
-  const UNREADABLE_REF_MESSAGE =
-    'Error: this extension could not read which repository this advisory is in.';
 
   /**
    * How far a press has got on each advisory, by `owner/repo/GHSA-id`. GitHub
@@ -247,12 +244,7 @@ if (typeof require === 'function') {
     }
     const ref = advisory.ref;
     if (ref === null) {
-      return availability(
-        true,
-        false,
-        'unreadable',
-        UNREADABLE_REF_MESSAGE
-      );
+      return availability(true, false, 'unreadable', globalThis.bghsa.write.PARSE_MESSAGE);
     }
     const nameWithOwner = `${ref.owner}/${ref.repo}`;
     if (!globalThis.bghsa.allowlist.isAllowed(nameWithOwner)) {
@@ -264,16 +256,10 @@ if (typeof require === 'function') {
       );
     }
     if (advisory.descriptionOriginal === null) {
-      return availability(
-        true,
-        false,
-        'provenance',
-        'Error: this extension could not tell whether the description is' +
-          " the reporter's original text."
-      );
+      return availability(true, false, 'provenance', globalThis.bghsa.write.FAILED_MESSAGE);
     }
     if (advisory.title === null || advisory.description === null) {
-      return availability(true, false, 'unreadable', 'Error: failed to parse advisory');
+      return availability(true, false, 'unreadable', globalThis.bghsa.write.PARSE_MESSAGE);
     }
     return availability(true, true, null, 'Preserve the title and description in a comment.');
   }
@@ -364,7 +350,7 @@ if (typeof require === 'function') {
 
     const { outcome } = await globalThis.bghsa.write.runWrite({
       ref: advisory.ref,
-      unreadable: { reason: 'unreadable', message: UNREADABLE_REF_MESSAGE },
+      unreadable: { reason: 'unreadable', message: globalThis.bghsa.write.PARSE_MESSAGE },
       fetch: send,
       parseDocument: toDocument,
       // A press that reached GitHub is never released: GitHub does not put the
@@ -413,7 +399,6 @@ if (typeof require === 'function') {
     PENDING_MESSAGE,
     ATTEMPTED_MESSAGE,
     PRESERVED_MESSAGE,
-    UNREADABLE_REF_MESSAGE,
     newMarker,
     balanceDetails,
     preservationComment,

@@ -18,7 +18,9 @@ if (typeof require === 'function') {
   /**
    * What the chip says about a snapshot the merge would not take. Each phrase
    * names the condition and stands alone, and no chip is placed where the merge
-   * had nothing to say.
+   * had nothing to say. A marked comment holding no snapshot and one holding a
+   * snapshot that failed validation read the same: both are a state comment
+   * this extension cannot use.
    *
    * The untrusted phrase leads with what the extension did, because a snapshot
    * an outsider wrote is the one case here that a reader has to act on. It says
@@ -30,7 +32,7 @@ if (typeof require === 'function') {
   const CHIP_TEXT = {
     untrusted: 'Ignored: non-member state',
     'invalid payload': 'Unable to parse tracking state',
-    'not a snapshot': 'No tracking state in this comment',
+    'not a snapshot': 'Unable to parse tracking state',
     'unsupported schema': 'Tracking state from a newer extension',
   };
 
@@ -71,7 +73,9 @@ if (typeof require === 'function') {
     const node = doc.createElement('span');
     node.className = `Label Label--secondary bghsa-tone-${CHIP_TONE[alert.kind]}`;
     node.setAttribute(parse.EXTENSION_CHIP_ATTRIBUTE, alert.kind);
-    node.setAttribute('title', alert.message);
+    // A warning with nothing to add carries no tooltip, so hovering the chip
+    // does not repeat the words already on it.
+    if (alert.message !== '') node.setAttribute('title', alert.message);
     node.textContent = CHIP_TEXT[alert.kind];
     return node;
   }

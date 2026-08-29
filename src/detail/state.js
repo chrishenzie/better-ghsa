@@ -455,17 +455,13 @@ if (typeof require === 'function') {
         // an account this extension could not read is one it will not write as.
         const viewer = fresh.viewer;
         if (viewer === null) {
-          return stopped(
-            'unreadable',
-            'Error: this extension could not read which account it is signed in' +
-              ' as, and a write under the wrong account is not one it can take back.'
-          );
+          return stopped('unreadable', 'Error: cannot identify logged-in user');
         }
 
         const merged = globalThis.bghsa.merge.mergeSnapshots(fresh.comments);
         read.merged = merged;
         if (merged.observedSeq !== loadedSeq) {
-          return stopped('stale', 'Error: concurrent edits');
+          return stopped('stale', globalThis.bghsa.write.STALE_MESSAGE);
         }
         // Before the holder gate, because a maintainer holding two state
         // comments is told to delete one and can act on that. Reading the
@@ -474,24 +470,16 @@ if (typeof require === 'function') {
         // advisory.
         const own = ownStateComments(fresh.comments, viewer);
         if (own.length > 1) {
-          return stopped(
-            'ambiguous',
-            `Error: ${viewer} has ${own.length} state comments on this advisory,` +
-              ' and this extension writes one. Delete the ones that do not belong.'
-          );
+          return stopped('ambiguous', `Error: multiple tracking comments from ${viewer}`);
         }
 
         const expected = options.loadedHolder;
         if (expected !== undefined && !sameHolder(expected, holderOf(merged))) {
-          const found = holderOf(merged).by;
-          return stopped(
-            'superseded',
-            `Error: this advisory's state at sequence ${merged.observedSeq} comes from` +
-              ` ${found ?? 'another maintainer'} now, and not from the snapshot the panel was` +
-              ' loaded with. Reload and apply the change again.'
-          );
+          return stopped('superseded', globalThis.bghsa.write.STALE_MESSAGE);
         }
-        if (merged.readOnly) return stopped('read-only', 'Error: update the extension');
+        if (merged.readOnly) {
+          return stopped('read-only', globalThis.bghsa.write.OUTDATED_MESSAGE);
+        }
         if (merged.confirmationRequired && options.confirmed !== true) {
           return stopped('confirmation', 'Error: unparsed tracking state');
         }
@@ -522,11 +510,11 @@ if (typeof require === 'function') {
         const json = snapshotJson(built);
         const reading = globalThis.bghsa.schema.readSnapshot(json);
         if (!reading.valid) {
-          return stopped(
-            'invalid',
-            'Error: the snapshot this extension built is one it would not read' +
-              ` back: ${reading.problems.join('; ')}.`
+          console.warn(
+            '[better-ghsa] the snapshot this extension built is one it would not read back',
+            reading.problems
           );
+          return stopped('invalid', globalThis.bghsa.write.INVALID_STATE_MESSAGE);
         }
 
         // The comment this maintainer already wrote is the one this replaces.

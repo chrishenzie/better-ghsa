@@ -116,13 +116,11 @@ test('a snapshot from a non-member marks the comment it came from', () => {
   assert.ok(group?.id === 'advisory-comment-282848', 'the chip is on the wrong comment');
 });
 
-test('the chip carries what the merge said about that comment', () => {
+test('the chip on a non-member comment carries no tooltip', () => {
   const chip = triageDoc.querySelector(CHIP);
-  assert.strictEqual(
-    chip?.getAttribute('title'),
-    "prakleumas's comment 282848 carries a snapshot from an author who is not an" +
-      ' organization member'
-  );
+  assert.ok(chip !== null, 'the non-member comment lost its chip');
+  assert.strictEqual(chip.getAttribute('title'), null);
+  assert.strictEqual(chip.textContent, 'Ignored: non-member state');
 });
 
 test('a re-read does not take the chip for a role badge', () => {
@@ -164,9 +162,12 @@ test('a snapshot excluded for failing validation marks its comment', () => {
 
 test('a comment carrying no snapshot is named as such', () => {
   const doc = commentPage('900', true);
-  const placed = comments.markComments(doc, merged([alert('900', 'not a snapshot')]));
+  const warning = alert('900', 'not a snapshot');
+  const placed = comments.markComments(doc, merged([warning]));
   assert.strictEqual(placed.length, 1);
-  assert.strictEqual(text(placed[0] ?? null), 'No tracking state in this comment');
+  assert.strictEqual(text(placed[0] ?? null), 'Unable to parse tracking state');
+  // What the merge had to say is the whole tooltip, with nothing before it.
+  assert.strictEqual(placed[0]?.getAttribute('title'), warning.message);
 });
 
 test('a snapshot in a schema this reader does not read is named as such', () => {

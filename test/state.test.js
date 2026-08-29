@@ -366,11 +366,7 @@ test('two state comments of one maintainer are named before the holder', async (
   assert.ok(outcome.ok === false, 'a write went out on an advisory with two own comments');
   assert.ok(outcome.reason === 'ambiguous', `the write was refused as ${outcome.reason}`);
   assert.strictEqual(calls.length, 1, 'a comment request went out');
-  assert.strictEqual(
-    outcome.message,
-    'Error: samuelkarp has 2 state comments on this advisory, and this' +
-      ' extension writes one. Delete the ones that do not belong.'
-  );
+  assert.strictEqual(outcome.message, 'Error: multiple tracking comments from samuelkarp');
 });
 
 test('a page that moved past the sequence the panel loaded refuses the write', async () => {
@@ -397,12 +393,7 @@ test('a snapshot other than the one the panel loaded refuses the write', async (
   assert.strictEqual(calls.length, 1, 'a comment request went out');
   assert.strictEqual(outcome.snapshot, null);
   assert.strictEqual(outcome.merged?.observedSeq, OBSERVED);
-  assert.strictEqual(
-    outcome.message,
-    `Error: this advisory's state at sequence ${OBSERVED} comes from samuelkarp` +
-      ' now, and not from the snapshot the panel was loaded with. Reload and apply the change' +
-      ' again.'
-  );
+  assert.strictEqual(outcome.message, 'Error: concurrent edits');
 });
 
 test('a comment other than the one that held state refuses the write', async () => {
@@ -441,6 +432,7 @@ test('a page naming no signed-in account is not written to', async () => {
   const { outcome, calls } = await run(page, {});
   assert.strictEqual(outcome.ok, false);
   assert.strictEqual(outcome.reason, 'unreadable');
+  assert.strictEqual(outcome.message, 'Error: cannot identify logged-in user');
   assert.strictEqual(calls.length, 1, 'a comment request went out');
 });
 
@@ -474,11 +466,7 @@ test('a snapshot this extension would not read back is not written', async () =>
   assert.strictEqual(outcome.reason, 'invalid');
   assert.strictEqual(calls.length, 1, 'a comment request went out');
   assert.strictEqual(outcome.snapshot, null);
-  assert.strictEqual(
-    outcome.message,
-    'Error: the snapshot this extension built is one it would not read back:' +
-      ' owners is not an array of strings.'
-  );
+  assert.strictEqual(outcome.message, 'Error: cannot save invalid state');
 });
 
 test('a schema major this extension does not read refuses the write', async () => {

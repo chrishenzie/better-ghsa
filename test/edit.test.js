@@ -326,7 +326,7 @@ test('a control change is held in the panel and nothing goes to GitHub', async (
   choose(control(editor, 'select.bghsa-triage'), 'evaluating');
 
   assert.strictEqual(talk.calls.length, 0, 'touching a control reached GitHub');
-  assert.strictEqual(note(editor), 'Unsaved changes: triage.');
+  assert.strictEqual(note(editor), 'Unsaved changes: Triage.');
   assert.strictEqual(control(editor, 'button.bghsa-save').hasAttribute('disabled'), false);
   assert.strictEqual(edit.editsFor(edit.keyOf(context.advisory)).triage, 'evaluating');
 });
@@ -471,7 +471,7 @@ test('a save GitHub refused leaves the change in the panel and says why', async 
   assert.strictEqual(edit.editsFor(edit.keyOf(context.advisory)).triage, 'evaluating');
 
   const again = await editorFor(page, { fetch: talk.fetch, parseDocument: talk.parseDocument });
-  assert.strictEqual(note(again.editor), 'Unsaved changes: triage.');
+  assert.strictEqual(note(again.editor), 'Unsaved changes: Triage.');
   assert.strictEqual(text(control(again.editor, '.bghsa-save-result')), outcome.message);
 });
 
@@ -531,10 +531,7 @@ test('a save that stops before a request reports it and asks for a pass', async 
   // The press disabled the controls and wrote "Writing to GitHub" on the
   // panel, so a save that stops has to put something else there.
   assert.strictEqual(passes, 1, 'the panel was left as the press put it');
-  assert.strictEqual(
-    edit.results.get(edit.keyOf(context.advisory))?.message,
-    edit.UNCHANGED_MESSAGE
-  );
+  assert.strictEqual(edit.results.get(edit.keyOf(context.advisory))?.message, '');
 });
 
 test('a page naming no advisory says so and asks for a pass', async () => {
@@ -553,9 +550,9 @@ test('a page naming no advisory says so and asks for a pass', async () => {
   const outcome = await edit.save(anonymous);
 
   assert.strictEqual(outcome.reason, 'unreadable');
-  assert.strictEqual(outcome.message, edit.UNREADABLE_MESSAGE);
+  assert.strictEqual(outcome.message, 'Error: failed to parse advisory');
   assert.strictEqual(passes, 1, 'the panel was left as the press put it');
-  assert.strictEqual(edit.results.get(key)?.message, edit.UNREADABLE_MESSAGE);
+  assert.strictEqual(edit.results.get(key)?.message, 'Error: failed to parse advisory');
   forget();
 });
 
@@ -589,6 +586,8 @@ test('a value confirmed now reads as confirmed', async () => {
   });
   assert.strictEqual(context.tracking.description.status, 'unconfirmed');
   tick(control(editor, 'input.bghsa-confirm-description'), true);
+  // A staged confirmation is named by the label its own row carries.
+  assert.strictEqual(note(editor), 'Unsaved changes: Description.');
   const outcome = await edit.save(context);
 
   assert.ok(outcome.ok === true, `the save failed: ${outcome.message}`);
@@ -710,6 +709,10 @@ test('an excluded snapshot takes one confirmation, and the panel asks for it', a
     text(control(again.editor, 'input.bghsa-supersede').parentElement ?? again.editor),
     'Supersede unparsed state'
   );
+  // The row label, which is not the word the confirmation rows are under: this
+  // one is a maintainer overriding a snapshot, not approving a value.
+  const row = control(again.editor, 'input.bghsa-supersede').closest('.bghsa-field');
+  assert.strictEqual(text(row?.querySelector('.bghsa-field-label') ?? again.editor), 'Override');
   tick(control(again.editor, 'input.bghsa-supersede'), true);
   const outcome = await edit.save(again.context);
   assert.ok(outcome.ok === true, `the confirmed save failed: ${outcome.message}`);
@@ -813,7 +816,7 @@ test('an advisory with no member seen offers the collaborators, not the reporter
   ]);
 });
 
-test('a typed login matching no candidate is taken and flagged', async () => {
+test('a typed login matching no candidate is taken as it is', async () => {
   forget();
   const { page, talk } = pair('triage-thread.html');
   const { editor, context } = await editorFor(page, {
@@ -829,13 +832,10 @@ test('a typed login matching no candidate is taken and flagged', async () => {
     owners.map((owner) => text(control(owner, '.Label'))),
     ['samuelkarp', 'yaroslavk']
   );
-  assert.ok(
-    owners[0]?.querySelector('.bghsa-owner-unknown') === undefined ||
-      owners[0]?.querySelector('.bghsa-owner-unknown') === null,
-    'a collaborator was flagged as unknown'
-  );
-  assert.strictEqual(text(control(owners[1] ?? editor, '.bghsa-owner-unknown')), 'not a known member');
-  assert.strictEqual(note(editor), 'Unsaved changes: owners.');
+  // No chip marks an owner the extension does not recognize: it blocked
+  // nothing, and such an owner could always be saved.
+  assert.strictEqual(editor.querySelector('.bghsa-owner-unknown'), null);
+  assert.strictEqual(note(editor), 'Unsaved changes: Owners.');
 
   await edit.save(context);
   assert.deepStrictEqual(sentSnapshot(talk.calls)['owners'], ['samuelkarp', 'yaroslavk']);
@@ -953,7 +953,7 @@ test('a typed branch is taken and is written on the save', async () => {
   press(editor, 'button.bghsa-backport-add');
 
   assert.strictEqual(backports(editor).join(' '), 'release/1.0 release/2.10');
-  assert.strictEqual(note(editor), 'Unsaved changes: backport targets.');
+  assert.strictEqual(note(editor), 'Unsaved changes: Backport targets.');
   assert.strictEqual(talk.calls.length, 0, 'the staged branch reached GitHub before the save');
 
   await edit.save(context);
@@ -982,7 +982,7 @@ test('taking the last branch off clears the track', async () => {
   });
   press(editor, 'button.bghsa-backport-remove');
   assert.strictEqual(backports(editor).length === 0, true, 'the branch is still held');
-  assert.strictEqual(note(editor), 'Unsaved changes: backport targets.');
+  assert.strictEqual(note(editor), 'Unsaved changes: Backport targets.');
 
   await edit.save(context);
   assert.strictEqual(
@@ -1032,7 +1032,7 @@ test('a repository whose branches went unread still takes a typed branch', async
   type(control(editor, 'input.bghsa-backport-input'), 'release/2.1');
   press(editor, 'button.bghsa-backport-add');
   assert.strictEqual(backports(editor).join(' '), 'release/2.1');
-  assert.strictEqual(note(editor), 'Unsaved changes: backport targets.');
+  assert.strictEqual(note(editor), 'Unsaved changes: Backport targets.');
 });
 
 test('an owner taken off the list is written without them', async () => {
@@ -1083,7 +1083,8 @@ test('text is held as it is typed, before the field is left', async () => {
 
   assert.strictEqual(edit.editsFor(key).embargoLift, '2026-12-01');
   assert.strictEqual(edit.editsFor(key).closureDuplicateOf, 'GHSA-1111-2222-3333');
-  assert.strictEqual(note(editor).includes('embargo'), true, 'the note said nothing of the date');
+  // The list names each track by the label the panel's own row carries.
+  assert.strictEqual(note(editor), 'Unsaved changes: Embargo, Closed as.');
   forget();
 });
 
@@ -1192,7 +1193,7 @@ test('a save turning the embargo off leaves nothing staged', async () => {
     undefined,
     'the save left a lift date the write did not carry'
   );
-  assert.strictEqual(edit.results.get(key)?.message, edit.SAVED_MESSAGE);
+  assert.strictEqual(edit.results.get(key)?.message, 'Saved.');
   forget();
 });
 
@@ -1294,7 +1295,7 @@ test('a control moved away and back beside a real edit leaves nothing staged', a
   tick(control(editor, 'input.bghsa-embargo'), false);
   assert.strictEqual(
     edit.changedTracks(context.tracking, edit.editsFor(key)).join(' '),
-    'embargo',
+    'Embargo',
     'the panel counted a control put back where it started as a change to write'
   );
   const outcome = await edit.save(context);
@@ -1304,7 +1305,7 @@ test('a control moved away and back beside a real edit leaves nothing staged', a
     false,
     'the save left staged what the write did not carry'
   );
-  assert.strictEqual(edit.results.get(key)?.message, edit.SAVED_MESSAGE);
+  assert.strictEqual(edit.results.get(key)?.message, 'Saved.');
   forget();
 });
 
@@ -1359,11 +1360,7 @@ test('clearing a record holding an unknown field is refused', async () => {
   assert.strictEqual(outcome.ok, false);
   assert.strictEqual(outcome.reason, 'unclearable');
   assert.strictEqual(talk.posts().length, 0, 'a write that would delete a field went out');
-  assert.strictEqual(
-    outcome.message,
-    'Error: clearing the embargo would delete embargo.reason, which this' +
-      ' extension does not recognize and carries forward untouched. Update the extension.'
-  );
+  assert.strictEqual(outcome.message, 'Error: update the extension');
   assert.strictEqual(edit.editsFor(key).embargo, false, 'the refused change was dropped');
   forget();
 });
@@ -1564,7 +1561,7 @@ test('a pass during a save leaves the maintainer nothing to stage', async () => 
   land();
   await until(() => edit.results.has(key));
   assert.strictEqual(talk.posts().length, 1, 'one press wrote more than one comment');
-  assert.strictEqual(edit.results.get(key)?.message, edit.SAVED_MESSAGE);
+  assert.strictEqual(edit.results.get(key)?.message, 'Saved.');
   forget();
 });
 
@@ -1648,7 +1645,7 @@ test('a value staged while a write is out is kept and reported', async () => {
     'a value staged while the write was out was dropped'
   );
   assert.strictEqual(edit.editsFor(key).triage, undefined, 'the written value stayed staged');
-  assert.strictEqual(edit.results.get(key)?.message, edit.SAVED_MESSAGE);
+  assert.strictEqual(edit.results.get(key)?.message, 'Saved.');
   forget();
 });
 
@@ -1680,7 +1677,7 @@ test('a save drops a confirmation the page stopped backing', async () => {
     undefined,
     'the tick the page cannot back outlived the pass that cleared it'
   );
-  assert.strictEqual(edit.results.get(key)?.message, edit.SAVED_MESSAGE);
+  assert.strictEqual(edit.results.get(key)?.message, 'Saved.');
   forget();
 });
 
@@ -1806,9 +1803,9 @@ test('an unsaved change survives a render pass', async () => {
   );
   assert.deepStrictEqual(
     Array.from(rebuilt.querySelectorAll('.bghsa-owner .Label')).map((label) => text(label)),
-    ['samuelkarp', 'yaroslavk', 'not a known member']
+    ['samuelkarp', 'yaroslavk']
   );
-  assert.strictEqual(note(rebuilt), 'Unsaved changes: triage, owners.');
+  assert.strictEqual(note(rebuilt), 'Unsaved changes: Triage, Owners.');
   forget();
 });
 
@@ -1897,7 +1894,7 @@ test('a link GitHub would follow without a load is asked about first', async () 
     choose(control(editor, 'select.bghsa-triage'), 'evaluating');
     const stopped = cancelable(page, 'click');
     link.dispatchEvent(stopped);
-    assert.deepStrictEqual(asked, [edit.LEAVE_MESSAGE]);
+    assert.deepStrictEqual(asked, ['Better GHSA: Leave without saving your changes?']);
     assert.strictEqual(stopped.defaultPrevented, true, 'the navigation went ahead');
 
     answer = true;
@@ -2024,13 +2021,21 @@ test('the page holding unsaved changes is the page that asks about them', async 
   });
   try {
     const next = await leaveAdvisory(page);
-    assert.deepStrictEqual(asked, [edit.LEAVE_MESSAGE], 'leaving the advisory asked nothing');
+    assert.deepStrictEqual(
+      asked,
+      ['Better GHSA: Leave without saving your changes?'],
+      'leaving the advisory asked nothing'
+    );
     assert.strictEqual(edit.anyPending(), true, 'changes the maintainer kept were dropped');
 
     // The advisory list is not the page the changes were left on, and opening
     // another advisory from it is not the navigation that left them.
     next.dispatchEvent(cancelable(page, 'click'));
-    assert.deepStrictEqual(asked, [edit.LEAVE_MESSAGE], 'the next navigation asked again');
+    assert.deepStrictEqual(
+      asked,
+      ['Better GHSA: Leave without saving your changes?'],
+      'the next navigation asked again'
+    );
 
     // The same press on the same link asks while the advisory holding the
     // changes is the one showing, so it is the departure that quieted it and

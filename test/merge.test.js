@@ -141,10 +141,9 @@ test('a fence that carries no ordering claim is warned on and writing continues'
   assert.strictEqual(merged.warnings.length, 1);
   assert.strictEqual(merged.warnings[0]?.kind, 'not a snapshot');
   assert.strictEqual(merged.warnings[0]?.commentId, '11');
-  assert.ok(
-    merged.warnings[0]?.message.includes('does not parse as JSON'),
-    `warning read: ${merged.warnings[0]?.message}`
-  );
+  // The tooltip is the problem list alone: the comment it hangs on is the one
+  // the reader is already looking at.
+  assert.strictEqual(merged.warnings[0]?.message, 'the fenced block does not parse as JSON');
   assert.strictEqual(merged.confirmationRequired, false);
   assert.strictEqual(merged.source?.id, '12');
   assert.strictEqual(merged.observedSeq, 2);
@@ -159,10 +158,7 @@ test('a readable seq with an invalid payload is excluded and takes a confirmatio
   assert.strictEqual(merged.warnings.length, 1);
   assert.strictEqual(merged.warnings[0]?.kind, 'invalid payload');
   assert.strictEqual(merged.warnings[0]?.commentId, '11');
-  assert.ok(
-    merged.warnings[0]?.message.includes('owners is not an array of strings'),
-    `warning read: ${merged.warnings[0]?.message}`
-  );
+  assert.strictEqual(merged.warnings[0]?.message, 'owners is not an array of strings');
   assert.strictEqual(merged.confirmationRequired, true);
   assert.strictEqual(merged.source?.id, '12');
   assert.strictEqual(merged.observedSeq, 9);
@@ -220,6 +216,8 @@ test('an untrusted snapshot is ignored, warned on, and still orders writes', () 
   assert.strictEqual(merged.warnings.length, 1);
   assert.strictEqual(merged.warnings[0]?.kind, 'untrusted');
   assert.strictEqual(merged.warnings[0]?.author, 'prakleumas');
+  // The chip says the whole of it, so there is no tooltip.
+  assert.strictEqual(merged.warnings[0]?.message, '');
   assert.strictEqual(merged.nextSeq, 8);
 });
 

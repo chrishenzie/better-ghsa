@@ -84,8 +84,6 @@ if (typeof require === 'function') {
  * @property {(value: string) => string} fold Two values folding alike are one
  *   value. A login names one account whatever its case; a git branch name is
  *   case-sensitive and names one branch only as it is spelled.
- * @property {string | null} unknown What a value outside the candidates is
- *   marked with, and null where a value outside them is unremarkable.
  * @property {Map<string, string>} drafts Where the half-typed value lives
  *   between passes.
  * @property {() => string[]} held What the control holds now.
@@ -100,7 +98,7 @@ if (typeof require === 'function') {
   const READ_ONLY_MESSAGE = 'Update the extension to edit';
 
   /** What the panel says once a write has landed. */
-  const SAVED_MESSAGE = 'Saved. The advisory carries these values now.';
+  const SAVED_MESSAGE = 'Saved.';
 
   /**
    * What the panel says while a write from it is on its way to GitHub. The done
@@ -111,16 +109,8 @@ if (typeof require === 'function') {
   /** What marks a control the flight took away, so the flight can give it back. */
   const FLIGHT_MARK = 'data-bghsa-flight';
 
-  /** What the panel says when Save is pressed with every control as it stands. */
-  const UNCHANGED_MESSAGE = 'Error: no control on this panel holds a change.';
-
-  /** What the panel says where the page did not say which advisory it is. */
-  const UNREADABLE_MESSAGE =
-    'Error: this extension could not read which advisory this page is.';
-
   /** What a maintainer is asked before leaving changes that were never written. */
-  const LEAVE_MESSAGE =
-    'This panel holds tracking changes that were never saved. Leave them behind?';
+  const LEAVE_MESSAGE = 'Better GHSA: Leave without saving your changes?';
 
   /**
    * What the checkbox reads that supersedes a snapshot the merge would not
@@ -415,8 +405,9 @@ if (typeof require === 'function') {
   }
 
   /**
-   * The tracks whose controls hold something the advisory does not, named as the
-   * panel names them. An empty list is a panel with nothing to write.
+   * The tracks whose controls hold something the advisory does not, named by the
+   * label the panel puts on each row. An empty list is a panel with nothing to
+   * write.
    *
    * {@link differences} is the one gate a save, the Save button and the note all
    * read, so the panel never counts a change the write would leave out.
@@ -429,15 +420,15 @@ if (typeof require === 'function') {
     const diff = differences(tracking, pending);
     /** @type {string[]} */
     const names = [];
-    if (diff.triage !== undefined) names.push('triage');
-    if (diff.owners !== undefined) names.push('owners');
-    if (diff.backports !== undefined) names.push('backport targets');
-    if (diff.embargo !== undefined || diff.embargoLift !== undefined) names.push('embargo');
+    if (diff.triage !== undefined) names.push('Triage');
+    if (diff.owners !== undefined) names.push('Owners');
+    if (diff.backports !== undefined) names.push('Backport targets');
+    if (diff.embargo !== undefined || diff.embargoLift !== undefined) names.push('Embargo');
     if (diff.closureReason !== undefined || diff.closureDuplicateOf !== undefined) {
-      names.push('closure reason');
+      names.push('Closed as');
     }
     for (const track of globalThis.bghsa.tracking.CONFIRMATION_TRACKS) {
-      if (diff.confirm?.[track.key] !== undefined) names.push(track.short);
+      if (diff.confirm?.[track.key] !== undefined) names.push(track.name);
     }
     return names;
   }
@@ -812,22 +803,6 @@ if (typeof require === 'function') {
   }
 
   /**
-   * @param {{ key: string, name: string, fields: string[] }[]} blocked
-   * @returns {string} what the panel says where a save would delete a field it
-   *   does not know.
-   */
-  function unclearableMessage(blocked) {
-    const names = blocked.map((one) => one.name).join(' and ');
-    const fields = blocked
-      .flatMap((one) => one.fields.map((field) => `${one.key}.${field}`))
-      .join(', ');
-    return (
-      `Error: clearing the ${names} would delete ${fields}, which this extension` +
-      ' does not recognize and carries forward untouched. Update the extension.'
-    );
-  }
-
-  /**
    * @param {string} key
    * @param {MergedState} merged
    * @returns {void} holds the state an advisory stands in after a write this
@@ -1000,11 +975,15 @@ if (typeof require === 'function') {
       return stopped(context, key, 'in-flight', globalThis.bghsa.state.IN_FLIGHT_MESSAGE);
     }
     const pending = editsFor(key);
+    // The Save button is disabled in exactly this state, so the refusal says
+    // nothing: there is no press that reaches it and nothing to report.
     if (changedTracks(context.tracking, pending).length === 0) {
-      return stopped(context, key, 'unchanged', UNCHANGED_MESSAGE);
+      return stopped(context, key, 'unchanged', '');
     }
     const ref = context.advisory.ref;
-    if (ref === null) return stopped(context, key, 'unreadable', UNREADABLE_MESSAGE);
+    if (ref === null) {
+      return stopped(context, key, 'unreadable', globalThis.bghsa.write.PARSE_MESSAGE);
+    }
 
     results.delete(key);
     // What the request carries, held from before it goes out. The store moves on
@@ -1027,9 +1006,12 @@ if (typeof require === 'function') {
         // loaded with is older and can hold other fields.
         guard: (state, changes) => {
           const blocked = unclearable(state, changes);
-          return blocked.length === 0
-            ? null
-            : { reason: 'unclearable', message: unclearableMessage(blocked) };
+          if (blocked.length === 0) return null;
+          console.warn(
+            '[better-ghsa] the save would delete fields this extension does not recognize',
+            blocked
+          );
+          return { reason: 'unclearable', message: globalThis.bghsa.write.OUTDATED_MESSAGE };
         },
         confirmed: pending.supersede === true,
         ...(context.at === undefined ? {} : { at: context.at }),
@@ -1327,25 +1309,11 @@ if (typeof require === 'function') {
     const chips = element(doc, 'div', `d-flex flex-wrap flex-items-center bghsa-${list.name}-list`);
     body.append(chips);
 
-    /** @param {string} value @returns {boolean} whether the candidates offer it. */
-    const offered = (value) =>
-      list.candidates.some((candidate) => list.fold(candidate) === list.fold(value));
-
     const draw = () => {
       chips.textContent = '';
       for (const value of list.held()) {
         const chip = element(doc, 'span', `d-inline-flex flex-items-center mr-2 bghsa-${list.name}`);
         chip.append(element(doc, 'span', 'Label Label--secondary', value));
-        if (list.unknown !== null && !offered(value)) {
-          chip.append(
-            element(
-              doc,
-              'span',
-              `Label Label--secondary ml-1 bghsa-tone-attention bghsa-${list.name}-unknown`,
-              list.unknown
-            )
-          );
-        }
         const remove = element(doc, 'button', `btn-link ml-1 bghsa-${list.name}-remove`, 'Remove');
         remove.setAttribute('type', 'button');
         remove.setAttribute('aria-label', `Remove ${value} as ${list.noun}`);
@@ -1415,7 +1383,6 @@ if (typeof require === 'function') {
       placeholder: 'login',
       candidates: ownerCandidates(context),
       fold: foldLogin,
-      unknown: 'not a known member',
       drafts,
       held: () => pick(editsFor(key).owners, context.tracking.owners),
       put: (owners) => stage(key, context.tracking, { owners }),
@@ -1437,7 +1404,6 @@ if (typeof require === 'function') {
       placeholder: 'release/2.1',
       candidates: backportCandidates(context),
       fold: (branch) => branch,
-      unknown: null,
       drafts: branchDrafts,
       held: () => pick(editsFor(key).backports, context.tracking.backports),
       put: (backports) => stage(key, context.tracking, { backports }),
@@ -1587,7 +1553,7 @@ if (typeof require === 'function') {
    * @returns {Element}
    */
   function supersedeField(doc, context, key, update) {
-    const { field, body } = fieldRow(doc, 'Confirmation');
+    const { field, body } = fieldRow(doc, 'Override');
     const control = checkboxControl(
       doc,
       'bghsa-supersede',
@@ -1681,7 +1647,9 @@ if (typeof require === 'function') {
       // this panel was not built for is one no pass has shown, so the note
       // carries it: the pass may be the thing that failed.
       const result = results.get(key);
-      if (result !== undefined && result !== shown) said.push(result.message);
+      if (result !== undefined && result !== shown && result.message !== '') {
+        said.push(result.message);
+      }
       // Nothing staged says nothing: the Save button is disabled in exactly
       // that state.
       note.textContent = flight ? WRITING_MESSAGE : said.join(' ');
@@ -1740,8 +1708,6 @@ if (typeof require === 'function') {
     READ_ONLY_MESSAGE,
     SAVED_MESSAGE,
     WRITING_MESSAGE,
-    UNCHANGED_MESSAGE,
-    UNREADABLE_MESSAGE,
     SUPERSEDE_LABEL,
     edits,
     written,
@@ -1772,7 +1738,6 @@ if (typeof require === 'function') {
     NESTED_TRACKS,
     unknownFields,
     unclearable,
-    unclearableMessage,
     remember,
     hold,
     ahead,

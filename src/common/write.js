@@ -471,6 +471,38 @@ if (typeof require === 'function') {
   const NO_FORM_MESSAGE = 'Error: cannot post';
 
   /**
+   * What refuses a write this build cannot make safely: a snapshot naming a
+   * schema version it does not read, and a clear that would take away a field
+   * inside one it does not recognize. Both mean the maintainer is behind the
+   * extension that wrote the advisory's state.
+   */
+  const OUTDATED_MESSAGE = 'Error: update the extension';
+
+  /**
+   * What refuses a write another maintainer's save got in front of, whether the
+   * sequence number moved or a rival claim on the same one won the tie-break.
+   * The surface that pressed Save holds its changes, and neither case is one a
+   * maintainer acts on differently.
+   */
+  const STALE_MESSAGE = 'Error: concurrent edits';
+
+  /**
+   * What refuses a write on a page this extension could not parse. The owner,
+   * the repository and the GHSA identifier come out of a detail page together,
+   * so a page that yields none of them names no advisory to write on, and one
+   * whose title and description did not read holds nothing to write.
+   */
+  const PARSE_MESSAGE = 'Error: failed to parse advisory';
+
+  /**
+   * What refuses a write over a fault inside this extension: a comment body with
+   * nothing in it, a write with nothing to confirm it by, and a snapshot this
+   * extension's own reader would not read back. What is wrong with it goes to
+   * the console, because none of it is something a maintainer can act on.
+   */
+  const INVALID_STATE_MESSAGE = 'Error: cannot save invalid state';
+
+  /**
    * @param {string} nameWithOwner
    * @returns {string} what refuses a write on that repository. Three write
    *   paths check the allowlist and all three say this.
@@ -480,13 +512,31 @@ if (typeof require === 'function') {
   }
 
   /**
-   * @param {import('./parse-detail.js').AdvisoryRef} ref
-   * @returns {string} what refuses a write whose page turned out to be another
-   *   advisory than the one it was asked for.
+   * What refuses a write whose page turned out to be another advisory than the
+   * one it was asked for. The comment would have gone onto the wrong page.
    */
-  function mismatchMessage(ref) {
-    return `Error: the page this extension read is not ${ref.owner}/${ref.repo} ${ref.ghsaId}.`;
-  }
+  const MISMATCH_MESSAGE = 'Error: unexpected response';
+
+  /**
+   * What refuses a write whose comment form posts somewhere other than the
+   * advisory it was asked for.
+   */
+  const COMMENT_FORM_MESSAGE = 'Error: unexpected comment form destination';
+
+  /**
+   * What refuses a write whose edit form posts somewhere other than the comment
+   * it was asked for. This is the path a save takes once a state comment
+   * already exists, which is the usual one.
+   */
+  const EDIT_FORM_MESSAGE = 'Error: unexpected edit form destination';
+
+  /**
+   * What refuses a write whose edit form does not carry the fields the request
+   * is cloned from. GitHub randomizes some field names and signs others, so a
+   * missing one means the post would be rejected. Which ones are missing goes
+   * to the console.
+   */
+  const EDIT_FIELDS_MESSAGE = 'Error: unexpected edit form fields';
 
   /**
    * The detail a refusal no longer carries. The message a maintainer reads names
@@ -584,15 +634,12 @@ if (typeof require === 'function') {
       return result(false, 'allowlist', null, allowlistMessage(nameWithOwner));
     }
     if (collapse(body) === '') {
-      return result(false, 'unverifiable', null, 'Error: the comment is empty.');
+      log('the comment this write would leave is empty');
+      return result(false, 'unverifiable', null, INVALID_STATE_MESSAGE);
     }
     if (expected.every((string) => collapse(string) === '')) {
-      return result(
-        false,
-        'unverifiable',
-        null,
-        'Error: this extension has no way to confirm the write.'
-      );
+      log('the write carries nothing to confirm it by');
+      return result(false, 'unverifiable', null, INVALID_STATE_MESSAGE);
     }
     return null;
   }
@@ -644,7 +691,10 @@ if (typeof require === 'function') {
     if (!written) {
       return result(false, 'unwritten', status, UNCONFIRMED_MESSAGE);
     }
-    return result(true, null, status, 'The comment was written.');
+    // A write that landed says nothing here. Every surface that starts one has
+    // its own words for what it just wrote, and a message set here would be
+    // overwritten by all of them or displayed by none.
+    return result(true, null, status, '');
   }
 
   /**
@@ -667,13 +717,8 @@ if (typeof require === 'function') {
     }
     const action = form.getAttribute('action') ?? '';
     if (!actionMatchesRef(action, ref)) {
-      return result(
-        false,
-        'mismatch',
-        null,
-        'Error: the comment form on this page posts somewhere other than' +
-          ` ${ref.owner}/${ref.repo} ${ref.ghsaId}.`
-      );
+      log(`the comment form posts to ${action}, not to ${ref.owner}/${ref.repo} ${ref.ghsaId}`);
+      return result(false, 'mismatch', null, COMMENT_FORM_MESSAGE);
     }
 
     const params = cloneForm(form);
@@ -717,25 +762,18 @@ if (typeof require === 'function') {
     }
     const action = form.getAttribute('action') ?? '';
     if (!actionMatchesRef(action, ref, commentId)) {
-      return result(
-        false,
-        'mismatch',
-        null,
-        'Error: the edit form on this page posts somewhere other than' +
-          ` ${ref.owner}/${ref.repo} ${ref.ghsaId} comment ${commentId}.`
+      log(
+        `the edit form posts to ${action}, not to ${ref.owner}/${ref.repo} ${ref.ghsaId}` +
+          ` comment ${commentId}`
       );
+      return result(false, 'mismatch', null, EDIT_FORM_MESSAGE);
     }
 
     const params = cloneForm(form);
     const missing = REQUIRED_EDIT_FIELDS.filter((field) => !params.has(field));
     if (missing.length > 0) {
-      return result(
-        false,
-        'no-token',
-        null,
-        `Error: the edit form for comment ${commentId} carries no` +
-          ` ${missing.join(' and no ')}.`
-      );
+      log(`the edit form for comment ${commentId} carries no ${missing.join(' and no ')}`);
+      return result(false, 'no-token', null, EDIT_FIELDS_MESSAGE);
     }
     params.set(EDIT_BODY_FIELD, body);
 
@@ -812,7 +850,8 @@ if (typeof require === 'function') {
 
       const advisory = globalThis.bghsa.parseDetail.parseDetail(page);
       if (advisory === null || advisory.ref === null || !sameRef(advisory.ref, ref)) {
-        outcome = result(false, 'mismatch', null, mismatchMessage(ref));
+        log(`the page read for ${ref.owner}/${ref.repo} ${ref.ghsaId} is another advisory`);
+        outcome = result(false, 'mismatch', null, MISMATCH_MESSAGE);
         return { outcome, run: null };
       }
       const freshName = `${advisory.ref.owner}/${advisory.ref.repo}`;
@@ -854,27 +893,24 @@ if (typeof require === 'function') {
     DETAIL_INIT,
     collapse,
     holdKey,
-    sameRef,
     detailsBody,
     SAVING_MESSAGE,
-    REFRESH_MESSAGE,
     FAILED_MESSAGE,
     UNCONFIRMED_MESSAGE,
-    NO_FORM_MESSAGE,
+    STALE_MESSAGE,
+    OUTDATED_MESSAGE,
+    PARSE_MESSAGE,
+    INVALID_STATE_MESSAGE,
     allowlistMessage,
-    mismatchMessage,
     EDIT_BODY_FIELD,
-    REQUIRED_EDIT_FIELDS,
     detailUrl,
     fetchAdvisoryPage,
-    formEntries,
     cloneForm,
     findCommentForm,
     findEditForm,
     commentPath,
     editPath,
     actionMatchesRef,
-    renderedText,
     commentContains,
     createComment,
     editComment,

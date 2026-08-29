@@ -388,7 +388,11 @@ if (typeof require === 'function') {
     if (own !== undefined) return own;
     const advisory = corpus === null ? null : (memberOf(corpus, row.ghsaId)?.advisory ?? null);
     if (advisory === null) return null;
-    return globalThis.bghsa.edit.results.get(keyOf(advisory)) ?? null;
+    const edit = globalThis.bghsa.edit;
+    const held = edit.results.get(edit.keyOf(advisory)) ?? null;
+    // A result with nothing to say draws no line, so the row carries no empty
+    // one where a save reported by saying nothing.
+    return held === null || held.message === '' ? null : held;
   }
 
   /**

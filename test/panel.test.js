@@ -1061,9 +1061,7 @@ test('a press that could not tell the provenance writes nothing and says why', a
   assert.strictEqual(outcome.ok, false);
   assert.strictEqual(outcome.reason, 'provenance');
   assert.strictEqual(fake.calls.length, 0);
-  assert.deepStrictEqual(texts(built, '.bghsa-preserve-result'), [
-    "Error: this extension could not tell whether the description is the reporter's original text.",
-  ]);
+  assert.deepStrictEqual(texts(built, '.bghsa-preserve-result'), ['Error: failed to save']);
   assert.strictEqual(button.hasAttribute('disabled'), false);
 });
 

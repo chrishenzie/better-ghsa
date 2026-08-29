@@ -376,10 +376,7 @@ test('a description whose provenance did not read refuses the write', () => {
   assert.strictEqual(state.available, true);
   assert.strictEqual(state.writable, false);
   assert.strictEqual(state.reason, 'provenance');
-  assert.strictEqual(
-    state.message,
-    "Error: this extension could not tell whether the description is the reporter's original text."
-  );
+  assert.strictEqual(state.message, 'Error: failed to save');
 });
 
 test('a title or description that did not read refuses the write', () => {
@@ -696,11 +693,11 @@ test('a page naming no advisory refuses the press on the reference', async () =>
   const state = preserve.offered(anonymous);
   assert.strictEqual(state.writable, false);
   assert.strictEqual(state.reason, 'unreadable');
-  assert.strictEqual(state.message, preserve.UNREADABLE_REF_MESSAGE);
+  assert.strictEqual(state.message, 'Error: failed to parse advisory');
 
   const outcome = await preserve.preserve(anonymous, run(fake));
   assert.strictEqual(outcome.reason, 'unreadable');
-  assert.strictEqual(outcome.message, preserve.UNREADABLE_REF_MESSAGE);
+  assert.strictEqual(outcome.message, 'Error: failed to parse advisory');
   assert.strictEqual(fake.calls.length, 0, 'a press with no reference reached GitHub');
   preserve.attempts.clear();
 });
