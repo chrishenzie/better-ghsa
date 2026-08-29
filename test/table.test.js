@@ -42,6 +42,17 @@ const MINUTE = 60 * 1000;
 const REF = { owner: 'git-utensils', repo: 'Spoon-Knife' };
 
 /**
+ * The page these tests run on. Every pass asks the gate whether the extension
+ * runs here, and the gate reads the path. The documents below carry invented
+ * repositories so that each one gets a refresh queue of its own, and what GitHub
+ * has put in the frame is not what the path says: a soft navigation replaces the
+ * frame's contents and the surface reads the repository off them.
+ */
+globalThis.location = /** @type {Location} */ (
+  /** @type {unknown} */ ({ pathname: `/${REF.owner}/${REF.repo}/security/advisories` })
+);
+
+/**
  * @param {string} name
  * @returns {string} one fixture's markup.
  */

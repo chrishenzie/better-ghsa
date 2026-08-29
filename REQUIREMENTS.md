@@ -276,9 +276,8 @@ The editing controls stay live in every state. A closure reason and the owners
 remain worth recording after an advisory is published or closed, and the done
 page exists to set a closure reason retroactively.
 
-On a repository the allowlist does not carry, the panel displays and offers
-nothing to press: no editing controls, no save, and no preserve. A control that
-cannot work is not shown and then refused.
+On a repository the allowlist does not carry, there is no panel, because the
+extension does not run there at all.
 
 A confirmation is confirmed or it is not. A value that has changed since it was
 confirmed reads as unconfirmed, the same as one nobody has confirmed, because
@@ -426,8 +425,9 @@ Chrome and Firefox from one codebase. The extension works from the logged-in
 store a credential. It contacts only `github.com`. It does not collect
 telemetry.
 
-The extension writes only to repositories on a list carried in its source. A
-write anywhere else is refused.
+The extension acts only on repositories on a list carried in its source. On any
+other repository it does nothing at all: no panel, no table, no reads, and
+nothing stored. The allowlist gates the extension, not just its writes.
 
 This depends on undocumented endpoints and on GitHub's DOM, and GitHub's
 changes will break it.

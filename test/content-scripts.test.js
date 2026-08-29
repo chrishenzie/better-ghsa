@@ -25,6 +25,12 @@ const REPO = '/git-utensils/Spoon-Knife';
 /** A GitHub page the extension has no surface for. */
 const PULLS = `${REPO}/pulls`;
 
+/** A repository the allowlist does not carry. */
+const OTHER = '/another-owner/another-repo';
+
+const OTHER_LIST = `${OTHER}/security/advisories`;
+const OTHER_ADVISORY = `${OTHER_LIST}/GHSA-1234-5678-9abc`;
+
 const ADVISORY_LIST = `${REPO}/security/advisories`;
 const ADVISORY = `${ADVISORY_LIST}/GHSA-1234-5678-9abc`;
 
@@ -90,7 +96,13 @@ function contentScriptScope(options = {}) {
       '</div></body></html>'
   );
 
-  const counts = { made: 0, connected: 0, reads: 0, requests: 0 };
+  const counts = { made: 0, connected: 0, reads: 0, requests: 0, writes: 0 };
+  /** What storage holds, so a read answers with what a write put there. */
+  /** @type {Record<string, unknown>} */
+  const stored = {};
+  /** Every key a write has named, in the order they were written. */
+  /** @type {string[]} */
+  const written = [];
   const Native = window.MutationObserver;
   /**
    * @param {MutationCallback} callback
@@ -121,14 +133,45 @@ function contentScriptScope(options = {}) {
     window,
     MutationObserver: CountingObserver,
     location: { pathname, href: `https://github.com${pathname}` },
+    // `remove` is here because the cache will not use a storage without it, and
+    // a stand-in the cache declines is one no cache write could ever reach: an
+    // assertion that nothing was stored would then hold however much the
+    // extension tried to store.
     browser: {
       storage: {
         local: {
-          get: async () => {
+          /**
+           * @param {string | string[] | null} keys
+           * @returns {Promise<Record<string, unknown>>}
+           */
+          get: async (keys) => {
             counts.reads += 1;
-            return {};
+            if (keys === null || keys === undefined) return { ...stored };
+            /** @type {Record<string, unknown>} */
+            const answer = {};
+            for (const key of Array.isArray(keys) ? keys : [keys]) {
+              if (Object.hasOwn(stored, key)) answer[key] = stored[key];
+            }
+            return answer;
           },
-          set: async () => {},
+          /**
+           * @param {Record<string, unknown>} items
+           * @returns {Promise<void>}
+           */
+          set: async (items) => {
+            counts.writes += 1;
+            for (const [key, value] of Object.entries(items)) {
+              stored[key] = value;
+              written.push(key);
+            }
+          },
+          /**
+           * @param {string | string[]} keys
+           * @returns {Promise<void>}
+           */
+          remove: async (keys) => {
+            for (const key of Array.isArray(keys) ? keys : [keys]) delete stored[key];
+          },
         },
       },
     },
@@ -158,6 +201,7 @@ function contentScriptScope(options = {}) {
   };
   sandbox.globalThis = sandbox;
   sandbox.counts = counts;
+  sandbox.written = written;
   vm.createContext(sandbox);
   return sandbox;
 }
@@ -344,4 +388,120 @@ test('a page that becomes an advisory gets the panel', async () => {
     `the panel never landed; the page carries ${names(sandbox).join(', ') || 'nothing'}`
   );
   assert.ok(sandbox.counts.connected > 0, 'the surface started with nothing watching the page');
+});
+
+test('an advisory on a repository the allowlist does not carry is left alone', async () => {
+  const sandbox = contentScriptScope({
+    pathname: OTHER_ADVISORY,
+    frame: fixture('triage-thread.html'),
+  });
+  assert.deepStrictEqual(loadScripts(sandbox), []);
+  await settle();
+
+  // What is asserted first, because it is what a panel-shaped assertion misses.
+  // A surface that drew nothing can still have read the advisory and stored it:
+  // the panel holds the advisory it renders, the logins carrying a member
+  // badge, and the branches the patches name, and none of those is on the page
+  // to be looked for.
+  assert.deepStrictEqual(sandbox.written, [], 'something was stored');
+  assert.strictEqual(sandbox.counts.writes, 0, 'storage was written');
+  assert.strictEqual(sandbox.counts.reads, 0, 'storage was read');
+  // The page is an advisory and the extension has a surface for it; the
+  // repository is the only thing keeping the surface off. REQUIREMENTS.md
+  // section 8.
+  assert.deepStrictEqual(names(sandbox), [], 'the extension wrote on the page');
+  assert.strictEqual(sandbox.counts.made, 0, 'an observer was made');
+  assert.strictEqual(sandbox.counts.connected, 0, 'an observer was connected');
+  assert.strictEqual(sandbox.counts.requests, 0, 'a request went out');
+});
+
+test('an advisory list on a repository the allowlist does not carry is left alone', async () => {
+  const sandbox = contentScriptScope({
+    pathname: OTHER_LIST,
+    frame: fixture('list-page-triage.html'),
+  });
+  assert.deepStrictEqual(loadScripts(sandbox), []);
+  await settle();
+
+  // The list page's own stores, asserted first for the same reason: the parsed
+  // list, and the crawl's progress carrying the moment of the last request.
+  assert.deepStrictEqual(sandbox.written, [], 'something was stored');
+  assert.strictEqual(sandbox.counts.writes, 0, 'storage was written');
+  assert.strictEqual(sandbox.counts.reads, 0, 'storage was read');
+  assert.deepStrictEqual(names(sandbox), [], 'the extension wrote on the page');
+  assert.strictEqual(sandbox.counts.made, 0, 'an observer was made');
+  assert.strictEqual(sandbox.counts.connected, 0, 'an observer was connected');
+  assert.strictEqual(sandbox.counts.requests, 0, 'a request went out');
+});
+
+test('a page that becomes another repository advisory stores nothing for it', async () => {
+  // The surfaces are already running, on a repository the allowlist carries.
+  // GitHub then replaces the frame with an advisory somewhere else, which loads
+  // no document, so the gate at the start of the page is long past.
+  const sandbox = contentScriptScope({
+    pathname: ADVISORY_LIST,
+    frame: fixture('list-page-triage.html'),
+  });
+  assert.deepStrictEqual(loadScripts(sandbox), []);
+  await settle();
+  assert.ok(
+    sandbox.document.getElementById(sandbox.bghsa.table.ROOT_ID) !== null,
+    'the table never landed on the repository the allowlist carries'
+  );
+
+  const before = sandbox.written.length;
+  navigate(sandbox, { pathname: OTHER_ADVISORY, frame: fixture('triage-thread.html') });
+  await settle();
+
+  // The repository the page opened on keeps its refresh going, so what is
+  // asserted is what the advisory would have stored: the advisory itself, the
+  // logins on it, and the branches its patches name.
+  const after = /** @type {string[]} */ (sandbox.written.slice(before));
+  assert.deepStrictEqual(
+    after.filter(
+      (key) => key.startsWith('adv:') || key === 'members' || key === 'branches'
+    ),
+    [],
+    `the advisory was stored: ${after.join(', ')}`
+  );
+  // Compared as a boolean, because a failure carrying the node itself is a
+  // subtree the runner serializes to report it, and that exhausts the heap
+  // rather than printing a failure.
+  assert.ok(
+    sandbox.document.getElementById(sandbox.bghsa.panel.PANEL_ID) === null,
+    'the panel took an advisory on a repository the allowlist does not carry'
+  );
+});
+
+test('a page that becomes another repository advisory list stores nothing for it', async () => {
+  // The list fixture names the repository it came from throughout, and the
+  // surface reads that name off the page, so this stands the same page up under
+  // a repository the allowlist does not carry.
+  const elsewhere = fixture('list-page-triage.html').replaceAll(
+    'git-utensils/Spoon-Knife',
+    'another-owner/another-repo'
+  );
+
+  const sandbox = contentScriptScope({
+    pathname: ADVISORY_LIST,
+    frame: fixture('list-page-triage.html'),
+  });
+  assert.deepStrictEqual(loadScripts(sandbox), []);
+  await settle();
+  assert.ok(
+    sandbox.document.getElementById(sandbox.bghsa.table.ROOT_ID) !== null,
+    'the table never landed on the repository the allowlist carries'
+  );
+
+  const before = sandbox.written.length;
+  navigate(sandbox, { pathname: OTHER_LIST, frame: elsewhere });
+  await settle();
+
+  const after = /** @type {string[]} */ (sandbox.written.slice(before));
+  assert.deepStrictEqual(
+    after.filter((key) => key.includes('another-owner/another-repo')),
+    [],
+    `the list was stored: ${after.join(', ')}`
+  );
+  assert.strictEqual(sandbox.counts.requests, 0, 'a request went out for it');
 });

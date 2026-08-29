@@ -2,6 +2,9 @@
 
 globalThis.bghsa ??= /** @type {BghsaNamespace} */ ({});
 
+// The manifest orders content scripts; under Node the dependency is named here.
+if (typeof require === 'function') require('./common/allowlist.js');
+
 /**
  * @typedef {object} AdvisoryLocation
  * @property {string} owner
@@ -22,6 +25,30 @@ globalThis.bghsa ??= /** @type {BghsaNamespace} */ ({});
     if (owner === undefined || repo === undefined) return null;
     if (security !== 'security' || advisories !== 'advisories') return null;
     return { owner, repo, ghsaId: ghsaId ?? null };
+  }
+
+  /**
+   * Whether the extension runs on the page at a path.
+   *
+   * REQUIREMENTS.md section 8: on a repository the allowlist does not carry the
+   * extension does nothing at all, so this is the one question every surface
+   * asks. Answering no keeps a surface from starting and stops a started one
+   * from taking a page GitHub has since turned into another repository's, which
+   * is what keeps a repository the allowlist does not carry out of storage
+   * rather than only out of reach of a write.
+   *
+   * A path is needed to answer, so an environment with no location is not a
+   * page the extension belongs on. That is every environment outside a browser.
+   *
+   * @param {unknown} [pathname] The path to judge, and absent to read the one
+   *   the page is showing.
+   * @returns {boolean}
+   */
+  function enabled(pathname = globalThis.location?.pathname) {
+    if (typeof pathname !== 'string') return false;
+    const here = locate(pathname);
+    if (here === null) return false;
+    return globalThis.bghsa.allowlist.isAllowed(`${here.owner}/${here.repo}`);
   }
 
   /** Log the advisory this page is, and whether writes to it are permitted. */
@@ -82,11 +109,12 @@ globalThis.bghsa ??= /** @type {BghsaNamespace} */ ({});
   }
 
   /**
-   * Starts the surfaces on a document the URL says is an advisory page, and
-   * leaves every other page untouched: no surface drawn, no observer connected,
-   * no storage read and no request sent. The content script matches every
-   * github.com page, so this is what keeps the extension off the pages it has
-   * nothing to say about.
+   * Starts the surfaces on a document the URL says is an advisory page on a
+   * repository the allowlist carries, and leaves every other page untouched: no
+   * surface drawn, no observer connected, no storage read and no request sent.
+   * The content script matches every github.com page, so this is what keeps the
+   * extension off the pages it has nothing to say about, and off the
+   * repositories it has no business reading.
    *
    * Both surfaces start together, because the advisory list and an advisory are
    * the two halves of one area and each surface's own pass decides which half it
@@ -97,7 +125,7 @@ globalThis.bghsa ??= /** @type {BghsaNamespace} */ ({});
    * @returns {boolean} whether this call started the surfaces.
    */
   function apply(doc = globalThis.document) {
-    if (locate(globalThis.location.pathname) === null) return false;
+    if (!enabled()) return false;
     if (started.has(doc)) return false;
     started.add(doc);
     report();
@@ -138,10 +166,19 @@ globalThis.bghsa ??= /** @type {BghsaNamespace} */ ({});
     apply();
   }
 
-  globalThis.bghsa.content = { locate, report, FRAME_EVENTS, WINDOW_EVENTS, apply, watch, start };
+  globalThis.bghsa.content = {
+    locate,
+    enabled,
+    report,
+    FRAME_EVENTS,
+    WINDOW_EVENTS,
+    apply,
+    watch,
+    start,
+  };
 
   if (typeof module !== 'undefined') {
-    module.exports = { locate, report, FRAME_EVENTS, WINDOW_EVENTS, apply, watch, start };
+    module.exports = { locate, enabled, report, FRAME_EVENTS, WINDOW_EVENTS, apply, watch, start };
   } else {
     start();
   }

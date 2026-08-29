@@ -18,6 +18,7 @@ if (typeof require === 'function') {
   require('../common/fetch.js');
   require('../common/crawl.js');
   require('../detail/tracking.js');
+  require('../content.js');
 }
 
 /**
@@ -1866,6 +1867,11 @@ if (typeof require === 'function') {
         again = true;
         return;
       }
+      // The gate the whole extension turns on, asked again on every pass.
+      // Starting is gated too, and a started document is not a page: GitHub
+      // turns one document into a page on another repository, and a pass driven
+      // by that swap arrives with no navigation event of its own.
+      if (!globalThis.bghsa.content.enabled()) return;
       running = true;
       try {
         do {

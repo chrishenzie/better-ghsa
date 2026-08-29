@@ -44,6 +44,16 @@ function readRecord(name) {
   return parsed;
 }
 
+/**
+ * The page these tests run on. Every pass asks the gate whether the extension
+ * runs here, and the gate reads the path.
+ */
+globalThis.location = /** @type {Location} */ (
+  /** @type {unknown} */ ({
+    pathname: '/git-utensils/Spoon-Knife/security/advisories/GHSA-jmvx-2wfw-xfgj',
+  })
+);
+
 /** The one parse of each large fixture in this file. */
 const triageDoc = parseFixture('triage-thread.html');
 const triage = /** @type {import('../src/common/parse-detail.js').ParsedDetail} */ (
