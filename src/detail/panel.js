@@ -12,6 +12,7 @@ if (typeof require === 'function') {
   require('../common/parse-detail.js');
   require('../common/derive.js');
   require('../common/order.js');
+  require('../common/chips.js');
   require('../common/members.js');
   require('../common/branches.js');
   require('../common/cache.js');
@@ -39,57 +40,25 @@ if (typeof require === 'function') {
     '.bghsa-editor-summary { cursor: pointer; list-style: none; }',
     '.bghsa-editor-summary::-webkit-details-marker { display: none; }',
     '.bghsa-confirmed { display: flex; flex-direction: column; gap: 6px; }',
-    '.bghsa-confirmation-name { flex: 0 0 13rem; }',
+    '.bghsa-confirmation-name { flex: 0 0 9rem; }',
     // `currentColor` is what a foreground falls back to: the page's own text
     // color reads in either theme, where a fixed one would be wrong in one.
     '.bghsa-confirmation-note { color: var(--fgColor-muted, currentColor); }',
     '.bghsa-since { color: var(--fgColor-muted, currentColor); }',
-    // The chips sit beside GitHub's own `Label--secondary`, a neutral outline
-    // over the page's background. A muted fill is the tone that reads as
-    // colored next to one and still carries default-strength text in both
-    // themes, where an emphasis fill would want `--fgColor-onEmphasis` over it.
-    // The fills fall back to a translucent color, which lands in either theme.
-    '.bghsa-tone-attention { color: var(--fgColor-default, currentColor);' +
-      ' background-color: var(--bgColor-attention-muted, rgba(212, 167, 44, 0.2));' +
-      ' border-color: var(--borderColor-attention-emphasis, #bf8700); }',
-    '.bghsa-tone-danger { color: var(--fgColor-default, currentColor);' +
-      ' background-color: var(--bgColor-danger-muted, rgba(207, 34, 46, 0.2));' +
-      ' border-color: var(--borderColor-danger-emphasis, #cf222e); }',
+    ...globalThis.bghsa.chips.TONE_RULES,
   ].join('\n');
 
   /** What a row reads where the extension could not read the value behind it. */
   const UNKNOWN = 'Unknown';
 
+  /** The state GitHub gives an advisory nobody has published or closed yet. */
+  const DRAFT_STATE = globalThis.bghsa.chips.DRAFT_STATE;
+
   /** How every surface builds an element. */
   const element = globalThis.bghsa.dom.element;
 
-  /**
-   * A chip. A tone names a Primer state token, and a chip with no tone is
-   * dimmed.
-   *
-   * @param {Document} doc
-   * @param {string} text
-   * @param {'attention' | 'danger'} [tone]
-   * @returns {Element}
-   */
-  function chip(doc, text, tone) {
-    const classes = ['Label', 'Label--secondary'];
-    if (tone !== undefined) classes.push(`bghsa-tone-${tone}`);
-    return element(doc, 'span', classes.join(' '), text);
-  }
-
-  /**
-   * A stored value as a chip reads it. GitHub sentence-cases its own chips, and
-   * a track is stored in the vocabulary REQUIREMENTS.md section 6 sets, which is
-   * lower case. Only the first letter is touched, so a value this extension does
-   * not interpret still reaches the reader as it stands.
-   *
-   * @param {string} value
-   * @returns {string}
-   */
-  function sentenceCase(value) {
-    return value === '' ? value : `${value[0]?.toUpperCase() ?? ''}${value.slice(1)}`;
-  }
+  /** How every surface cases a stored value. */
+  const sentenceCase = globalThis.bghsa.chips.sentenceCase;
 
   /**
    * @param {Document} doc
@@ -115,27 +84,48 @@ if (typeof require === 'function') {
   }
 
   /**
-   * The chip row, which is visible whatever else the panel shows. A derived
-   * signal is a chip only while it is firing, because it is there to say that
-   * something needs attention.
+   * The chip row, which is visible whatever else the panel shows.
+   *
+   * The waiting state and the patch state are the two chips the list row leads
+   * with, and they are built here from the same code, so the reason an advisory
+   * sits where it does on the list is what its own page says first. The patch
+   * chip stands on a draft and on no other, which is the list's rule: an
+   * advisory in triage has not been accepted, so no patch is owed for it yet.
+   * An advisory that is published or closed has no list row and no waiting
+   * state to report.
    *
    * The advisory page carries the state, the severity, and the CVE above the
    * panel, so the row does not repeat them. A state the extension could not read
-   * is the exception: it drives the patch chips, the confirmations, the
+   * is the exception: it drives the patch chip, the confirmations, the
    * never-reviewed reading and the place this advisory takes in the list, so a
    * reader is owed the word that the panel is working without it.
    *
    * @param {Document} doc
    * @param {import('../common/parse-detail.js').ParsedDetail} advisory
    * @param {import('../common/derive.js').DerivedState} derived
+   * @param {import('./tracking.js').TrackingView} tracking
    * @returns {Element}
    */
-  function buildChips(doc, advisory, derived) {
+  function buildChips(doc, advisory, derived, tracking) {
     const header = element(doc, 'div', 'Box-header bghsa-chips');
     header.append(element(doc, 'strong', 'mr-2', 'Better GHSA'));
-    if (advisory.state === null) header.append(chip(doc, UNKNOWN, 'attention'));
-    if (derived.neverReviewed) header.append(chip(doc, 'Never reviewed', 'danger'));
-    if (derived.newActivity) header.append(chip(doc, 'New activity', 'attention'));
+    if (advisory.state === null) {
+      header.append(globalThis.bghsa.chips.buildChip(doc, { text: UNKNOWN, tone: 'attention' }));
+    }
+    if (!settled(advisory)) {
+      const waiting = globalThis.bghsa.chips.waitingChip({
+        neverReviewed: derived.neverReviewed,
+        newActivity: derived.newActivity,
+        triage: tracking.triage,
+      });
+      header.append(globalThis.bghsa.chips.buildChip(doc, waiting));
+    }
+    if (advisory.state === DRAFT_STATE) {
+      const patch = globalThis.bghsa.chips.patchChip(
+        globalThis.bghsa.chips.patchStateOf(derived.patch)
+      );
+      header.append(globalThis.bghsa.chips.buildChip(doc, patch));
+    }
     return header;
   }
 
@@ -243,14 +233,21 @@ if (typeof require === 'function') {
     // panel shows them in.
     for (const track of globalThis.bghsa.tracking.CONFIRMATION_TRACKS) {
       const state = tracking[track.key];
-      const line = element(doc, 'div', 'bghsa-chips bghsa-confirmation');
+      const line = element(doc, 'div', 'd-flex flex-items-baseline bghsa-confirmation');
       line.append(element(doc, 'span', 'bghsa-confirmation-name', track.name));
-      line.append(chip(doc, confirmationText(state)));
+      // A name and a body, the two elements `row` builds a panel row from, so
+      // a confirmation's chips start where every other row's content starts.
+      // The body is the flex container the chips lay out in, which keeps the
+      // gap between chips and off the space between the name and the first.
+      const body = element(doc, 'div', 'flex-auto bghsa-chips');
+      line.append(body);
+      body.append(globalThis.bghsa.chips.buildChip(doc, { text: confirmationText(state) }));
       if (track.key === 'description') {
-        line.append(chip(doc, provenanceText(advisory.descriptionOriginal)));
+        const provenance = provenanceText(advisory.descriptionOriginal);
+        body.append(globalThis.bghsa.chips.buildChip(doc, { text: provenance }));
       }
       const note = confirmationNote(state);
-      if (note !== null) line.append(element(doc, 'span', 'bghsa-confirmation-note', note));
+      if (note !== null) body.append(element(doc, 'span', 'bghsa-confirmation-note', note));
       container.append(line);
     }
     return container;
@@ -281,7 +278,9 @@ if (typeof require === 'function') {
   function chipRow(doc, label, values) {
     const built = row(doc, label);
     built.body.className = 'flex-auto bghsa-chips';
-    for (const value of values) built.body.append(chip(doc, value));
+    for (const value of values) {
+      built.body.append(globalThis.bghsa.chips.buildChip(doc, { text: value }));
+    }
     return built.row;
   }
 
@@ -307,7 +306,10 @@ if (typeof require === 'function') {
       // value this reader does not know is waiting on us.
       const blocked = globalThis.bghsa.order.classifyTriage(tracking.triage);
       built.body.append(
-        chip(doc, sentenceCase(tracking.triage), blocked === 'us' ? 'danger' : 'attention')
+        globalThis.bghsa.chips.buildChip(doc, {
+          text: sentenceCase(tracking.triage),
+          tone: blocked === 'us' ? 'danger' : 'attention',
+        })
       );
       const since = globalThis.bghsa.text.formatTime(tracking.triageSince);
       if (since !== null) built.body.append(element(doc, 'span', 'bghsa-since', `since ${since}`));
@@ -325,18 +327,18 @@ if (typeof require === 'function') {
       // the chip says and never says it alone. The row is labeled `Embargo`, so
       // the chip carries the date and nothing else.
       built.body.append(
-        chip(
-          doc,
-          embargoText(tracking.embargoLift, embargoOverdue),
-          embargoOverdue ? 'danger' : 'attention'
-        )
+        globalThis.bghsa.chips.buildChip(doc, {
+          text: embargoText(tracking.embargoLift, embargoOverdue),
+          tone: embargoOverdue ? 'danger' : 'attention',
+        })
       );
       rows.push(built.row);
     }
     if (tracking.closureReason !== null) {
       const built = row(doc, 'Closed as');
       built.body.className = 'flex-auto bghsa-chips';
-      built.body.append(chip(doc, sentenceCase(tracking.closureReason)));
+      const reason = sentenceCase(tracking.closureReason);
+      built.body.append(globalThis.bghsa.chips.buildChip(doc, { text: reason }));
       if (tracking.closureDuplicateOf !== null) {
         built.body.append(
           element(doc, 'span', 'bghsa-since', `of ${tracking.closureDuplicateOf}`)
@@ -470,7 +472,7 @@ if (typeof require === 'function') {
       advisory,
       tracking.embargo ? tracking.embargoLift : null
     );
-    panel.append(buildChips(doc, advisory, derived));
+    panel.append(buildChips(doc, advisory, derived, tracking));
 
     // A value the extension could not read is answered in the row that stands
     // for it, and a value with no row of its own goes unmentioned: the panel
@@ -738,7 +740,6 @@ if (typeof require === 'function') {
   const exported = {
     PANEL_ID,
     STYLE_ID,
-    sentenceCase,
     press,
     buildPanel,
     anchor,

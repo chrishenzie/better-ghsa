@@ -27,6 +27,15 @@ if (typeof require === 'function') {
  *   current triage value.
  */
 
+/**
+ * What the waiting state is read from. It is the three fields of an
+ * {@link OrderEntry} that answer it, and no more, so a surface holding a parsed
+ * advisory and its tracking state can ask for the waiting state without
+ * assembling a row.
+ *
+ * @typedef {Pick<OrderEntry, 'neverReviewed' | 'newActivity' | 'triage'>} WaitingEntry
+ */
+
 (() => {
   /**
    * The groups the list table orders within a state by, as REQUIREMENTS.md
@@ -228,7 +237,7 @@ if (typeof require === 'function') {
    * triage value. An advisory a member has touched and nobody has triaged shows
    * blocked on us and sorts in never reviewed.
    *
-   * @param {OrderEntry} entry
+   * @param {WaitingEntry} entry
    * @returns {string}
    */
   function waitingStateOf(entry) {

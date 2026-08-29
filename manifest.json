@@ -21,6 +21,7 @@
         "src/common/record.js",
         "src/common/derive.js",
         "src/common/order.js",
+        "src/common/chips.js",
         "src/common/members.js",
         "src/common/branches.js",
         "src/common/cache.js",

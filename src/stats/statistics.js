@@ -5,6 +5,7 @@ globalThis.bghsa ??= /** @type {BghsaNamespace} */ ({});
 // The manifest orders content scripts; under Node the dependencies are named here.
 if (typeof require === 'function') {
   require('../common/dom.js');
+  require('../common/chips.js');
   require('../common/cache.js');
   require('../common/crawl.js');
   require('../common/parse-list.js');
@@ -188,18 +189,6 @@ if (typeof require === 'function') {
   const element = globalThis.bghsa.dom.element;
 
   /**
-   * A chip. Every chip here is dimmed: color is kept for where the work stands,
-   * and what a count is over is not that.
-   *
-   * @param {Document} doc
-   * @param {string} text
-   * @returns {Element}
-   */
-  function chip(doc, text) {
-    return element(doc, 'span', 'Label Label--secondary', text);
-  }
-
-  /**
    * @param {string} key
    * @returns {string} a camel-cased key as a label. A timing this reader does
    *   not compute is named from its key, so one arriving later is drawn without
@@ -207,7 +196,7 @@ if (typeof require === 'function') {
    */
   function nameOf(key) {
     const words = key.replace(/([A-Z])/g, ' $1').toLowerCase().trim();
-    return globalThis.bghsa.table.sentenceCase(words);
+    return globalThis.bghsa.chips.sentenceCase(words);
   }
 
   /** How many milliseconds are in each unit a duration is read in. */
@@ -358,23 +347,29 @@ if (typeof require === 'function') {
    */
   function buildOver(doc, halves) {
     const table = globalThis.bghsa.table;
+    // Every chip here is dimmed: color is kept for where the work stands, and
+    // what a count is over is not that.
+    const chips = globalThis.bghsa.chips;
     const box = element(doc, 'div', 'Box-body bghsa-stats-over');
     const corpus = whole(halves);
-    box.append(chip(doc, totalTextOf(corpus.members.length)));
+    box.append(chips.buildChip(doc, { text: totalTextOf(corpus.members.length) }));
     for (const half of halves) {
       const size = half.corpus.members.length;
-      const node = chip(doc, `${size} ${half.name.toLowerCase()}`);
+      const node = chips.buildChip(doc, { text: `${size} ${half.name.toLowerCase()}` });
       node.setAttribute('data-bghsa-half', half.key);
       box.append(node);
       if (half.corpus.complete) continue;
-      box.append(chip(doc, `${half.name} ${half.walked ? 'partly crawled' : 'not crawled'}`));
+      const walked = half.walked ? 'partly crawled' : 'not crawled';
+      box.append(chips.buildChip(doc, { text: `${half.name} ${walked}` }));
     }
-    if (corpus.unread.length > 0) box.append(chip(doc, `${corpus.unread.length} unread`));
+    if (corpus.unread.length > 0) {
+      box.append(chips.buildChip(doc, { text: `${corpus.unread.length} unread` }));
+    }
     const total = expectedTotal(corpus.expected);
     if (total !== null && total !== corpus.members.length) {
-      box.append(chip(doc, `${total} on GitHub`));
+      box.append(chips.buildChip(doc, { text: `${total} on GitHub` }));
     }
-    if (reading(doc)) box.append(chip(doc, READING_TEXT));
+    if (reading(doc)) box.append(chips.buildChip(doc, { text: READING_TEXT }));
     return box;
   }
 
@@ -436,7 +431,7 @@ if (typeof require === 'function') {
       list.append(
         buildLine(
           doc,
-          globalThis.bghsa.table.sentenceCase(value),
+          globalThis.bghsa.chips.sentenceCase(value),
           String(count),
           formatRatio(tally.ratios[value] ?? 0)
         )

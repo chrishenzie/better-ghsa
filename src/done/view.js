@@ -13,6 +13,7 @@ if (typeof require === 'function') {
   require('../common/cache.js');
   require('../common/record.js');
   require('../common/derive.js');
+  require('../common/chips.js');
   require('../detail/tracking.js');
   require('../detail/edit.js');
   require('../list/table.js');
@@ -211,23 +212,6 @@ if (typeof require === 'function') {
   const element = globalThis.bghsa.dom.element;
 
   /**
-   * A chip. It is dimmed unless GitHub's own color for it is handed in, which
-   * here is the severity and nothing else. Color marks where the work stands,
-   * and a state an advisory has finished in, a crawl still running and an
-   * advisory nobody has read are none of them work waiting on a maintainer.
-   *
-   * @param {Document} doc
-   * @param {string} text
-   * @param {string | null} [severityClass] The `Label--` modifiers GitHub
-   *   painted this advisory's severity chip with.
-   * @returns {Element}
-   */
-  function chip(doc, text, severityClass) {
-    const modifiers = severityClass ?? 'Label--secondary';
-    return element(doc, 'span', `Label ${modifiers}`, text);
-  }
-
-  /**
    * The stored closure reason on one advisory.
    *
    * @param {import('../common/parse-detail.js').ParsedDetail | null} advisory
@@ -412,20 +396,14 @@ if (typeof require === 'function') {
       advisory === null ? undefined : edit.editsFor(edit.keyOf(advisory)).closureReason;
     const current = staged === undefined ? row.closureReason : staged;
 
-    const control = element(doc, 'select', 'form-select select-sm mr-1 bghsa-done-reason');
-    control.setAttribute('aria-label', 'Closure reason');
-    const blank = element(doc, 'option', '', NO_REASON);
-    blank.setAttribute('value', '');
-    if (current === null) blank.setAttribute('selected', '');
-    control.append(blank);
-    const known = globalThis.bghsa.schema.CLOSURE_REASONS;
-    const offered = current !== null && !known.includes(current) ? [...known, current] : known;
-    for (const value of offered) {
-      const option = element(doc, 'option', '', globalThis.bghsa.table.sentenceCase(value));
-      option.setAttribute('value', value);
-      if (value === current) option.setAttribute('selected', '');
-      control.append(option);
-    }
+    const control = edit.selectControl(
+      doc,
+      'mr-1 bghsa-done-reason',
+      globalThis.bghsa.schema.CLOSURE_REASONS,
+      current,
+      NO_REASON,
+      { label: globalThis.bghsa.chips.sentenceCase, ariaLabel: 'Closure reason' }
+    );
 
     const save = element(doc, 'button', 'btn btn-sm bghsa-done-save', SAVE_LABEL);
     save.setAttribute('type', 'button');
@@ -461,7 +439,8 @@ if (typeof require === 'function') {
       // comes is not a pick that press can miss.
       void (async () => {
         const context = await contextFor(doc, advisory);
-        edit.stage(edit.keyOf(advisory), context.tracking, { closureReason: value === '' ? null : value });
+        const reason = value === '' ? null : value;
+        edit.stage(edit.keyOf(advisory), context.tracking, { closureReason: reason });
         update();
       })();
     });
@@ -500,11 +479,19 @@ if (typeof require === 'function') {
     main.append(link);
     main.append(element(doc, 'div', 'mt-1 text-small bghsa-done-meta', metaTextOf(row)));
 
+    // Every chip here is dimmed but the severity, which takes GitHub's own
+    // color for it. Color marks where the work stands, and a state an advisory
+    // has finished in, a crawl still running and an advisory nobody has read
+    // are none of them work waiting on a maintainer.
     const chips = element(doc, 'div', 'mt-1 bghsa-done-chips');
-    if (row.state !== null) chips.append(chip(doc, globalThis.bghsa.table.sentenceCase(row.state)));
+    if (row.state !== null) {
+      const text = globalThis.bghsa.chips.sentenceCase(row.state);
+      chips.append(globalThis.bghsa.chips.buildChip(doc, { text }));
+    }
     if (row.severityLabel !== null) {
+      const text = globalThis.bghsa.chips.sentenceCase(row.severityLabel);
       chips.append(
-        chip(doc, globalThis.bghsa.table.sentenceCase(row.severityLabel), row.severityClass)
+        globalThis.bghsa.chips.buildChip(doc, { text, severityClass: row.severityClass })
       );
     }
     main.append(chips);
@@ -620,7 +607,7 @@ if (typeof require === 'function') {
     // has to be able to tell whether more are on their way, and whether the
     // ones that are missing are coming at all.
     const status = statusTextOf(state);
-    if (status !== null) header.append(chip(doc, status));
+    if (status !== null) header.append(globalThis.bghsa.chips.buildChip(doc, { text: status }));
     root.append(header);
 
     const banner = buildBanner(doc, state.failures);

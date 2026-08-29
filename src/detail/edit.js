@@ -11,6 +11,7 @@ if (typeof require === 'function') {
   require('../common/merge.js');
   require('../common/parse-detail.js');
   require('../common/derive.js');
+  require('../common/chips.js');
   require('../common/members.js');
   require('../common/branches.js');
   require('../common/cache.js');
@@ -1141,22 +1142,33 @@ if (typeof require === 'function') {
    * interpret is offered alongside them, so picking something else does not
    * hide what the advisory carries.
    *
+   * The stored value is what the option carries; `label` is how it reads. The
+   * two surfaces that offer the closure vocabulary hand in the same label, so a
+   * reason reads the same wherever it is picked.
+   *
    * @param {Document} doc
    * @param {string} className
    * @param {readonly string[]} values
    * @param {string | null} current
    * @param {string} blank What the empty option reads.
+   * @param {object} [options]
+   * @param {(value: string) => string} [options.label] How a value reads, where
+   *   that is not the value itself.
+   * @param {string} [options.ariaLabel] What a screen reader calls the control,
+   *   for one standing without a visible label beside it.
    * @returns {Element}
    */
-  function selectControl(doc, className, values, current, blank) {
+  function selectControl(doc, className, values, current, blank, options = {}) {
+    const label = options.label ?? ((value) => value);
     const node = element(doc, 'select', `form-select select-sm ${className}`);
+    if (options.ariaLabel !== undefined) node.setAttribute('aria-label', options.ariaLabel);
     const empty = element(doc, 'option', '', blank);
     empty.setAttribute('value', '');
     if (current === null) empty.setAttribute('selected', '');
     node.append(empty);
     const offered = current !== null && !values.includes(current) ? [...values, current] : values;
     for (const value of offered) {
-      const option = element(doc, 'option', '', value);
+      const option = element(doc, 'option', '', label(value));
       option.setAttribute('value', value);
       if (value === current) option.setAttribute('selected', '');
       node.append(option);
@@ -1494,7 +1506,8 @@ if (typeof require === 'function') {
       'bghsa-closure',
       globalThis.bghsa.schema.CLOSURE_REASONS,
       reason,
-      'Not closed'
+      'Not closed',
+      { label: globalThis.bghsa.chips.sentenceCase }
     );
     const duplicate = textControl(
       doc,
@@ -1757,6 +1770,7 @@ if (typeof require === 'function') {
     save,
     backportCandidates,
     contextFor,
+    selectControl,
     buildEditor,
   };
 

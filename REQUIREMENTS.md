@@ -272,6 +272,10 @@ Once an advisory is published or closed it is dealt with, and capturing the
 reporter's original wording serves nothing, so neither the button nor the row
 is shown.
 
+The editing controls stay live in every state. A closure reason and the owners
+remain worth recording after an advisory is published or closed, and the done
+page exists to set a closure reason retroactively.
+
 On a repository the allowlist does not carry, the panel displays and offers
 nothing to press: no editing controls, no save, and no preserve. A control that
 cannot work is not shown and then refused.
@@ -280,8 +284,12 @@ A confirmation is confirmed or it is not. A value that has changed since it was
 confirmed reads as unconfirmed, the same as one nobody has confirmed, because
 the maintainer's next act is the same either way.
 
-The panel shows what a maintainer has to act on. It does not restate what the
-advisory page already carries, and it does not list the snapshots it read. A
+The panel shows what a maintainer has to act on. It carries the same waiting
+state chip the list row carries, from the same derivation, so the reason an
+advisory sits where it does on the list is the first thing its page says. On a
+draft advisory it carries the patch chip too. It does not restate what the
+advisory page already carries, which is why severity and the CVE stay off it,
+and it does not list the snapshots it read. A
 snapshot from an untrusted author is marked on that comment in the thread,
 where section 4's author role labels already are.
 

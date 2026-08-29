@@ -13,26 +13,12 @@ if (typeof require === 'function') {
   require('../common/record.js');
   require('../common/derive.js');
   require('../common/order.js');
+  require('../common/chips.js');
   require('../common/cache.js');
   require('../common/fetch.js');
   require('../common/crawl.js');
   require('../detail/tracking.js');
 }
-
-/**
- * One chip on a row. A tone names a Primer state token, and a chip carrying
- * neither a tone nor a severity color is dimmed.
- *
- * @typedef {object} ChipSpec
- * @property {string} text
- * @property {'attention' | 'danger'} [tone]
- * @property {string | null} [severityClass] The `Label--` modifiers GitHub
- *   painted this advisory's own severity chip with, which is what the severity
- *   chip takes in place of the dimmed one.
- * @property {boolean} [dim] Whether to hold the chip back from its full color.
- *   A severity nobody confirmed is dimmed this way, so it reads as the severity
- *   it is and still parts from a severity a maintainer confirmed.
- */
 
 /**
  * One row of the table: what the list markup said, and what the cached read of
@@ -203,9 +189,6 @@ if (typeof require === 'function') {
   /** What marks an element the extension is holding out of view. */
   const HIDDEN_CLASS = 'bghsa-hidden';
 
-  /** What holds a chip back from its full color while keeping its hue. */
-  const DIM_CLASS = 'bghsa-dim';
-
   /** Every rule the list surface adds to the page. */
   const STYLE_TEXT = [
     // Primer's own display utilities carry `!important`, so holding one of its
@@ -219,18 +202,8 @@ if (typeof require === 'function') {
     '.bghsa-list-observed { color: var(--fgColor-muted, currentColor); white-space: nowrap; }',
     '.bghsa-list-meta { color: var(--fgColor-muted, currentColor); }',
     '.bghsa-list-empty { color: var(--fgColor-muted, currentColor); }',
-    // The chips sit beside GitHub's own `Label--secondary`, a neutral outline
-    // over the page's background. A muted fill is the tone that reads as
-    // colored next to one and still carries default-strength text in both
-    // themes, where an emphasis fill would want `--fgColor-onEmphasis` over it.
-    // The fills fall back to a translucent color, which lands in either theme.
-    '.bghsa-tone-attention { color: var(--fgColor-default, currentColor);' +
-      ' background-color: var(--bgColor-attention-muted, rgba(212, 167, 44, 0.2));' +
-      ' border-color: var(--borderColor-attention-emphasis, #bf8700); }',
-    '.bghsa-tone-danger { color: var(--fgColor-default, currentColor);' +
-      ' background-color: var(--bgColor-danger-muted, rgba(207, 34, 46, 0.2));' +
-      ' border-color: var(--borderColor-danger-emphasis, #cf222e); }',
-    `.${DIM_CLASS} { opacity: 0.55; }`,
+    ...globalThis.bghsa.chips.TONE_RULES,
+    `.${globalThis.bghsa.chips.DIM_CLASS} { opacity: 0.55; }`,
   ].join('\n');
 
   /** What the sort control reads while the table is in its default order. */
@@ -305,37 +278,14 @@ if (typeof require === 'function') {
   /** How every surface builds an element. */
   const element = globalThis.bghsa.dom.element;
 
-  /**
-   * @param {Document} doc
-   * @param {ChipSpec} spec
-   * @returns {Element}
-   */
-  function chip(doc, spec) {
-    const classes = ['Label', spec.severityClass ?? 'Label--secondary'];
-    if (spec.tone !== undefined) classes.push(`bghsa-tone-${spec.tone}`);
-    if (spec.dim === true) classes.push(DIM_CLASS);
-    return element(doc, 'span', classes.join(' '), spec.text);
-  }
-
-  /**
-   * A stored value as a chip reads it. Only the first letter is touched, so a
-   * value this extension does not interpret reaches the reader as it stands.
-   *
-   * @param {string} value
-   * @returns {string}
-   */
-  function sentenceCase(value) {
-    return value === '' ? value : `${value[0]?.toUpperCase() ?? ''}${value.slice(1)}`;
-  }
+  /** How every surface cases a stored value. */
+  const sentenceCase = globalThis.bghsa.chips.sentenceCase;
 
   /** What the patch chip reads while the fork holds an open pull request. */
-  const PATCH_IN_REVIEW = 'Patch in review';
+  const PATCH_IN_REVIEW = globalThis.bghsa.chips.PATCH_IN_REVIEW;
 
   /** What the patch chip reads while the fork holds no pull request. */
-  const NO_PATCH = 'No patch yet';
-
-  /** What the patch chip reads where a pull request named a state nobody reads. */
-  const PATCH_UNKNOWN = 'Unknown';
+  const NO_PATCH = globalThis.bghsa.chips.NO_PATCH;
 
   /**
    * What the Embargo filter offers for an advisory under one. It is the wording
@@ -350,27 +300,7 @@ if (typeof require === 'function') {
   const NO_PATCH_VALUE = 'No patch';
 
   /** The state GitHub gives an advisory nobody has published or closed yet. */
-  const DRAFT_STATE = 'Draft';
-
-  /**
-   * What the advisory's private fork says about the patch. An open pull request
-   * is the one state the page shows: REQUIREMENTS.md section 6 has merging
-   * delete the fork, so the Box that lists its pull requests goes with it, and a
-   * pull request closed without merging leaves what an advisory that never had a
-   * fork leaves. So a fork holding no
-   * open pull request reads the same as no fork at all. A pull request whose
-   * state went unread reads `Unknown`, because a patch this reader could not
-   * judge is not a patch that is not there.
-   *
-   * @param {import('../common/derive.js').PatchState} patch
-   * @returns {string}
-   */
-  function patchStateOf(patch) {
-    const states = patch.pullRequests.map((pull) => pull.state);
-    if (states.includes('open')) return PATCH_IN_REVIEW;
-    if (patch.incomplete) return PATCH_UNKNOWN;
-    return NO_PATCH;
-  }
+  const DRAFT_STATE = globalThis.bghsa.chips.DRAFT_STATE;
 
   /**
    * How far the backports have got: the branches a maintainer asked for that
@@ -497,7 +427,7 @@ if (typeof require === 'function') {
       embargo: tracking.embargo,
       embargoLift,
       embargoOverdue: globalThis.bghsa.derive.embargoOverdue(advisory, embargoLift, at),
-      patch: patchStateOf(derived.patch),
+      patch: globalThis.bghsa.chips.patchStateOf(derived.patch),
       backportTargets: tracking.backports.length,
       backportsDone: backportsDoneIn(derived.patch, tracking.backports),
       cve: cveTextOf(derived.cve),
@@ -597,38 +527,24 @@ if (typeof require === 'function') {
    * GitHub's own color, and takes it dimmed while nobody has confirmed it.
    *
    * @param {TableRow} row
-   * @returns {ChipSpec[]}
+   * @returns {import('../common/chips.js').ChipSpec[]}
    */
   function chipsFor(row) {
-    const order = globalThis.bghsa.order;
-    /** @type {ChipSpec[]} */
+    /** @type {import('../common/chips.js').ChipSpec[]} */
     const chips = [];
 
     // The waiting state is what an advisory read says, so it is absent until one
     // has been read. Nothing on the list page names it.
-    if (row.read) {
-      const waitingState = order.waitingStateOf(row);
-      /** @type {ChipSpec} */
-      const waiting = { text: sentenceCase(waitingState) };
-      if (waitingState === order.GROUPS.NEVER_REVIEWED) waiting.tone = 'danger';
-      else if (waitingState === order.GROUPS.NEW_ACTIVITY) waiting.tone = 'attention';
-      else if (waitingState === order.GROUPS.BLOCKED_ON_US) waiting.tone = 'danger';
-      else waiting.tone = 'attention';
-      chips.push(waiting);
-    }
+    if (row.read) chips.push(globalThis.bghsa.chips.waitingChip(row));
 
     // The patch chip stands on a draft and on no other. An advisory in triage
     // has not been accepted, so no patch is owed for it yet and its absence
     // says nothing.
     if (row.state === DRAFT_STATE && row.patch !== null) {
-      /** @type {ChipSpec} */
-      const patch = { text: row.patch };
-      if (row.patch === PATCH_IN_REVIEW) patch.tone = 'attention';
-      else if (row.patch === NO_PATCH) patch.tone = 'danger';
-      chips.push(patch);
+      chips.push(globalThis.bghsa.chips.patchChip(row.patch));
     }
     if (row.backportTargets > 0) {
-      /** @type {ChipSpec} */
+      /** @type {import('../common/chips.js').ChipSpec} */
       const backports = { text: `Backports ${row.backportsDone} of ${row.backportTargets}` };
       if (row.backportsDone < row.backportTargets) backports.tone = 'attention';
       chips.push(backports);
@@ -1094,7 +1010,7 @@ if (typeof require === 'function') {
     main.append(link);
     main.append(element(doc, 'div', 'mt-1 text-small bghsa-list-meta', metaTextOf(row)));
     const chips = element(doc, 'div', 'mt-1 bghsa-list-chips');
-    for (const spec of chipsFor(row)) chips.append(chip(doc, spec));
+    for (const spec of chipsFor(row)) chips.append(globalThis.bghsa.chips.buildChip(doc, spec));
     main.append(chips);
     item.append(main);
 
@@ -1104,7 +1020,7 @@ if (typeof require === 'function') {
       // it is dimmed whatever else the row holds: color never carries a fact a
       // chip's words leave out. A draft with no patch takes a chip of its own
       // beside the title.
-      state.append(chip(doc, { text: row.state }));
+      state.append(globalThis.bghsa.chips.buildChip(doc, { text: row.state }));
     }
     item.append(state);
 
@@ -2299,14 +2215,8 @@ if (typeof require === 'function') {
     VIEW_TABLE,
     VIEW_NATIVE,
     PARSED_SELECTORS,
-    sentenceCase,
-    formatTime,
-    isDefaultView,
     observedTextOf,
-    patchStateOf,
     backportsDoneIn,
-    cveTextOf,
-    AVATAR_PIXELS,
     avatarUrlFor,
     unreadRow,
     viewRow,
@@ -2319,45 +2229,28 @@ if (typeof require === 'function') {
     facetFor,
     defaultViewState,
     matchesFilter,
-    matchesView,
     sortFor,
     applyView,
     filterOptions,
-    DEFAULT_SORT_LABEL,
     RESET_LABEL,
     EMPTY_TEXT,
     WALKING_TEXT,
     FACET_ATTRIBUTE,
     VALUE_ATTRIBUTE,
-    SORT_LABEL,
     ANY_LABEL,
-    viewStateOf,
     setViewState,
-    viewCountText,
     progressOf,
     progressChip,
-    setProgress,
-    leftToRead,
-    menuItem,
-    menu,
-    filterItems,
-    buildControls,
-    drawControls,
     buildBody,
     refreshBody,
-    syncFilterOptions,
-    metaTextOf,
     countTextOf,
     buildOwners,
-    buildRow,
-    buildTable,
     nativeControls,
     surfaces,
     addSurface,
     viewMode,
     setViewMode,
     showingNative,
-    setShowingNative,
     applyVisibility,
     anchor,
     ensureStyle,
@@ -2365,18 +2258,12 @@ if (typeof require === 'function') {
     injectTable,
     pageOf,
     refOf,
-    stateOfRow,
-    fill,
-    listRows,
     render,
-    rowNode,
     applyEntry,
     refKey,
     queueFor,
     refresh,
     ensureRefresh,
-    ownWrite,
-    needsRender,
     renderLoop,
     passFor,
     observe,

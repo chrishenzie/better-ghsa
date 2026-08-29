@@ -813,39 +813,6 @@ test('the CVE, patch, backport, and embargo chips read what the advisory holds',
 });
 
 /**
- * @param {string | null} state
- * @returns {import('../src/common/derive.js').PatchState['pullRequests'][number]}
- */
-function pull(state) {
-  return { number: 1, url: null, title: 'p', state, baseRef: 'main', headRef: null, author: null, openedAt: null, assignees: [] };
-}
-
-/**
- * @param {import('../src/common/derive.js').PatchState['pullRequests']} pullRequests
- * @param {boolean} incomplete
- * @returns {import('../src/common/derive.js').PatchState}
- */
-function patchOf(pullRequests, incomplete) {
-  return { hasFork: true, pullRequests, branches: [], open: [], unknown: [], incomplete };
-}
-
-test('the patch chip reads Unknown over a pull request whose state went unread', () => {
-  const unread = table.patchStateOf(patchOf([pull(null)], true));
-  assert.ok(unread === 'Unknown', `a patch state this reader cannot judge: ${unread}`);
-});
-
-// Merging deletes the private fork and the Box that lists its pull requests, so
-// a merged patch is not observable from the advisory page and a pull request
-// closed without merging leaves the evidence an advisory with no fork leaves.
-// Each of these reads as the patch that is not there.
-test('a fork with no open pull request reads as no patch yet', () => {
-  assert.strictEqual(table.patchStateOf(patchOf([], false)), 'No patch yet');
-  assert.strictEqual(table.patchStateOf(patchOf([pull('closed')], false)), 'No patch yet');
-  assert.strictEqual(table.patchStateOf(patchOf([pull('merged')], false)), 'No patch yet');
-  assert.strictEqual(table.patchStateOf(patchOf([pull('open')], false)), 'Patch in review');
-});
-
-/**
  * @param {readonly {branch: string, open: boolean}[]} branches
  * @returns {import('../src/common/derive.js').PatchState}
  */

@@ -6,6 +6,7 @@ globalThis.bghsa ??= /** @type {BghsaNamespace} */ ({});
 if (typeof require === 'function') {
   require('../common/parse-detail.js');
   require('../common/merge.js');
+  require('../common/chips.js');
 }
 
 /**
@@ -70,13 +71,14 @@ if (typeof require === 'function') {
    */
   function buildChip(doc, alert) {
     const parse = globalThis.bghsa.parseDetail;
-    const node = doc.createElement('span');
-    node.className = `Label Label--secondary bghsa-tone-${CHIP_TONE[alert.kind]}`;
+    const node = globalThis.bghsa.chips.buildChip(doc, {
+      text: CHIP_TEXT[alert.kind],
+      tone: CHIP_TONE[alert.kind],
+    });
     node.setAttribute(parse.EXTENSION_CHIP_ATTRIBUTE, alert.kind);
     // A warning with nothing to add carries no tooltip, so hovering the chip
     // does not repeat the words already on it.
     if (alert.message !== '') node.setAttribute('title', alert.message);
-    node.textContent = CHIP_TEXT[alert.kind];
     return node;
   }
 

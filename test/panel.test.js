@@ -10,6 +10,7 @@ const parse = require('../src/common/parse-detail.js');
 const derive = require('../src/common/derive.js');
 const merge = require('../src/common/merge.js');
 const schema = require('../src/common/schema.js');
+const chips = require('../src/common/chips.js');
 const dom = require('../src/common/dom.js');
 const panel = require('../src/detail/panel.js');
 const tracking = require('../src/detail/tracking.js');
@@ -176,6 +177,15 @@ function rowText(root, label) {
 
 /**
  * @param {Element} root
+ * @returns {string[]} the chips in the header that carry a date, which is what
+ *   an embargo would read as.
+ */
+function headerDates(root) {
+  return texts(root, '.Box-header .Label').filter((label) => /\d{4}-\d{2}-\d{2}/.test(label));
+}
+
+/**
+ * @param {Element} root
  * @param {string} label the chip's own text.
  * @returns {string} the class attribute of the chip reading `label`.
  */
@@ -273,15 +283,15 @@ function withRenamedField(name) {
   }
 }
 
-test('a signal that is not firing carries no chip', () => {
-  const state = derive.derive(triage);
-  assert.strictEqual(state.neverReviewed, false);
-  assert.strictEqual(state.newActivity, false);
-  const chips = texts(build(triage), '.Box-header .Label');
-  assert.deepStrictEqual(
-    chips.filter((label) => label === 'Never reviewed' || label === 'New activity'),
-    []
-  );
+test('an advisory that is dealt with carries no waiting chip', async () => {
+  // A published or closed advisory has no row on the list, so there is no
+  // waiting state to agree with and nothing a maintainer is waiting on.
+  assert.strictEqual(published.state, 'Published');
+  const built = await buildTracked(published);
+  assert.deepStrictEqual(texts(built, '.Box-header .Label'), []);
+  const closed = { ...published, state: 'Closed', timeline: [] };
+  assert.strictEqual(derive.derive(closed).neverReviewed, true);
+  assert.deepStrictEqual(texts(build(closed), '.Box-header .Label'), []);
 });
 
 test('an embargo past its lift date says overdue in words, not only in tone', async () => {
@@ -310,7 +320,7 @@ test('an embargo with no lift date is a chip saying so', async () => {
 
 test('an advisory with no embargo carries no chip about one', async () => {
   const built = await buildWith(triage, { triage: 'evaluating' });
-  assert.deepStrictEqual(texts(built, '.Box-header .Label'), []);
+  assert.deepStrictEqual(headerDates(built), []);
   assert.deepStrictEqual(rowLabels(built).includes('Embargo'), false);
 });
 
@@ -561,10 +571,10 @@ test('a closed advisory shows the reason and what it duplicates', async () => {
 });
 
 test('a chip carrying a stored value is sentence-cased, and a login is not', async () => {
-  assert.strictEqual(panel.sentenceCase('awaiting reporter'), 'Awaiting reporter');
-  assert.strictEqual(panel.sentenceCase('not a vulnerability'), 'Not a vulnerability');
-  assert.strictEqual(panel.sentenceCase('Already capital'), 'Already capital');
-  assert.strictEqual(panel.sentenceCase(''), '');
+  assert.strictEqual(chips.sentenceCase('awaiting reporter'), 'Awaiting reporter');
+  assert.strictEqual(chips.sentenceCase('not a vulnerability'), 'Not a vulnerability');
+  assert.strictEqual(chips.sentenceCase('Already capital'), 'Already capital');
+  assert.strictEqual(chips.sentenceCase(''), '');
   const built = await buildWith(triage, {
     triage: 'awaiting reporter',
     owners: ['samuelkarp'],
@@ -628,7 +638,7 @@ test('injecting twice leaves one panel', () => {
 
 test('a state the panel could not read carries the unknown chip', () => {
   const built = build({ ...triage, state: null });
-  assert.deepStrictEqual(texts(built, '.Box-header .Label'), ['Unknown']);
+  assert.deepStrictEqual(texts(built, '.Box-header .Label'), ['Unknown', 'Blocked on us']);
   assert.strictEqual(
     chipClass(built, 'Unknown'),
     'Label Label--secondary bghsa-tone-attention'
