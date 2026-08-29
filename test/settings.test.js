@@ -117,13 +117,17 @@ test('the manifest forbids any page from framing the extension pages', () => {
     assert.ok(!policy.includes(loose), `the policy carries ${loose}`);
 });
 
-test('a fresh install shows an empty list and says the extension is doing nothing', async () => {
+test('a fresh install shows an empty list and says what to do about it', async () => {
   allowlist.setStorage(memory());
   const { document } = page();
   await settings.start(document);
 
   assert.deepStrictEqual(shown(document), []);
-  assert.ok(document.getElementById('empty')?.hasAttribute('hidden') === false, 'nothing said so');
+  const empty = document.getElementById('empty');
+  assert.ok(empty?.hasAttribute('hidden') === false, 'nothing said so');
+  // On a fresh install this is the only thing on the page explaining why
+  // nothing is happening, so it names the next step rather than the absence.
+  assert.strictEqual(empty?.textContent?.trim(), 'Add a repository to get started');
 });
 
 test('a repository typed into the page is stored and listed', async () => {
