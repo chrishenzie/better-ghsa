@@ -273,12 +273,7 @@ if (typeof require === 'function') {
       );
     }
     if (advisory.title === null || advisory.description === null) {
-      return availability(
-        true,
-        false,
-        'unreadable',
-        'Error: this extension could not read the advisory title and description.'
-      );
+      return availability(true, false, 'unreadable', 'Error: failed to parse advisory');
     }
     return availability(true, true, null, 'Preserve the title and description in a comment.');
   }

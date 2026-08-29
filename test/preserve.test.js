@@ -390,6 +390,30 @@ test('a title or description that did not read refuses the write', () => {
     const state = preserve.offered(record);
     assert.strictEqual(state.writable, false);
     assert.strictEqual(state.reason, 'unreadable');
+    assert.strictEqual(state.message, 'Error: failed to parse advisory');
+  }
+});
+
+test('what refuses the press is what the body cannot be built from', () => {
+  // The comment holds the title and the description, and is written only where
+  // the description is the reporter's own text. A press is refused on exactly
+  // the readings that build no body, so the refusal a maintainer sees always
+  // names which of the three did not read.
+  for (const title of [advisory.title, null]) {
+    for (const description of [advisory.description, null]) {
+      for (const original of [advisory.descriptionOriginal, null]) {
+        const record = { ...advisory, title, description, descriptionOriginal: original };
+        const state = preserve.offered(record);
+        const built = preserve.buildBody(record, MARKER);
+        assert.strictEqual(
+          state.writable,
+          built !== null,
+          `title=${String(title)} description=${String(description)}` +
+            ` original=${String(original)} was ${state.writable ? 'writable' : 'refused'}` +
+            ` and built ${built === null ? 'nothing' : 'a body'}`
+        );
+      }
+    }
   }
 });
 
