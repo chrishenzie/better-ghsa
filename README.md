@@ -15,8 +15,8 @@ on](#choosing-the-repositories-it-acts-on).
 A repository's security advisories arrive as private reports and stay private
 while maintainers decide what to do with them. GitHub gives each advisory a
 state (triage, draft, published, closed), a severity, and a comment thread. It
-gives no place to record who owns the report, whether anyone has checked the
-title and the score the reporter proposed, which release branches need a
+does not give a place to record who owns the report, whether anyone has checked
+the title and the score the reporter proposed, which release branches need a
 backport, whether an embargo applies and when it lifts, or why an advisory was
 closed. Maintainers keep that in their heads, in chat, or nowhere.
 
@@ -32,14 +32,14 @@ maintainer's state comment on an advisory and merges them into one current
 state.
 
 There is no server and no database. Nothing is synchronized between browsers.
-An advisory carries its own state, so a maintainer who has never installed the
-extension is not required for it to work, and a maintainer who uninstalls it
-loses nothing that was saved.
+An advisory carries its own state. One maintainer can use the extension while
+the others work through GitHub's own interface, and a maintainer who uninstalls
+it loses nothing that was saved.
 
 The reporter of an advisory can read the whole thread, state comments included.
 The vocabulary the extension uses is written to be read that way: nothing is
-encoded or obfuscated. Saving posts or edits a comment, and posting notifies
-the advisory's participants, the reporter among them.
+encoded or obfuscated. Saving posts or edits a comment. Posting notifies the
+advisory's participants, the reporter among them.
 
 The extension keeps a local cache so pages draw immediately. The cache is never
 authoritative and is always rebuildable by re-reading the advisories.
@@ -77,13 +77,13 @@ Firefox 128 or later:
 3. Press "Load Temporary Add-on" and choose the `manifest.json` at the top of
    the clone.
 
-A temporary add-on is removed when Firefox closes, so this is repeated each
-session.
+A temporary add-on is removed when Firefox closes. These steps are repeated
+each session.
 
-Firefox 128 is the floor for two reasons. Firefox before 127 neither shows the
-`github.com` host permission at install nor grants it, so the content scripts
-never inject and the extension appears to do nothing. Firefox before 128 cannot
-receive extension updates at all.
+Firefox 128 is the floor for two reasons. Firefox 127 is the first version that
+shows the `github.com` host permission at install and grants it. Without that
+permission the content scripts never inject and the extension appears to do
+nothing. Firefox before 128 cannot receive extension updates at all.
 
 Chrome:
 
@@ -94,15 +94,9 @@ Chrome:
 Chrome logs a warning about the Firefox-specific settings in the manifest and
 loads the extension.
 
-A loaded extension is inert. It acts on nothing until a repository is listed in
-its settings.
-
 ## Choosing the repositories it acts on
 
-The extension acts only on repositories listed in its settings. The list is
-empty when the extension is installed, so until a repository is added the
-extension does nothing on any page: no panel, no table, nothing read, nothing
-stored.
+The extension acts only on repositories listed in its settings.
 
 Every advisory list and every advisory page carries one control, a
 `Better GHSA settings` button, which opens the settings in a new tab. On a
@@ -130,11 +124,10 @@ that repository stops as soon as the entry goes.
 - It works from the `github.com` session already logged in to the browser. It
   never asks for a token and never stores a credential.
 - It contacts `github.com` and nothing else.
-- It collects no telemetry and sends no analytics.
+- It does not collect telemetry or send analytics.
 
-The list bounds reading as well as writing. An advisory on a repository nobody
-listed is not read, not cached, and not written to.
-[PRIVACY.md](PRIVACY.md) sets out what is stored, where, and how to clear it.
+[PRIVACY.md](PRIVACY.md) sets out what is stored and where. Removing the
+extension is the only way to clear it.
 
 ## Limitations
 
@@ -146,8 +139,8 @@ pages, and GitHub's changes will break it. When that happens the visible
 symptoms are missing values, an incomplete banner, or a refused write.
 
 Everything it displays is a poll. Other maintainers write through their own
-browsers and GitHub changes derived state without telling the extension, so
-every row and panel carries the time its data was read.
+browsers and GitHub changes derived state without telling the extension. Every
+row and panel carries the time its data was read.
 
 Version 1 is built for one repository and one workflow: a containerd maintainer
 working `containerd/containerd`. Cross-repository views, org-wide views, and a
