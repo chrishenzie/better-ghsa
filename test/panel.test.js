@@ -370,25 +370,31 @@ test('the confirmations go with the state, and with nothing else about the page'
   }
 });
 
-test('a published advisory keeps every part of the panel but the confirmations', async () => {
-  const payload = { triage: 'awaiting reporter', owners: ['samuelkarp'] };
-  const open = await buildWith({ ...triage, state: 'Draft' }, payload);
-  const done = await buildWith({ ...triage, state: 'Published' }, payload);
-  assert.deepStrictEqual(panelParts(open), [
-    'bghsa-chips',
-    'bghsa-confirmed',
-    'Triage',
-    'Owners',
-    'Original report',
-  ]);
-  // The description is answered inside the confirmations, so a published
-  // advisory carries neither.
-  assert.deepStrictEqual(panelParts(done), [
-    'bghsa-chips',
-    'Triage',
-    'Owners',
-    'Original report',
-  ]);
+test('a dealt-with advisory offers no preserve button and no row', async () => {
+  // One advisory, read once, under the state that is the only difference
+  // between the panels. The open state is asserted the same way, so a
+  // selector that matched nothing anywhere would fail here.
+  const payload = { triage: 'awaiting reporter' };
+  /** @type {readonly [string, boolean][]} */
+  const states = [
+    ['Triage', true],
+    ['Draft', true],
+    ['Published', false],
+    ['Closed', false],
+  ];
+  for (const [state, offered] of states) {
+    const built = await buildWith({ ...triage, state }, payload);
+    assert.strictEqual(
+      built.querySelector('button.bghsa-preserve') !== null,
+      offered,
+      `the preserve button under the state ${state}`
+    );
+    assert.strictEqual(
+      rowLabels(built).includes('Original report'),
+      offered,
+      `the original report row under the state ${state}: ${rowLabels(built).join(', ')}`
+    );
+  }
 });
 
 test('a confirmed value names who confirmed it and when', async () => {

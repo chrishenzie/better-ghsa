@@ -267,7 +267,10 @@ Advisories a maintainer files are treated the same as any other.
 
 The extension adds a panel that displays derived state, displays and edits
 stored state, and shows whether each confirmation stands. It offers the button
-that preserves the original report.
+that preserves the original report while the advisory is in triage or draft.
+Once an advisory is published or closed it is dealt with, and capturing the
+reporter's original wording serves nothing, so neither the button nor the row
+is shown.
 
 On a repository the allowlist does not carry, the panel displays and offers
 nothing to press: no editing controls, no save, and no preserve. A control that

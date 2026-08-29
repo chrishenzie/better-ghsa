@@ -182,20 +182,25 @@ if (typeof require === 'function') {
   }
 
   /**
-   * The advisory states the confirmations are not shown in.
+   * The advisory states the confirmations and the original report row are not
+   * shown in.
    *
    * @type {readonly string[]}
    */
   const SETTLED_STATES = ['published', 'closed'];
 
   /**
-   * Whether this advisory is past the point the confirmations answer for.
+   * Whether this advisory is past the point the confirmations answer for, and
+   * past the point preserving the reporter's wording serves anything.
    *
    * A confirmation says whether the text was made publishable and the score
    * approved, publication answers that by having happened, and a closed advisory
    * will never be published. A state this reader could not read is not one of
    * these, because an advisory on its way to publication is where the answer
    * still matters.
+   *
+   * REQUIREMENTS.md section 8 puts the preserve button and its row under the
+   * same test: an advisory that is published or closed is dealt with.
    *
    * @param {import('../common/parse-detail.js').ParsedDetail} advisory
    * @returns {boolean}
@@ -412,6 +417,9 @@ if (typeof require === 'function') {
    * the comment gets no button, because the extension writes one per advisory,
    * and the row is a link to that comment.
    *
+   * The caller decides whether the row belongs on this advisory at all: a
+   * settled one carries neither the row nor the availability read behind it.
+   *
    * @param {Document} doc
    * @param {import('../common/parse-detail.js').ParsedDetail} advisory
    * @returns {Element}
@@ -468,9 +476,12 @@ if (typeof require === 'function') {
     // for it, and a value with no row of its own goes unmentioned: the panel
     // says what the advisory is, and there is nothing to act on in a list of
     // what a parser missed.
-    if (!settled(advisory)) panel.append(buildConfirmations(doc, tracking, advisory));
+    const dealtWith = settled(advisory);
+    if (!dealtWith) panel.append(buildConfirmations(doc, tracking, advisory));
     for (const track of buildTracks(doc, tracking, embargoOverdue)) panel.append(track);
-    panel.append(buildPreserve(doc, advisory));
+    // A dealt-with advisory gets no row and no availability read: what the
+    // button offers is only asked once there is a button to offer it.
+    if (!dealtWith) panel.append(buildPreserve(doc, advisory));
 
     // Last, under everything it edits, so the panel reads as state first and
     // the one control that changes it sits where a reader has finished looking.
