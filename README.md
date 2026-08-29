@@ -1,0 +1,148 @@
+# Better GHSA
+
+A Firefox and Chrome extension that adds triage tracking to GitHub Security
+Advisories, for the maintainers who work them.
+
+## What it is for
+
+A repository's security advisories arrive as private reports and stay private
+while maintainers decide what to do with them. GitHub gives each advisory a
+state (triage, draft, published, closed), a severity, and a comment thread. It
+gives no place to record who owns the report, whether anyone has checked the
+title and the score the reporter proposed, which release branches need a
+backport, whether an embargo applies and when it lifts, or why an advisory was
+closed. Maintainers keep that in their heads, in chat, or nowhere.
+
+This extension keeps it on the advisory.
+
+## Where the state lives
+
+Each maintainer's triage state is written into a comment on the advisory
+itself: one comment per maintainer per advisory, created on that maintainer's
+first save and edited on every save after that. The comment is a collapsed
+`<details>` block holding a JSON snapshot. The extension reads every
+maintainer's state comment on an advisory and merges them into one current
+state.
+
+There is no server and no database. Nothing is synchronized between browsers.
+An advisory carries its own state, so a maintainer who has never installed the
+extension is not required for it to work, and a maintainer who uninstalls it
+loses nothing that was saved.
+
+The reporter of an advisory can read the whole thread, state comments included.
+The vocabulary the extension uses is written to be read that way: nothing is
+encoded or obfuscated. Saving posts or edits a comment, and posting notifies
+the advisory's participants, the reporter among them.
+
+The extension keeps a local cache so pages draw immediately. The cache is never
+authoritative and is always rebuildable by re-reading the advisories.
+
+## The three surfaces
+
+**The advisory detail panel** sits on an advisory page. It shows what the
+extension derived from the page (patch progress in the private fork, CVE state,
+how long the advisory has been waiting, whether anyone has reviewed it), shows
+and edits the stored triage state, and offers a button that preserves the
+reporter's original title and description in a comment before maintainers
+rewrite them for publication. See [docs/detail-panel.md](docs/detail-panel.md).
+
+**The advisory list** replaces the body of a repository's advisory list with a
+table of open advisories, ordered so that the ones needing attention are at the
+top, with chips for waiting state, patch progress, confirmations, CVE,
+severity, and embargo, and with filters and sorts over them. A toggle restores
+GitHub's own view. See [docs/advisory-list.md](docs/advisory-list.md).
+
+**The completed view** lists published and closed advisories and records a
+closure reason on each, including retroactively on advisories closed before the
+extension existed. A statistics view sits beside it with counts and response
+timings over the whole corpus and a CSV export. See
+[docs/completed.md](docs/completed.md).
+
+## Installing it
+
+There is no build step and no store listing. The extension is the repository
+contents, loaded from disk.
+
+Firefox 128 or later:
+
+1. Clone the repository.
+2. Open `about:debugging#/runtime/this-firefox`.
+3. Press "Load Temporary Add-on" and choose the `manifest.json` at the top of
+   the clone.
+
+A temporary add-on is removed when Firefox closes, so this is repeated each
+session.
+
+Firefox 128 is the floor for two reasons. Firefox before 127 neither shows the
+`github.com` host permission at install nor grants it, so the content scripts
+never inject and the extension appears to do nothing. Firefox before 128 cannot
+receive extension updates at all.
+
+Chrome:
+
+1. Open `chrome://extensions`.
+2. Turn on Developer mode.
+3. Press "Load unpacked" and choose the top of the clone.
+
+Chrome logs a warning about the Firefox-specific settings in the manifest and
+loads the extension.
+
+## What it can reach
+
+- It writes only to repositories named in an allowlist compiled into its source,
+  at `src/common/allowlist.js`. A write anywhere else is refused. The shipped
+  list is `containerd/containerd` and `git-utensils/Spoon-Knife`. Changing it
+  means editing that file and reloading the extension.
+- The only things it ever writes to GitHub are its own two comment types: the
+  state comment and the preserved original report. It never changes an
+  advisory's title, description, severity, CVSS vector, CWEs, CVE, state, or
+  collaborators.
+- It works from the `github.com` session already logged in to the browser. It
+  never asks for a token and never stores a credential.
+- It contacts `github.com` and nothing else.
+- It collects no telemetry and sends no analytics.
+
+The allowlist bounds writing. It does not bound reading: the extension reads and
+caches advisory pages on any repository whose advisory pages are opened.
+[PRIVACY.md](PRIVACY.md) sets out what is stored, where, and how to clear it.
+
+## Limitations
+
+The GitHub REST API exposes neither advisory comments nor the advisory timeline,
+which is where all of this state and most of the derived state lives. So the
+extension reads GitHub's HTML and posts through the same forms the page posts
+through. It depends on undocumented endpoints and on the structure of GitHub's
+pages, and GitHub's changes will break it. When that happens the visible
+symptoms are missing values, an incomplete banner, or a refused write.
+
+Everything it displays is a poll. Other maintainers write through their own
+browsers and GitHub changes derived state without telling the extension, so
+every row and panel carries the time its data was read.
+
+Version 1 is built for one repository and one workflow: a containerd maintainer
+working `containerd/containerd`. Cross-repository views, org-wide views, and a
+configurable vocabulary are not in it.
+
+## How this was written
+
+This repository was written almost entirely by coding assistants, under the
+direction of its author. That is worth knowing before installing it.
+
+The test suite passes and the code type-checks. Neither fact establishes that
+the design is coherent or that the implementation is trustworthy, and neither
+substitutes for reading the code. This extension writes to real security
+advisories, in front of the people who reported them, and a wrong write puts a
+permanent claim on a live vulnerability report that no other maintainer can edit
+out. Read `src/common/write.js` and `src/common/allowlist.js` before pointing it
+at a repository you care about.
+
+## Documents
+
+- [PRIVACY.md](PRIVACY.md), the privacy policy.
+- [docs/](docs/), one page per surface, plus
+  [docs/testing.md](docs/testing.md) on running the tests.
+- [REQUIREMENTS.md](REQUIREMENTS.md), what the extension is required to do.
+
+## License
+
+Apache License 2.0. See [LICENSE](LICENSE).
