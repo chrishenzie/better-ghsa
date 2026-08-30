@@ -153,7 +153,7 @@ test('a revised description reports who revised it and where the log lives', () 
   if (published === null) throw new Error('published-containerd.html did not parse');
   assert.strictEqual(published.descriptionOriginal, false);
   assert.deepStrictEqual(published.descriptionRevision, {
-    summary: 'edited by samuelkarp',
+    summary: 'edited by marlowe-tsu',
     historyUrl: '/containerd/containerd/security/advisories/GHSA-6r4h-2xvq-wm93/edit_history_log',
   });
 });
@@ -177,7 +177,7 @@ test('a description Box carrying no revision control reports originality unknown
 test('a page with no description Box reports the reporter and originality unknown', () => {
   const root = document(
     '<div class="gh-header-meta"><span class="State">Published</span>' +
-      '<a class="author" href="/samuelkarp">samuelkarp</a>' +
+      '<a class="author" href="/marlowe-tsu">marlowe-tsu</a>' +
       '<relative-time datetime="2026-08-03T22:11:52Z">Aug 3, 2026</relative-time>' +
       '</div>'
   );

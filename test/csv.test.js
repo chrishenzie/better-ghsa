@@ -129,18 +129,18 @@ test('the export carries one record per corpus member, under the columns', () =>
     state: 'Published',
     severity: 'high',
     title: 'Path traversal in the drawer handler',
-    reportedAt: '2026-04-07T18:05:12Z',
+    reportedAt: '2026-05-04T14:00:00Z',
     comments: [
       comment({ author: 'samuelkarp', role: 'Member', at: '2026-05-04T14:30:00Z' }),
       comment({
         author: 'samuelkarp',
         role: 'Member',
-        at: '2026-03-01T00:00:00Z',
+        at: '2026-05-11T00:00:00Z',
         state: {
           betterGhsa: '1.0',
           seq: 1,
           by: 'samuelkarp',
-          at: '2026-03-01T00:00:00Z',
+          at: '2026-05-11T00:00:00Z',
           closure: { reason: 'fixed' },
         },
       }),
@@ -194,7 +194,7 @@ test('the export carries one record per corpus member, under the columns', () =>
   assert.strictEqual(
     lines[1],
     'GHSA-aaaa-aaaa-aaaa,Path traversal in the drawer handler,published,high,fixed,' +
-      '2026-04-07T18:05:12Z,2026-05,1800000,3600000,86400000,172800000,yes,' +
+      '2026-05-04T14:00:00Z,2026-05,1800000,3600000,86400000,172800000,yes,' +
       '2026-08-27T09:00:00.000Z'
   );
   // Nothing has read this one, so the timings and the values only an advisory
