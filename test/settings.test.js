@@ -7,6 +7,9 @@ const path = require('node:path');
 const { parseHTML } = require('linkedom');
 
 const allowlist = require('../src/common/allowlist.js');
+const branches = require('../src/common/branches.js');
+const cache = require('../src/common/cache.js');
+const members = require('../src/common/members.js');
 const settings = require('../src/settings/settings.js');
 
 const { fakeStorage } = require('../test-support/storage.js');
@@ -75,8 +78,96 @@ async function type(doc, typed) {
   return settings.submit(doc);
 }
 
+/**
+ * @param {Document} doc
+ * @returns {string} what the page is saying about the clear, and empty where it
+ *   is saying nothing.
+ */
+function clearedText(doc) {
+  const status = doc.getElementById('clear-status');
+  if (status === null || status.hasAttribute('hidden')) return '';
+  return status.textContent ?? '';
+}
+
+/** Two repositories in one organization, and one in another. */
+const CONTAINERD = 'containerd/containerd';
+const NERDCTL = 'containerd/nerdctl';
+const SPOON = 'git-utensils/spoon-knife';
+
+/**
+ * The keys one repository's reads are held under.
+ *
+ * @param {string} repository
+ * @returns {string[]}
+ */
+function keysOf(repository) {
+  return [
+    `${cache.ADVISORY_PREFIX}${repository}:ghsa-1111-2222-3333`,
+    `${cache.LIST_PREFIX}${repository}`,
+    `${cache.PROGRESS_PREFIX}${repository}`,
+  ];
+}
+
+/**
+ * Everything a browser that has read these repositories holds besides the list.
+ *
+ * @param {readonly string[]} repositories
+ * @returns {Record<string, unknown>}
+ */
+function reads(repositories) {
+  /** @type {Record<string, unknown>} */
+  const held = {};
+  /** @type {Record<string, string[]>} */
+  const branchesHeld = {};
+  /** @type {Record<string, string[]>} */
+  const membersHeld = {};
+  for (const repository of repositories) {
+    for (const key of keysOf(repository)) {
+      held[key] = { record: { state: 'triage' }, observedAt: 1, state: 'triage' };
+    }
+    branchesHeld[repository] = ['release/2.1'];
+    membersHeld[String(repository.split('/')[0])] = ['samuelkarp'];
+  }
+  held[branches.BRANCHES_KEY] = branchesHeld;
+  held[members.MEMBERS_KEY] = membersHeld;
+  return held;
+}
+
+/**
+ * @param {ReturnType<typeof memory>} store
+ * @param {string} repository
+ * @returns {string[]} the keys storage still holds for that repository.
+ */
+function survivors(store, repository) {
+  return keysOf(repository).filter((key) => Object.hasOwn(store.entries, key));
+}
+
+/**
+ * @param {ReturnType<typeof memory>} store
+ * @param {string} key
+ * @returns {string[]} the names the map at that key still carries.
+ */
+function namesIn(store, key) {
+  const value = store.entries[key];
+  return value === undefined || value === null ? [] : Object.keys(value).sort();
+}
+
+/**
+ * @param {Document} doc
+ * @param {any} window
+ * @returns {Promise<void>} presses the control that empties the stores and lets
+ *   the reads and writes it starts land.
+ */
+async function pressClear(doc, window) {
+  const button = doc.getElementById('clear-button');
+  assert.ok(button !== null, 'the page carries no control that clears the cache');
+  button.dispatchEvent(new window.Event('click', { bubbles: true }));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 test.afterEach(() => {
   allowlist.setStorage(null);
+  cache.setStorage(null);
 });
 
 test('the manifest declares the settings page and no background script', () => {
@@ -262,4 +353,91 @@ test('a list changed elsewhere is redrawn without the page being reloaded', asyn
 
   await allowlist.save(['git-utensils/spoon-knife']);
   assert.deepStrictEqual(shown(document), ['git-utensils/spoon-knife']);
+});
+
+test('pressing Clear cache empties every store and leaves the list', async () => {
+  const store = memory([CONTAINERD, NERDCTL, SPOON], reads([CONTAINERD, NERDCTL, SPOON]));
+  allowlist.setStorage(store);
+  cache.setStorage(store);
+  const { window, document } = page();
+  await settings.start(document);
+
+  await pressClear(document, window);
+
+  for (const repository of [CONTAINERD, NERDCTL, SPOON]) {
+    assert.deepStrictEqual(survivors(store, repository), [], `${repository} survived the clear`);
+  }
+  assert.strictEqual(Object.hasOwn(store.entries, members.MEMBERS_KEY), false, 'members survived');
+  assert.strictEqual(Object.hasOwn(store.entries, branches.BRANCHES_KEY), false, 'branches survived');
+  // The list is what the clear leaves, so the extension goes on running where
+  // it was listed. REQUIREMENTS.md section 2.
+  assert.deepStrictEqual(store.entries[allowlist.STORAGE_KEY], [CONTAINERD, NERDCTL, SPOON]);
+  assert.deepStrictEqual(Object.keys(store.entries), [allowlist.STORAGE_KEY]);
+  assert.deepStrictEqual(shown(document), [CONTAINERD, NERDCTL, SPOON]);
+  assert.strictEqual(allowlist.isAllowed(CONTAINERD), true);
+});
+
+test('a press of Clear cache is answered on the page', async () => {
+  const store = memory([CONTAINERD], reads([CONTAINERD]));
+  allowlist.setStorage(store);
+  cache.setStorage(store);
+  const { window, document } = page();
+  await settings.start(document);
+  assert.strictEqual(clearedText(document), '');
+
+  await pressClear(document, window);
+  assert.strictEqual(clearedText(document), settings.CLEARED_MESSAGE);
+
+  // It comes down again the next time the maintainer works the list, so what
+  // the page says answers the last thing that was pressed.
+  await type(document, 'containerd/nerdctl');
+  assert.strictEqual(clearedText(document), '');
+});
+
+test('pressing Remove clears that repository and leaves the others', async () => {
+  const listed = [CONTAINERD, NERDCTL, SPOON];
+  const store = memory(listed, reads(listed));
+  allowlist.setStorage(store);
+  cache.setStorage(store);
+  const { window, document } = page();
+  await settings.start(document);
+
+  const button = document.querySelector(`#list button[data-entry="${CONTAINERD}"]`);
+  assert.ok(button !== null, 'the row carries no control that removes it');
+  button.dispatchEvent(new window.Event('click', { bubbles: true }));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.deepStrictEqual(survivors(store, CONTAINERD), []);
+  assert.deepStrictEqual(survivors(store, NERDCTL), keysOf(NERDCTL));
+  assert.deepStrictEqual(survivors(store, SPOON), keysOf(SPOON));
+  assert.deepStrictEqual(namesIn(store, branches.BRANCHES_KEY), [NERDCTL, SPOON].sort());
+  // `containerd/nerdctl` is still listed, so the organization's members stay.
+  assert.deepStrictEqual(namesIn(store, members.MEMBERS_KEY), ['containerd', 'git-utensils']);
+  assert.deepStrictEqual(shown(document), [NERDCTL, SPOON]);
+});
+
+test('the page loads every file its script reaches, in an order that works', () => {
+  // The page is not a content script, so the manifest does not order what it
+  // loads and its own script tags do. A file reached through `bghsa` but never
+  // loaded, or loaded after the file that reaches it, is a page that throws on
+  // a press and a suite that never sees it: the tests here load each file
+  // through `require`, which finds them whatever the page says.
+  const html = fs.readFileSync(path.join(root, 'src', 'settings', 'settings.html'), 'utf8');
+  const loaded = [...html.matchAll(/<script src="([^"]+)"><\/script>/g)].map((found) =>
+    path.posix.normalize(path.posix.join('src/settings', String(found[1])))
+  );
+  assert.strictEqual(loaded.at(-1), 'src/settings/settings.js', 'the page script is not last');
+
+  /** @type {string[]} */
+  const already = [];
+  for (const file of loaded) {
+    const source = fs.readFileSync(path.join(root, file), 'utf8');
+    for (const found of source.matchAll(/require\('([^']+)'\)/g)) {
+      const needed = path.posix.normalize(
+        path.posix.join(path.posix.dirname(file), String(found[1]))
+      );
+      assert.ok(already.includes(needed), `${file} reaches ${needed}, which the page has not loaded`);
+    }
+    already.push(file);
+  }
 });

@@ -93,10 +93,19 @@ pressing it do not read an advisory, store anything, or send a request.
 Entries persist until they are removed. Advisory and list reads are refreshed in
 place as pages are re-read. An advisory GitHub has stopped serving has its entry
 removed after three consecutive failures. The `members` and `branches` entries
-accumulate and are not removed automatically.
+accumulate, and nothing ages them out.
 
-The extension does not have an in-browser control that clears its storage. See
-"Clearing everything" below.
+The extension's settings page carries a `Clear cache` button. It empties the
+advisory reads, the advisory list reads, the refresh progress, and the `members`
+and `branches` entries. It leaves the `allowlist` entry, because clearing that
+would turn the extension off. Nothing is asked first, and nothing is lost: the
+extension reads what it needs again from the advisories.
+
+Removing a repository from the settings page empties what was stored for it: its
+advisory reads, its advisory list read, its refresh progress, and its branches
+in the `branches` entry. Its organization's logins in the `members` entry are
+kept while another repository from that organization is still listed, because
+that entry is keyed by organization.
 
 ## What is transmitted, and to whom
 
@@ -226,13 +235,17 @@ frame stays empty.
 
 ## Clearing everything
 
-Removing the extension deletes everything it stored. In Firefox, open
-`about:addons`, find Better GHSA, and remove it. In Chrome, open
+The `Clear cache` button on the extension's settings page empties everything it
+read, and leaves the list of repositories it acts on. See "Retention" above for
+what each control clears.
+
+Removing the extension deletes everything it stored, the list included. In
+Firefox, open `about:addons`, find Better GHSA, and remove it. In Chrome, open
 `chrome://extensions`, find Better GHSA, and press Remove. The browser deletes
 the extension's storage with it.
 
 Clearing site data for `github.com` in the browser's own settings does not
-remove the extension's storage; only removing the extension does.
+remove the extension's storage. The controls above are what reach it.
 
 Comments the extension wrote into GitHub advisories are not local data and are
 not affected. Delete those through GitHub.

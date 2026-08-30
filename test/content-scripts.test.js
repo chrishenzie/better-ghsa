@@ -75,6 +75,18 @@ const DECLARED = new Map(
 );
 
 /**
+ * @returns {string[]} the files the settings page loads with its own script
+ *   tags, by the path from the repository root, which is how the manifest and
+ *   the declaration both write a path.
+ */
+function pageScripts() {
+  const html = fs.readFileSync(path.join(root, 'src', 'settings', 'settings.html'), 'utf8');
+  return [...html.matchAll(/<script src="([^"]+)"><\/script>/g)].map((found) =>
+    path.posix.normalize(path.posix.join('src/settings', String(found[1])))
+  );
+}
+
+/**
  * @param {string} file A path the manifest loads, as it writes it.
  * @returns {string} the member that file has to leave behind.
  */
@@ -536,17 +548,21 @@ test('every manifest content script loads in one shared scope', async () => {
 
 test('every content script is declared under a name of its own', () => {
   // A file the declaration has no line for has no member this check could ask
-  // for, and one declared for a file the manifest never loads is a line nothing
-  // stands behind.
+  // for, and one declared for a file nothing loads is a line nothing stands
+  // behind.
   assert.deepStrictEqual(
     scripts.filter((file) => !DECLARED.has(file)),
     [],
     'a content script types/bghsa.d.ts declares no member for'
   );
+  // The settings page is not a content script and the manifest does not list
+  // what it loads, so the page itself says. A file only that page loads still
+  // hangs its exports off the shared namespace and is still declared.
+  const loaded = new Set([...scripts, ...pageScripts()]);
   assert.deepStrictEqual(
-    [...DECLARED.keys()].filter((file) => !scripts.includes(file)),
+    [...DECLARED.keys()].filter((file) => !loaded.has(file)),
     [],
-    'a member declared for a file the manifest does not load'
+    'a member declared for a file nothing loads'
   );
 
   // Two files under one member is the collision this check exists to catch:

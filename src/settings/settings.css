@@ -154,3 +154,12 @@ h2 {
   overflow-wrap: anywhere;
   font-family: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
 }
+
+.clear {
+  margin: 2rem 0 0;
+}
+
+.status {
+  margin: 0.5rem 0 0;
+  color: var(--muted-fg);
+}

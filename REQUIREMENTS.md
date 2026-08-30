@@ -52,7 +52,14 @@ The extension keeps a local cache in the browser. The cache is never
 authoritative and is always rederivable from the advisories. An entry is kept
 and refreshed on a schedule that follows the advisory's state, and a stale
 entry is shown while its refresh runs. An entry is evicted when its advisory no
-longer exists, and by a control that clears the cache immediately.
+longer exists, and by a control in the extension's settings that clears the
+cache immediately. That control leaves the repository list alone, because
+clearing the list would turn the extension off.
+
+Taking a repository off the list clears what was stored for it: its advisory
+reads, its list reads, its refresh progress, and the release branches observed
+on it. Observed organization members are keyed by organization, so they are
+cleared only when no repository from that organization is still listed.
 
 An entry's observation time is the time the content in it was read. A write
 this extension makes updates the entry to carry what was written, so a surface

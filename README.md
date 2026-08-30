@@ -128,8 +128,9 @@ that repository stops as soon as the entry goes.
   `avatars.githubusercontent.com`. The browser loads those images from there.
 - It does not collect telemetry or send analytics.
 
-[PRIVACY.md](PRIVACY.md) sets out what is stored and where. Removing the
-extension is the only way to clear it.
+[PRIVACY.md](PRIVACY.md) sets out what is stored and where. The settings page
+carries a `Clear cache` button that empties it, and removing a repository from
+the list empties what was stored for that repository.
 
 ## Limitations
 

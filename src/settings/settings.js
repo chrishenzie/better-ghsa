@@ -2,8 +2,12 @@
 
 globalThis.bghsa ??= /** @type {BghsaNamespace} */ ({});
 
-// The page's own script tags order these; under Node the dependency is named here.
-if (typeof require === 'function') require('../common/allowlist.js');
+// The page's own script tags order these; under Node the dependencies are named
+// here.
+if (typeof require === 'function') {
+  require('../common/allowlist.js');
+  require('../common/forget.js');
+}
 
 /**
  * The elements this page reads and writes.
@@ -14,6 +18,8 @@ if (typeof require === 'function') require('../common/allowlist.js');
  * @property {Element | null} error
  * @property {Element | null} empty
  * @property {Element | null} list
+ * @property {Element | null} clear
+ * @property {Element | null} status
  */
 
 (() => {
@@ -22,6 +28,13 @@ if (typeof require === 'function') require('../common/allowlist.js');
 
   /** What a repository already on the list is answered with. */
   const DUPLICATE_MESSAGE = 'That repository is already listed.';
+
+  /**
+   * What a press of the clear is answered with. The clear changes nothing the
+   * page draws, so without a word for it a maintainer cannot tell a press that
+   * emptied the cache from one the page never heard.
+   */
+  const CLEARED_MESSAGE = 'Cache cleared';
 
   /**
    * @param {Document} doc
@@ -34,6 +47,8 @@ if (typeof require === 'function') require('../common/allowlist.js');
       error: doc.getElementById('add-error'),
       empty: doc.getElementById('empty'),
       list: doc.getElementById('list'),
+      clear: doc.getElementById('clear-button'),
+      status: doc.getElementById('clear-status'),
     };
   }
 
@@ -49,6 +64,21 @@ if (typeof require === 'function') require('../common/allowlist.js');
     error.textContent = message ?? '';
     if (message === null) error.setAttribute('hidden', '');
     else error.removeAttribute('hidden');
+  }
+
+  /**
+   * @param {Document} doc
+   * @param {boolean} cleared Whether to say the cache has been emptied. It
+   *   comes down again the next time the maintainer works the list, so what the
+   *   page says answers the last thing that was pressed.
+   * @returns {void}
+   */
+  function showCleared(doc, cleared) {
+    const status = elementsOf(doc).status;
+    if (status === null) return;
+    status.textContent = cleared ? CLEARED_MESSAGE : '';
+    if (cleared) status.removeAttribute('hidden');
+    else status.setAttribute('hidden', '');
   }
 
   /**
@@ -105,6 +135,7 @@ if (typeof require === 'function') require('../common/allowlist.js');
    * @returns {Promise<boolean>} whether the list changed.
    */
   async function submit(doc) {
+    showCleared(doc, false);
     const { input } = elementsOf(doc);
     const typed = input?.value ?? '';
     const outcome = await globalThis.bghsa.allowlist.add(typed);
@@ -126,8 +157,28 @@ if (typeof require === 'function') require('../common/allowlist.js');
    */
   async function drop(doc, entry) {
     showError(doc, null);
+    showCleared(doc, false);
     const entries = await globalThis.bghsa.allowlist.remove(entry);
     render(doc, entries);
+    await globalThis.bghsa.forget.repository(entry, entries);
+  }
+
+  /**
+   * Empties what the extension has read. The repository list is left alone, so
+   * the extension goes on running where it was listed and fills the cache again
+   * as those pages are read. REQUIREMENTS.md section 2.
+   *
+   * Nothing is asked first. Everything this takes is rederivable from the
+   * advisories, so the cost of a press nobody meant is the reads that fill it
+   * back in.
+   *
+   * @param {Document} doc
+   * @returns {Promise<void>}
+   */
+  async function clear(doc) {
+    showError(doc, null);
+    await globalThis.bghsa.forget.everything();
+    showCleared(doc, true);
   }
 
   /**
@@ -139,7 +190,7 @@ if (typeof require === 'function') require('../common/allowlist.js');
    * @returns {Promise<void>}
    */
   async function start(doc = globalThis.document) {
-    const { form, list } = elementsOf(doc);
+    const { form, list, clear: control } = elementsOf(doc);
     form?.addEventListener('submit', (event) => {
       event.preventDefault();
       void submit(doc);
@@ -150,6 +201,9 @@ if (typeof require === 'function') require('../common/allowlist.js');
       const entry = button?.getAttribute('data-entry');
       if (entry === null || entry === undefined) return;
       void drop(doc, entry);
+    });
+    control?.addEventListener('click', () => {
+      void clear(doc);
     });
     const allowlist = globalThis.bghsa.allowlist;
     allowlist.watch();
@@ -162,12 +216,11 @@ if (typeof require === 'function') require('../common/allowlist.js');
   const exported = {
     MALFORMED_MESSAGE,
     DUPLICATE_MESSAGE,
-    elementsOf,
-    showError,
-    buildRow,
+    CLEARED_MESSAGE,
     render,
     submit,
     drop,
+    clear,
     start,
   };
 
