@@ -123,7 +123,9 @@ that repository stops as soon as the entry goes.
   collaborators.
 - It works from the `github.com` session already logged in to the browser. It
   never asks for a token and never stores a credential.
-- It contacts `github.com` and nothing else.
+- It contacts `github.com`. The owner icons in its advisory list are
+  `github.com` image addresses that GitHub redirects to
+  `avatars.githubusercontent.com`. The browser loads those images from there.
 - It does not collect telemetry or send analytics.
 
 [PRIVACY.md](PRIVACY.md) sets out what is stored and where. Removing the

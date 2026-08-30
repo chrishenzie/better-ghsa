@@ -14,7 +14,9 @@ No data reaches the extension's author.
 
 - Everything the extension stores is stored on your own device, in the browser's
   extension storage.
-- The only network host the extension contacts is `github.com`.
+- The extension requests one host, `github.com`. An owner icon in its advisory
+  list is a `github.com` image address that GitHub redirects to
+  `avatars.githubusercontent.com`. The browser loads the image from there.
 - The extension writes comments into GitHub advisories under your GitHub
   account. Those comments are visible to everyone who can read the advisory,
   including the person who reported the vulnerability.
@@ -98,8 +100,10 @@ The extension does not have an in-browser control that clears its storage. See
 
 ## What is transmitted, and to whom
 
-The extension sends requests to `https://github.com` and to no other host. It
-sends nothing to the extension's author or to any third party.
+The extension sends every request it makes to `https://github.com`. It sends
+nothing to the extension's author or to any third party. The browser also
+loads the owner icons from GitHub's avatar host, where GitHub's redirect
+sends it.
 
 The requests it sends are:
 
@@ -107,6 +111,8 @@ The requests it sends are:
   `https://github.com/{owner}/{repo}/security/advisories`.
 - `GET` on an advisory page,
   `https://github.com/{owner}/{repo}/security/advisories/{GHSA-id}`.
+- `GET` on an owner's profile image, `https://github.com/{login}.png?size=40`,
+  the source of the icon each owner gets in the extension's advisory list.
 - `POST` to that advisory's comment endpoint, to create or edit a comment, and
   only when you press a button that saves.
 
@@ -121,8 +127,21 @@ most one request per second per repository. To GitHub, that traffic is
 indistinguishable from your own browsing, and GitHub records it as it records
 any other request from your session.
 
-The extension loads no remote code, no remote fonts, no remote images, and no
-analytics or crash-reporting service.
+GitHub answers a profile image request with a redirect to the host it serves
+avatars from, `https://avatars.githubusercontent.com`. The browser follows the
+redirect and loads the image from there. That request to the avatar host is one
+GitHub directs the browser to make. The extension's code names the `github.com`
+address and no other host.
+
+An icon is requested while the extension draws its advisory list, one per login
+recorded as an owner on a row it shows. Each request names that owner's login
+and carries your `github.com` session. What GitHub can read from those requests
+is that you are looking at the advisories those owners are on. The page reads
+above tell GitHub that already, as does reading an advisory while signed in to
+GitHub.
+
+The extension does not load remote code, remote fonts, or an analytics or
+crash-reporting service. The owner icons are the only images it loads.
 
 ## What is written into GitHub, and who can see it
 
