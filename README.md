@@ -1,14 +1,7 @@
 # Better GHSA
 
 A Firefox and Chrome extension that adds triage tracking to GitHub Security
-Advisories, for the maintainers who work them.
-
-**It does nothing until you configure it.** The list of repositories it acts on
-is empty when the extension is installed, and until you add one in its settings
-the extension reads nothing, stores nothing, and shows nothing but a
-`Better GHSA settings` button on advisory pages, which opens the page where the
-list is edited. See [choosing the repositories it acts
-on](#choosing-the-repositories-it-acts-on).
+Advisories for the maintainers who work them.
 
 ## What it is for
 
@@ -157,10 +150,7 @@ direction of its author. That is worth knowing before installing it.
 The test suite passes and the code type-checks. Neither fact establishes that
 the design is coherent or that the implementation is trustworthy, and neither
 substitutes for reading the code. This extension writes to real security
-advisories, in front of the people who reported them, and a wrong write puts a
-permanent claim on a live vulnerability report that no other maintainer can edit
-out. Read `src/common/write.js` and `src/common/allowlist.js` before listing a
-repository you care about.
+advisories, in front of the people who reported them.
 
 ## Documents
 
