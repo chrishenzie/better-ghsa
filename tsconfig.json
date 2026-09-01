@@ -10,6 +10,7 @@
     "strict": true,
     "noImplicitOverride": true,
     "noUncheckedIndexedAccess": true,
+    "noUnusedLocals": true,
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true
   },
